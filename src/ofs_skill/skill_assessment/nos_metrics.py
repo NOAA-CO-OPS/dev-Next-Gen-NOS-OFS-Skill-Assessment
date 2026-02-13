@@ -24,7 +24,6 @@ import os
 
 import numpy as np
 from scipy.stats import pearsonr
-from sklearn.metrics import root_mean_squared_error as _sklearn_rmse
 
 # Built-in default thresholds: variable -> (X1, X2)
 _DEFAULT_THRESHOLDS = {
@@ -37,7 +36,7 @@ _DEFAULT_THRESHOLDS = {
 
 
 def rmse(predicted, observed):
-    """Root mean squared error via sklearn.
+    """Root mean squared error (NaN-safe).
 
     Parameters
     ----------
@@ -50,7 +49,7 @@ def rmse(predicted, observed):
     -------
     float
     """
-    return float(_sklearn_rmse(observed, predicted))
+    return float(np.sqrt(np.nanmean((np.asarray(predicted) - np.asarray(observed))**2)))
 
 
 def pearson_r(predicted, observed):
