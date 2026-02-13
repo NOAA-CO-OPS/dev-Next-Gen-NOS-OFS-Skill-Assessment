@@ -1,5 +1,5 @@
 ENV_NAME = ofs_dps
-CONDA_RUN = conda run --no-banner -n $(ENV_NAME)
+CONDA_RUN = conda run -n $(ENV_NAME)
 
 # Use mamba if available, fall back to conda.
 # Check multiple locations since Make's shell doesn't source .bashrc,
