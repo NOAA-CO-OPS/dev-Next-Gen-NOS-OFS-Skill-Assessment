@@ -58,7 +58,7 @@ class TestModelProcessingImports:
 
     def test_forecast_hours(self):
         """Test get_forecast_hours function."""
-        from ofs_skill.model_processing.get_forecast_hours import get_forecast_hours
+        from ofs_skill.model_processing.do_horizon_skill_utils import get_forecast_hours
         fcstlength, fcstcycles = get_forecast_hours('cbofs')
         assert fcstlength == 48
         assert len(fcstcycles) == 4
