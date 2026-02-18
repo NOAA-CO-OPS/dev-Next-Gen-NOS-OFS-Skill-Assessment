@@ -27,7 +27,7 @@ Estimated Execution Time: depends on date range; typically <20 minutes
 
 Scripts/Programs Called:
 1) get_icecover_observations.py -- retrieves GLSEA netcdfs
-2) get_icecover_fvcom/schism.py -- retrieves model netcdfs, and concatenates them
+2) get_icecover_model.py -- retrieves model netcdfs, and concatenates them
 3) find_ofs_ice_stations.py -- gets inventory of observation stations in an
     OFS, then finds model nodes & GLSEA cells that correspond to them, and
     finally extracts time series of model & GLSEA ice concentration.
@@ -86,7 +86,7 @@ from mpl_toolkits.basemap import Basemap
 from numpy import isnan
 from sklearn.metrics import confusion_matrix
 
-from bin.model_processing import get_icecover_fvcom, get_icecover_schism
+from bin.model_processing import get_icecover_model
 from bin.obs_retrieval import get_icecover_observations
 from bin.visualization import create_1dplot_ice
 from ofs_skill.model_processing import (
@@ -474,13 +474,9 @@ def do_iceskill(prop, logger):
         dir_params['model_icesave_dir'],
     )
     os.makedirs(prop.data_model_ice_path, exist_ok=True)
-    # Example (local) FVCOM ice data
+    # Example (local) ice data
     prop.model_path = os.path.join(
         dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir'],
-    )
-    # Example (local) SCHISM ice data
-    prop.model_path_schism = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs,
     )
 
     # Parse whichcasts argument
@@ -562,12 +558,8 @@ def do_iceskill(prop, logger):
         )
         logger.info('Grabbed ice cover observations')
         # Concatenate existing model output
-        if prop.model_source == 'fvcom':
-            icecover_m, lon_m, lat_m, time_m = get_icecover_fvcom.\
-            get_icecover_fvcom(prop, logger)
-        elif prop.model_source == 'schism':
-            icecover_m, lon_m, lat_m, time_m = get_icecover_schism.\
-                get_icecover_schism(prop, logger)
+        icecover_m, lon_m, lat_m, time_m = get_icecover_model.\
+        get_icecover_model(prop, logger)
         logger.info('Grabbed ice cover model output')
     # -------------------------------------------------------------------------
 
