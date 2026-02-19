@@ -230,9 +230,26 @@ def write_constituent_table_csv(
         for key, value in metadata.items():
             header_lines.append(f"# {key}: {value}")
 
+    # Format numeric columns to match Fortran convention:
+    #   Amplitudes / vector diff: F7.4 (4 decimal places)
+    #   Phases: F6.1 (1 decimal place)
+    amp_cols = ['Ref_Amp', 'Model_Amp', 'Amp_Diff', 'Vector_Diff']
+    phase_cols = ['Ref_Phase', 'Model_Phase', 'Phase_Diff']
+    formatted = table.copy()
+    for col in amp_cols:
+        if col in formatted.columns:
+            formatted[col] = formatted[col].map(
+                lambda x: f'{x:.4f}' if pd.notna(x) else ''
+            )
+    for col in phase_cols:
+        if col in formatted.columns:
+            formatted[col] = formatted[col].map(
+                lambda x: f'{x:.1f}' if pd.notna(x) else ''
+            )
+
     with open(path, 'w', newline='') as f:
         for line in header_lines:
             f.write(line + '\n')
-        table.to_csv(f, index=False)
+        formatted.to_csv(f, index=False)
 
     _log.info('Constituent table written to %s.', path)
