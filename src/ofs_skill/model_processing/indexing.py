@@ -700,7 +700,7 @@ def index_nearest_station(
                     dist.append(dvalue)
 
                 if np.nanmin(dist) <= max_dist:
-                    index_min_dist.append(int(nearby_nodes[dist.index(min(dist))]))
+                    index_min_dist.append(int(nearby_nodes[dist.index(min(dist)), 0]))
                     min_dist.append(np.nanmin(dist))
                     logger.info(
                         f'Nearest station found: station {obs_p + 1} of {len(ctl_file_extract)}'
