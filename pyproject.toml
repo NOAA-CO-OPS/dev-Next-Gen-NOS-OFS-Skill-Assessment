@@ -54,6 +54,7 @@ dependencies = [
     "cartopy>=0.23.0",
     "regionmask>=0.12.1",
     "global-land-mask>=1.0.0",
+    "utide>=0.3.0",
 ]
 
 [project.optional-dependencies]
