@@ -81,27 +81,19 @@ For production use, an API key is required. Here's how to configure it:
 
 Request a (free) key from the USGS Water Data API at https://api.waterdata.usgs.gov
 
-*2. Configure the key in the conda environment:*
+*2. Set the key as an environment variable in your shell (after activating your venv):*
 
-*bash:*
->```bash
-># Set the API key as an environment variable in the ofs_dps conda >environment
->conda env config vars set API_USGS_PAT=<your-api-key> -n ofs_dps
->
-># Reactivate the environment for the variable to take effect
->conda deactivate
->conda activate ofs_dps
->
-># Verify the key is set
->echo $API_USGS_PAT
+*macOS / Linux (bash/zsh):*
+```bash
+export API_USGS_PAT=<your-api-key>
+# Optional: add the line above to ~/.bashrc or ~/.zshrc to persist across sessions
+```
 
-*Anaconda Powershell:*
->```
->conda activate env_name
->conda env config vars set API_USGS_PAT=<your-api-key>
->conda deactivate
->conda activate env_name
->echo $env:API_USGS_PAT
+*Windows (PowerShell):*
+```powershell
+setx API_USGS_PAT "<your-api-key>"
+# Open a new terminal for the variable to take effect
+```
 
 **Step 3: Run scripts**
 ```bash
@@ -124,6 +116,25 @@ conda activate ofs_dps_env
 
 # Install package in editable mode
 pip install -e .
+```
+
+**Configure USGS API key (conda):** To raise the USGS API rate limit (see [Step 2a](#step-2a-configure-usgs-api-key) under Option 1), set the key in the `ofs_dps_env` environment:
+
+*bash:*
+```bash
+conda env config vars set API_USGS_PAT=<your-api-key> -n ofs_dps_env
+conda deactivate
+conda activate ofs_dps_env
+echo $API_USGS_PAT
+```
+
+*Windows (Anaconda PowerShell):*
+```powershell
+conda activate ofs_dps_env
+conda env config vars set API_USGS_PAT=<your-api-key>
+conda deactivate
+conda activate ofs_dps_env
+echo $env:API_USGS_PAT
 ```
 
 For detailed conda setup instructions for beginners, see [Section 3.2](#32-create-an-environment-with-miniconda).
