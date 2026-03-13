@@ -23,13 +23,16 @@ Last Modified: 10/2025 - Split ice plotting into separate file
 from __future__ import annotations
 
 import configparser
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.graph_objects as go
+import pytz
 from plotly.subplots import make_subplots
+import numpy as np
 
 import ofs_skill.visualization.make_static_plots as make_static_plots
 from ofs_skill.obs_retrieval import (
@@ -93,6 +96,7 @@ def oned_scalar_plot(
     # Get target error range
     X1, X2 = get_error_range(name_var, prop, logger)
 
+
     """
     Adjust marker sizes dynamically based on the number of data points.
     If the number of DateTime entries in the first element of now_fores_paired
@@ -106,22 +110,45 @@ def oned_scalar_plot(
     data_count = 48
     min_size = 1
     gap_length = 10
-    if len(list(now_fores_paired[0].DateTime)) > data_count:
+    marker_size = 6
+    marker_size_obs = 9
+
+    # Combine obs from different casts into one main obs array
+    obs_df = None
+    for i in range(len(now_fores_paired)):
+        obs_df = pd.concat([obs_df,now_fores_paired[i]],ignore_index=True)
+        obs_df = obs_df.drop_duplicates(subset=['DateTime'],ignore_index=True)
+        if 'nowcast' in prop.whichcasts and 'forecast_a' in prop.whichcasts:
+            pass
+        else:
+            try:
+                start_dt = datetime.strptime(prop.start_date_full, '%Y%m%d-%H:%M:%S')
+                end_dt = datetime.strptime(prop.end_date_full, '%Y%m%d-%H:%M:%S')
+            except ValueError:
+                start_dt = datetime.strptime(prop.start_date_full, '%Y-%m-%dT%H:%M:%SZ')
+                end_dt = datetime.strptime(prop.end_date_full, '%Y-%m-%dT%H:%M:%SZ')
+
+            obs_df = obs_df.loc[((obs_df['DateTime']
+                        >= start_dt) & (obs_df['DateTime'] <= end_dt))]
+            now_fores_paired[i] = now_fores_paired[i].loc[((
+                now_fores_paired[i].DateTime >= start_dt) & \
+                    (now_fores_paired[i].DateTime <= end_dt))]
+
+
+    if len(list(obs_df.DateTime)) > data_count:
         marker_size = (
-            6**(
-                data_count/len(list(now_fores_paired[0].DateTime))
+            marker_size**(
+                data_count/len(list(obs_df.DateTime))
             )
         ) + (min_size-1)
         marker_size_obs = (
-            9**(
-                data_count/len(list(now_fores_paired[0].DateTime))
+            marker_size_obs**(
+                data_count/len(list(obs_df.DateTime))
             )
         ) + (min_size-1)
-    else:
-        marker_size = 6
-        marker_size_obs = 9
+
     # Check for long data gaps
-    if find_max_data_gap(now_fores_paired[0].OBS) > gap_length:
+    if find_max_data_gap(obs_df.OBS) > gap_length:
         connectgaps = False
     else:
         connectgaps = True
@@ -161,13 +188,13 @@ def oned_scalar_plot(
         shared_yaxes=True, horizontal_spacing=0.05,
         vertical_spacing=0.05,
         shared_xaxes=xaxis_share,
-        # subplot_titles = ['Observed','OFS Model'],
     )
 
     fig.add_trace(
         go.Scattergl(
-            x=list(now_fores_paired[0].DateTime),
-            y=list(now_fores_paired[0].OBS), name=obsname,
+            x=list(obs_df.DateTime),
+            y=list(obs_df.OBS),
+            name=obsname,
             hovertemplate='%{y:.2f}',
             mode=modetype,
             opacity=lineopacity,
@@ -184,7 +211,7 @@ def oned_scalar_plot(
     # Adding boxplots
     fig.add_trace(
         go.Box(
-            y=now_fores_paired[0]['OBS'], boxmean='sd',
+            y=obs_df.OBS, boxmean='sd',
             name=obsname, showlegend=False, legendgroup='obs',
             width=.7, line=dict(color=palette[0], width=1.5),
             # fillcolor = 'black',
@@ -198,13 +225,14 @@ def oned_scalar_plot(
         if prop.whichcasts[i][-1].capitalize() == 'B':
             seriesname = 'Model Forecast Guidance'
         elif prop.whichcasts[i][-1].capitalize() == 'A':
-            seriesname = 'Model Forecast Guidance, ' + prop.forecast_hr[:-2] +\
-                'z cycle'
+            seriesname = 'Model Forecast Guidance, ' + prop.forecast_hr[:-1] +\
+                'Z cycle'
         elif prop.whichcasts[i].capitalize() == 'Nowcast':
             seriesname = 'Model Nowcast Guidance'
         else:
             seriesname = prop.whichcasts[i].capitalize() + ' Guidance'
         # Parse filenames from key
+        namekey = None
         try:
             namekey = [datetime.strftime(datetime.strptime(name.split('.')[2], '%Y%m%d'), '%m-%d-%Y')\
                        + ' ' + name.split('.')[1] if isinstance(name, str) else '' \
@@ -245,7 +273,11 @@ def oned_scalar_plot(
                 ),
             ), 1, 1,
         )
-
+        if 'Z' in seriesname:
+            seriesname = seriesname.split(' ')[1] + ' ' +\
+                seriesname.split(' ')[3]
+        else:
+            seriesname= seriesname.split(' ')[1]
         fig.add_trace(
             go.Box(
                 y=now_fores_paired[i]['OFS'], boxmean='sd',
@@ -275,7 +307,7 @@ def oned_scalar_plot(
           station_source = str(station_id[2]) if len(station_id) > 2 else 'CO-OPS'
 
           # Get date range from actual paired data to ensure tidal predictions cover plotted range
-          data_times = now_fores_paired[0].DateTime
+          data_times = obs_df.DateTime
           start_dt = data_times.min().to_pydatetime()
           end_dt = data_times.max().to_pydatetime()
           #start_dt = datetime.strptime(prop.start_date_full, "%Y-%m-%dT%H:%M:%SZ")
@@ -418,9 +450,10 @@ def oned_scalar_plot(
     for i in range(len(prop.whichcasts)):
         if prop.whichcasts[i].capitalize() == 'Nowcast':
             sdboxName = 'Nowcast - Obs.'
-        elif (prop.whichcasts[i].capitalize() == 'Forecast_b' or
-              prop.whichcasts[i].capitalize() == 'Forecast_a'):
+        elif prop.whichcasts[i].capitalize() == 'Forecast_b':
             sdboxName = 'Forecast - Obs.'
+        elif prop.whichcasts[i].capitalize() == 'Forecast_a':
+            sdboxName = 'Forecast ' + prop.forecast_hr[:-1] + 'Z - Obs.'
         else:
             sdboxName = prop.whichcasts[i].capitalize() + ' - Obs.'
         fig.add_trace(
@@ -450,54 +483,6 @@ def oned_scalar_plot(
             ), 2,
             1,
         )
-
-        fig.add_hline(
-            y=0, line_width=1,
-            line_color='black',
-            # line_dash='dash',
-            row=2, col=1,
-        )
-        fig.add_hline(
-            y=X1, line_color='orange',
-            line_width=0.75,
-            line_dash='dash',
-            annotation_text='Target error range',
-            annotation_position='top left',
-            annotation_font_color='black',
-            annotation_font_size=12,
-            row=2, col=1,
-        )
-        fig.add_hline(
-            y=-X1, line_color='orange',
-            line_width=0.75,
-            line_dash='dash',
-            annotation_text='Target error range',
-            annotation_position='bottom right',
-            annotation_font_color='black',
-            annotation_font_size=12,
-            row=2, col=1,
-        )
-        fig.add_hline(
-            y=X1*2, line_color='red',
-            line_width=0.75,
-            line_dash='dash',
-            annotation_text='2x target error range',
-            annotation_position='top left',
-            annotation_font_color='black',
-            annotation_font_size=12,
-            row=2, col=1,
-        )
-        fig.add_hline(
-            y=-X1*2, line_color='red',
-            line_width=0.75,
-            line_dash='dash',
-            annotation_text='2x target error range',
-            annotation_position='bottom right',
-            annotation_font_color='black',
-            annotation_font_size=12,
-            row=2, col=1,
-        )
-
         fig.add_trace(
             go.Box(
                 y=[
@@ -519,6 +504,108 @@ def oned_scalar_plot(
             ),
             2, 2,
         )
+
+    # Add target error ranges to diff plot
+    fig.add_trace(
+        go.Scatter(
+            x=obs_df.DateTime,
+            y=np.ones(len(obs_df.DateTime))*X1,
+            name='Target error range',
+            mode='lines',
+            hoverinfo='skip',
+            line=dict(
+                width=0,
+                color='red'
+            ),
+            showlegend=False,
+        ), 2, 1,)
+    fig.add_trace(
+        go.Scatter(
+            x=obs_df.DateTime,
+            y=np.ones(len(obs_df.DateTime))*-X1,
+            fill='tonexty',
+            mode='lines',
+            fillcolor='rgba(255,255,0,0.1)',
+            name='Target error range',
+            hoverinfo = 'skip',
+            line=dict(
+                width=0,
+                color='red'
+            ),
+            showlegend=False,
+        ), 2, 1,)
+    fig.add_trace(
+        go.Scatter(
+            x=obs_df.DateTime,
+            y=np.ones(len(obs_df.DateTime))*(X1*2),
+            name='Target error range',
+            mode='lines',
+            hoverinfo='skip',
+            line=dict(
+                width=0,
+                color='red'
+            ),
+            showlegend=False,
+        ), 2, 1,)
+    fig.add_trace(
+        go.Scatter(
+            x=obs_df.DateTime,
+            y=np.ones(len(obs_df.DateTime))*(-X1*2),
+            fill='tonexty',
+            mode='lines',
+            fillcolor='rgba(255,0,0,0.1)',
+            name='1x and 2x target error ranges',
+            hoverinfo='skip',
+            line=dict(
+                width=0,
+                color='red'
+            ),
+            showlegend=True,
+        ), 2, 1,)
+
+    fig.add_hline(
+        y=0, line_width=1,
+        line_color='black',
+        # line_dash='dash',
+        row=2, col=1,
+    )
+
+    # Check if end datetime is > current date
+    max_datetime = pytz.timezone('UTC').localize(now_fores_paired[0].DateTime.max())
+    for i in range(len(now_fores_paired)):
+        if now_fores_paired[i].DateTime.max() > now_fores_paired[0].DateTime.max():
+            max_datetime = pytz.timezone('UTC').localize(now_fores_paired[i].DateTime.max())
+    if max_datetime > datetime.now(UTC):
+        # dt_utc = datetime.now(ZoneInfo('America/New_York')) - timedelta(
+        #     hours=int(datetime.now(UTC).astimezone(ZoneInfo(
+        #         'America/New_York')).utcoffset().total_seconds()/60/60))
+        try:
+            dt_n = datetime.strptime(prop.start_date_full, '%Y-%m-%dT%H:%M:%SZ')
+        except ValueError:
+            dt_n = datetime.strptime(prop.start_date_full, '%Y%m%d-%H:%M:%S')
+        if 'nowcast' in prop.whichcasts:
+            fig.add_vline(
+                x=dt_n.timestamp() * 1000,
+                line_width=1,
+                #line_dash="dash",
+                line_color='gray',
+                annotation_text='Forecast >',
+                annotation_font_color='black',
+                annotation_font_size=12,
+                annotation_position='top right',
+                row=1, col=1
+            )
+            fig.add_vline(
+                x=dt_n.timestamp() * 1000,
+                line_width=0,
+                #line_dash="dash",
+                line_color='gray',
+                annotation_text='< Nowcast',
+                annotation_font_color='black',
+                annotation_font_size=12,
+                annotation_position='top left',
+                row=1, col=1
+            )
 
     # Figure Config
     figheight = 700
