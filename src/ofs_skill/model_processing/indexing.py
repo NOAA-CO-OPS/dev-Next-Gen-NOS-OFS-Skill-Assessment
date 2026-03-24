@@ -671,7 +671,7 @@ def index_nearest_depth(
                     raise NotImplementedError('ADCIRC depth indexing not yet implemented for models other than STOFS-2D-Global.')
 
     elif prop.ofsfiletype == 'stations':
-        if 'stofs' in prop.ofs:
+        if prop.ofs in ['stofs','secofs']:
             return [], []
         index_min_depth = []  # type: ignore[no-redef]
         depth_value = []  # type: ignore[no-redef]
@@ -703,8 +703,9 @@ def index_nearest_depth(
         elif model_source == 'roms':
             s_rho_np = np.array(model_netcdf['s_rho'])
             h_np = np.array(model_netcdf['h'])
-        elif model_source == 'schism' and prop.ofs == 'loofs2':
-            z_np = np.array(model_netcdf['zcoords'])
+        elif model_source == 'schism':
+            if prop.ofs == 'loofs2':
+                z_np = np.array(model_netcdf['zcoords'])
 
         for idx in range(0, length):
             if ~np.isnan(index_min_dist[idx]):

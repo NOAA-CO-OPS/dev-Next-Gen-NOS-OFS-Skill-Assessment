@@ -593,13 +593,24 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                                         )
                             elif prop.ofsfiletype == 'stations':
                                 if 'stofs' not in prop.ofs:
-                                    model_ctl_file.append(
-                                        f'{list_of_nearest_node[i]} '
-                                        f'{list_of_nearest_layer[i]} '
-                                        f"{model['lat'][0,list_of_nearest_node[i]].data.compute():.3f}  "
-                                        f"{model['lon'][0,list_of_nearest_node[i]].data.compute():.3f}  "
-                                        f'{station_id[i]}  {list_of_depths[i]:.1f}\n'
-                                    )
+                                    if prop.ofs == 'secofs':
+                                        layer = list_of_nearest_layer[i] if len(list_of_nearest_layer) > 0 else 0
+                                        depth = list_of_depths[i] if len(list_of_depths) > 0 else 0.0
+                                        model_ctl_file.append(
+                                            f'{list_of_nearest_node[i]} '
+                                            f'{layer} '
+                                            f"{model['lat'][0,list_of_nearest_node[i]].data.compute():.3f}  "
+                                            f"{model['lon'][0,list_of_nearest_node[i]].data.compute():.3f}  "
+                                            f'{station_id[i]}  {depth:.1f}\n'
+                                        )
+                                    else: #loofs2
+                                        model_ctl_file.append(
+                                            f'{list_of_nearest_node[i]} '
+                                            f'{list_of_nearest_layer[i]} '
+                                            f"{model['lat'][0,list_of_nearest_node[i]].data.compute():.3f}  "
+                                            f"{model['lon'][0,list_of_nearest_node[i]].data.compute():.3f}  "
+                                            f'{station_id[i]}  {list_of_depths[i]:.1f}\n'
+                                        )
                                 # A mistake in post-processing of stofs-3d-atl
                                 elif prop.ofs == 'stofs_3d_atl' and \
                                     model['x'][0,list_of_nearest_node[i]].data.compute()>0 :

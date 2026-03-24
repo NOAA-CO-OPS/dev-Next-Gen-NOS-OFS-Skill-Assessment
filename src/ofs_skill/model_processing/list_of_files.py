@@ -36,6 +36,7 @@ from botocore.exceptions import ClientError
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours, get_s3_bucket
 from ofs_skill.obs_retrieval import utils
+from ofs_skill.model_processing import get_fcst_cycle
 
 
 def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str]:
@@ -313,6 +314,7 @@ def construct_expected_files(prop: Any, dir_path: str, logger: Logger) -> list[s
         logger.error(f'Unable to extract date from path: {dir_path}')
         return files
 
+<<<<<<< HEAD
     fcstlength, fcstcycles = get_fcst_hours(prop.ofs)
     # Forecast cycles from int to str
     fcstcycles = [f'{item:02}' for item in fcstcycles]
@@ -320,6 +322,14 @@ def construct_expected_files(prop: Any, dir_path: str, logger: Logger) -> list[s
     # Switch fcstcycles if using forecast_a
     if prop.whichcast == 'forecast_a':
         fcstcycles = [prop.forecast_hr[:-1]]
+=======
+    # Get forecast cycles based on OFS
+    # Define forecast cycle hours for each OFS group
+    fcstlength, fcstcycles = get_fcst_cycle.get_fcst_hours(prop.ofs)
+
+    # Convert forecast cycle ints to str
+    fcstcycles = [f'{item:02}' for item in fcstcycles]
+>>>>>>> 756222e (progress adding secofs)
 
     # Determine file type indicator
     if prop.whichcast == 'nowcast':
@@ -503,7 +513,7 @@ def list_of_dir(prop: Any, logger: Logger) -> list[str]:
         use_s3_fallback = False
 
     # Deal with LOOFS2 -- switch off
-    if prop.ofs == 'loofs2' and prop.whichcast == 'hindcast':
+    if (prop.ofs == 'loofs2' and prop.whichcast == 'hindcast') or prop.ofs == 'secofs':
         use_s3_fallback = False
 
     dir_list = []
