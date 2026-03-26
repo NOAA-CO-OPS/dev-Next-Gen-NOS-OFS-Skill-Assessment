@@ -594,7 +594,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                             elif prop.ofsfiletype == 'stations':
                                 if 'stofs' not in prop.ofs:
                                     if prop.ofs == 'secofs':
-                                        layer = list_of_nearest_layer[i] if len(list_of_nearest_layer) > 0 else 0
+                                        layer = list_of_nearest_layer[i] if len(list_of_nearest_layer) > 0 else -1
                                         depth = list_of_depths[i] if len(list_of_depths) > 0 else 0.0
                                         model_ctl_file.append(
                                             f'{list_of_nearest_node[i]} '

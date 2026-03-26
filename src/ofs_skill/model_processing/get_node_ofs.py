@@ -452,8 +452,13 @@ def format_temp_salt(prop, model, ofs_ctlfile, model_var, i, precomputed=None):
         elif prop.ofsfiletype == 'stations':
             model_time = np.array(model['time'])
             if 'stofs' in prop.ofs:
-                model_var = 'temperature'
+                if model_var=='temp':
+                    model_var = 'temperature'
                 model_obs = np.array(model[model_var][:, int(ofs_ctlfile[1][i])])
+            elif prop.ofs == 'secofs':
+                # SECOFS dims: time x siglay x station
+                model_obs = np.array(model[model_var][:, int(ofs_ctlfile[2][i]),
+                                                      int(ofs_ctlfile[1][i])])
             else:
                 model_obs = np.array(model[model_var][:, int(ofs_ctlfile[1][i]),
                                                       int(ofs_ctlfile[2][i])])
@@ -611,7 +616,14 @@ def format_currents(prop, model, ofs_ctlfile, i, precomputed=None):
             len(np.array(mfp.model_time)))])
             mfp.model_obs = mfp.model_obs #+ ofs_ctlfile[3][i]
         elif prop.ofsfiletype == 'stations':
-            if 'stofs' not in prop.ofs:
+            if 'stofs' in prop.ofs:
+                u_i = np.array(
+                    model['u'][:, int(ofs_ctlfile[1][i])]
+                )
+                v_i = np.array(
+                    model['v'][:, int(ofs_ctlfile[1][i])]
+                )
+            else:
                 u_i = np.array(
                     model['u'][:, int(ofs_ctlfile[2][i]),
                                int(ofs_ctlfile[1][i])]
@@ -619,13 +631,6 @@ def format_currents(prop, model, ofs_ctlfile, i, precomputed=None):
                 v_i = np.array(
                     model['v'][:, int(ofs_ctlfile[2][i]),
                                int(ofs_ctlfile[1][i])]
-                )
-            else:
-                u_i = np.array(
-                    model['u'][:, int(ofs_ctlfile[1][i])]
-                )
-                v_i = np.array(
-                    model['v'][:, int(ofs_ctlfile[1][i])]
                 )
 
             station_id = ofs_ctlfile[4][i]

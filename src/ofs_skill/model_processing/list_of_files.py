@@ -314,7 +314,6 @@ def construct_expected_files(prop: Any, dir_path: str, logger: Logger) -> list[s
         logger.error(f'Unable to extract date from path: {dir_path}')
         return files
 
-<<<<<<< HEAD
     fcstlength, fcstcycles = get_fcst_hours(prop.ofs)
     # Forecast cycles from int to str
     fcstcycles = [f'{item:02}' for item in fcstcycles]
@@ -322,14 +321,6 @@ def construct_expected_files(prop: Any, dir_path: str, logger: Logger) -> list[s
     # Switch fcstcycles if using forecast_a
     if prop.whichcast == 'forecast_a':
         fcstcycles = [prop.forecast_hr[:-1]]
-=======
-    # Get forecast cycles based on OFS
-    # Define forecast cycle hours for each OFS group
-    fcstlength, fcstcycles = get_fcst_cycle.get_fcst_hours(prop.ofs)
-
-    # Convert forecast cycle ints to str
-    fcstcycles = [f'{item:02}' for item in fcstcycles]
->>>>>>> 756222e (progress adding secofs)
 
     # Determine file type indicator
     if prop.whichcast == 'nowcast':

@@ -440,9 +440,10 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         return 0
 
     # If not STOFS, read the correct vdatum file from NODD S3 on-the-fly
-    # if prop.ofs not in ('stofs_2d_glo', 'stofs_3d_atl', 'stofs_3d_pac', 'loofs2'): # would be safer?
+    logger.info('Doing datum conversion for %s station %s!', prop.ofs,
+                id_number)
     vdatums: Any = None
-    if 'stofs' not in prop.ofs and 'loofs2' not in prop.ofs:
+    if prop.ofs not in ['secofs', 'loofs2'] and 'stofs' not in prop.ofs:
         vdatums = read_vdatum_from_bucket(prop, logger)
         if isinstance(vdatums, int):
             logger.warning(
@@ -451,8 +452,32 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 'applied. Water level results should be viewed with '
                 'caution.', prop.ofs)
             return vdatums
-    else:
-        logger.info('Doing datum conversion for %s!', prop.ofs)
+    # here we handle secofs, which has a vdatum file on the co-ops server, or
+    # or locally in ./src/. ONce the vdatum file is on the NODD bucket, this section
+    # can be removed.
+    elif prop.ofs == 'secofs':
+        filename = 'secofs_wl_corrections.ctl'
+        dir_params = utils.Utils().read_config_section('directories', logger)
+        path = os.path.join(dir_params['secofs_vdatum'],filename)
+        try:
+            vdatums = pd.read_csv(path, sep='\t')
+            # Find ID number in dataframe
+            try:
+                return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
+            except TypeError:
+                filename = 'secofs_vdatums.nc'
+                dir_params = utils.Utils().read_config_section('directories', logger)
+                path = os.path.join(dir_params['secofs_vdatum'],filename)
+                try:
+                    vdatums = xr.open_dataset(path)
+                except FileNotFoundError:
+                    logger.error('Error finding SECOFS vdatum file -- datum conversion '
+                                 'is not possible.')
+                    return -9994
+        except FileNotFoundError:
+            logger.error('Error finding SECOFS vdatum file -- datum conversion '
+                         'is not possible.')
+            return -9994
 
     # Set water levels to user-specified datum
     if prop.ofs not in ['leofs', 'lmhofs', 'loofs', 'lsofs', 'loofs2']:
@@ -501,7 +526,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 logger.error('Wrong netcdf datum variable name!')
                 logger.error(f'Error: {e_x}')
                 return -9991
-    elif prop.ofs != 'loofs2':
+    elif prop.ofs in ['leofs', 'lmhofs', 'loofs', 'lsofs',]:
         try:
             datum_field = vdatums[f'{prop.datum.lower()}tolwd']
         except Exception as e_x:
@@ -526,6 +551,17 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                     lon_adjustment = 0
                 target = np.around(
                     np.array([[model['lon'][0, node] - lon_adjustment],
+                              [model['lat'][0, node]]]), 3)
+                moddistances = np.linalg.norm(vlonlat - target,
+                                              axis=0)
+                datum_offset = float(datum_field[int(
+                    np.argmin(moddistances))])
+            elif prop.ofs == 'secofs':
+                # Gotta search with lat/lon here...
+                vlonlat = np.around(np.array([vdatums[
+                    'longitude'], vdatums['latitude']]), 3)
+                target = np.around(
+                    np.array([[model['lon'][0, node]],
                               [model['lat'][0, node]]]), 3)
                 moddistances = np.linalg.norm(vlonlat - target,
                                               axis=0)
@@ -672,7 +708,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         logger.error('Did not find datum offset for %s. Returning -9999.9',
                      str(id_number))
         datum_offset = -9999
-    if prop.ofs in ['lmhofs', 'loofs', 'lsofs'] and datum_offset > -999:
+    if prop.ofs in ['lmhofs', 'loofs', 'lsofs', 'secofs'] and datum_offset > -999:
         datum_offset = datum_offset * -1  # Switch sign for GLOFS, except leofs
 
     return datum_offset
