@@ -452,9 +452,14 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 'applied. Water level results should be viewed with '
                 'caution.', prop.ofs)
             return vdatums
-    # here we handle secofs, which has a vdatum file on the co-ops server, or
+    # Here we handle secofs, which has a vdatum file on the co-ops server, or
     # or locally in ./src/. ONce the vdatum file is on the NODD bucket, this section
     # can be removed.
+    # Order of operations:
+        # 1. Check for corrections text file
+        # 2. If file is not available, or there is no matching station ID in it,
+        # then use the Vdatum file
+        # 3. If file is not available, return file not found error code
     elif prop.ofs == 'secofs':
         filename = 'secofs_wl_corrections.ctl'
         dir_params = utils.Utils().read_config_section('directories', logger)
@@ -462,22 +467,20 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         try:
             vdatums = pd.read_csv(path, sep='\t')
             # Find ID number in dataframe
-            try:
-                return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
-            except TypeError:
-                filename = 'secofs_vdatums.nc'
-                dir_params = utils.Utils().read_config_section('directories', logger)
-                path = os.path.join(dir_params['secofs_vdatum'],filename)
-                try:
-                    vdatums = xr.open_dataset(path)
-                except FileNotFoundError:
-                    logger.error('Error finding SECOFS vdatum file -- datum conversion '
-                                 'is not possible.')
-                    return -9994
-        except FileNotFoundError:
-            logger.error('Error finding SECOFS vdatum file -- datum conversion '
-                         'is not possible.')
-            return -9994
+            return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
+        except (FileNotFoundError, TypeError):
+                logger.error('Error finding SECOFS vdatum file -- datum conversion '
+                              'is not possible.')
+                return -9994
+            # filename = 'secofs_vdatums.nc'
+            # dir_params = utils.Utils().read_config_section('directories', logger)
+            # path = os.path.join(dir_params['secofs_vdatum'],filename)
+            # try:
+            #     vdatums = xr.open_dataset(path)
+            # except FileNotFoundError:
+            #     logger.error('Error finding SECOFS vdatum file -- datum conversion '
+            #                  'is not possible.')
+            #     return -9994
 
     # Set water levels to user-specified datum
     if prop.ofs not in ['leofs', 'lmhofs', 'loofs', 'lsofs', 'loofs2']:
@@ -489,6 +492,16 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 else:
                     datum_field2 = vdatums[f'{prop.datum.lower()}tomsl']
                     datum_field = (-datum_field1 + datum_field2)
+            except Exception as e_x:
+                logger.error(f'Datum conversion error: {e_x}')
+                return -9991
+
+        # Deal with SECOFS separately
+        elif prop.ofs == 'secofs':
+            try:
+                datum_field1 = vdatums['xgeoid20btomsl']
+                datum_field2 = vdatums[f'{prop.datum.lower()}tomsl']
+                datum_field = datum_field1 + datum_field2
             except Exception as e_x:
                 logger.error(f'Datum conversion error: {e_x}')
                 return -9991
@@ -511,7 +524,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 return -9991
         elif 'stofs' in prop.ofs:
             logger.info('Still doing datum conversion for STOFS!')
-        else:  # Not SSCOFS
+        else:  # Not SSCOFS or STOFS or SECOFS or GLOFS
             try:
                 datum_field = vdatums[f'{prop.datum.lower()}tomsl']
                 if prop.ofs == 'wcofs':

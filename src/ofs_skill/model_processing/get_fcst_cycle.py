@@ -276,6 +276,9 @@ def get_fcst_dates(prop, logger):
     except (KeyError, FileNotFoundError):
         use_s3_fallback = False
 
+    if prop.ofs in ('loofs2','secofs'):
+        use_s3_fallback = False
+
     # Define forecast cycle hours for each OFS group
     fcstlength, fcstcycles = get_fcst_hours(prop.ofs)
 
