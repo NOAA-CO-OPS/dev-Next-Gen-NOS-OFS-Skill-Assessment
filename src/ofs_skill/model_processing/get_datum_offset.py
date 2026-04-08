@@ -453,7 +453,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 'caution.', prop.ofs)
             return vdatums
     # Here we handle secofs, which has a vdatum file on the co-ops server, or
-    # or locally in ./src/. ONce the vdatum file is on the NODD bucket, this section
+    # or locally in ./src/. Once the vdatum file is on the NODD bucket, this section
     # can be removed.
     # Order of operations:
         # 1. Check for corrections text file
@@ -469,18 +469,14 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
             # Find ID number in dataframe
             return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
         except (FileNotFoundError, TypeError):
+            filename = 'secofs_vdatums.nc'
+            path = os.path.join(dir_params['secofs_vdatum'],filename)
+            try:
+                vdatums = xr.open_dataset(path)
+            except FileNotFoundError:
                 logger.error('Error finding SECOFS vdatum file -- datum conversion '
                               'is not possible.')
                 return -9994
-            # filename = 'secofs_vdatums.nc'
-            # dir_params = utils.Utils().read_config_section('directories', logger)
-            # path = os.path.join(dir_params['secofs_vdatum'],filename)
-            # try:
-            #     vdatums = xr.open_dataset(path)
-            # except FileNotFoundError:
-            #     logger.error('Error finding SECOFS vdatum file -- datum conversion '
-            #                  'is not possible.')
-            #     return -9994
 
     # Set water levels to user-specified datum
     if prop.ofs not in ['leofs', 'lmhofs', 'loofs', 'lsofs', 'loofs2']:
