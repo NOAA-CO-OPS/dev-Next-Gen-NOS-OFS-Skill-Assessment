@@ -240,7 +240,7 @@ def report_datums(prop: Any, datum_offsets: list[list[Any]], logger: Logger) -> 
                 if datum_offsets[1][i] == -9993:
                     reason_str = reason_str + ' Error finding model XY location (field file);'
                 if datum_offsets[1][i] == -9994:
-                    reason_str = reason_str + ' WCOFS MSL to model-0 conversion file not found;'
+                    reason_str = reason_str + ' Datum conversion file not found;'
                 reason.append(reason_str.rstrip(';').lstrip(' '))
 
         # Make datums report dataframe
@@ -385,7 +385,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         - -9991: Target datum unavailable in vdatum file
         - -9992: Error extracting offset for fields file
         - -9993: Error extracting offset for stations file
-        - -9994: WCOFS MSL conversion file not found
+        - -9994: Conversion file not found
         - -9995: STOFS-2D-Global, as expected, has no file to return.
                  This should never actually be returned in get_datum_offset,
                  but is here just in case.
@@ -463,14 +463,14 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
     elif prop.ofs == 'secofs':
         filename = 'secofs_wl_corrections.ctl'
         dir_params = utils.Utils().read_config_section('directories', logger)
-        path = os.path.join(dir_params['secofs_vdatum'],filename)
+        path = os.path.join(dir_params['local_vdatum'],filename)
         try:
             vdatums = pd.read_csv(path, sep='\t')
             # Find ID number in dataframe
             return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
         except (FileNotFoundError, TypeError):
             filename = 'secofs_vdatums.nc'
-            path = os.path.join(dir_params['secofs_vdatum'],filename)
+            path = os.path.join(dir_params['local_vdatum'],filename)
             try:
                 vdatums = xr.open_dataset(path)
             except FileNotFoundError:
