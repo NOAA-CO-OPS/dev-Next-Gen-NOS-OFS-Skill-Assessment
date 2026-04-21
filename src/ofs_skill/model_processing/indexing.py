@@ -652,7 +652,12 @@ def index_nearest_depth(
                     # we assume layers are consistance at all the time steps,
                     # therefore, we use depth layes at time 0
                     #z_coords_1d = model_netcdf['zCoordinates'].load()
-                    z_coords_1d = np.asarray(model_netcdf['zCoordinates'])[0,:,:]
+                    try:
+                        z_coords_1d = np.asarray(model_netcdf['zCoordinates'])[0,:,:]
+                    except KeyError:
+                        logger.warning('SECOFS field file does not have depth '
+                                       'info! Taking surface value...')
+                        return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
                     #z_coords_1d = model_netcdf['zCoordinates'].isel(time=0).load()  # to handle memory error
                     if np.asarray(model_netcdf['temp']).shape[1] == len(z_coords_1d):
                         # Transpose for secofs, or other OFS
@@ -741,7 +746,14 @@ def index_nearest_depth(
             if prop.ofs == 'loofs2':
                 z_np = np.array(model_netcdf['zcoords'])
             if prop.ofs == 'secofs':
-                z_np = np.array(model_netcdf['zCoordinates'])
+                depth_tracker = None
+                try:
+                    z_np = np.array(model_netcdf['zCoordinates'])
+                except KeyError:
+                    logger.warning('SECOFS station file does not have depth '
+                                   'info! Taking surface value...')
+                    depth_tracker = 1
+                    #return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
 
         for idx in range(0, length):
             if ~np.isnan(index_min_dist[idx]):
@@ -754,7 +766,12 @@ def index_nearest_depth(
                     if prop.ofs == 'loofs2':
                         model_depths = np.asarray(z_np[0,node,:])
                     elif prop.ofs == 'secofs':
-                        model_depths = np.asarray(z_np[0,:,node])
+                        if not depth_tracker:
+                            model_depths = np.asarray(z_np[0,:,node])
+                        else:
+                            index_min_depth.append(np.asarray(model_netcdf['salinity']).shape[1]-1)
+                            depth_value.append(0)
+                            continue
                 elif model_source == 'adcirc':
                     if prop.ofs == 'stofs_2d_glo':
                         if name_var == 'wl':

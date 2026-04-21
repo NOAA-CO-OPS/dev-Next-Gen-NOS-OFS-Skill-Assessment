@@ -461,16 +461,16 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         # then use the Vdatum file
         # 3. If file is not available, return file not found error code
     elif prop.ofs == 'secofs':
-        filename = 'secofs_wl_corrections.ctl'
         dir_params = utils.Utils().read_config_section('directories', logger)
-        path = os.path.join(dir_params['local_vdatum'],filename)
+        path = dir_params['local_vdatum']
         try:
             vdatums = pd.read_csv(path, sep='\t')
             # Find ID number in dataframe
             return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
         except (FileNotFoundError, TypeError):
             filename = 'secofs_vdatums.nc'
-            path = os.path.join(dir_params['local_vdatum'],filename)
+            head, tail = os.path.split(dir_params['local_vdatum'])
+            path = os.path.join(head, filename)
             try:
                 vdatums = xr.open_dataset(path)
             except FileNotFoundError:
