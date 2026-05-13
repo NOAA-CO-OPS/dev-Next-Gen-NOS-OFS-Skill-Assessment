@@ -438,17 +438,6 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         prop.ofs,
                         logger,
                     )
-                    list_of_nearest_layer, list_of_depths = \
-                        indexing.index_nearest_depth(
-                        prop,
-                        list_of_nearest_node,
-                        model,
-                        extract[-1],
-                        prop.model_source,
-                        name_var,
-                        prop.ofs,
-                        logger,
-                    )
                 elif prop.ofsfiletype == 'stations':
                     list_of_nearest_node = \
                         indexing.index_nearest_station(

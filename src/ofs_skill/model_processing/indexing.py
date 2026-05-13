@@ -174,7 +174,7 @@ def index_nearest_node(
                 coord_cache[key] = idx
                 index_min_dist.append(idx)
                 logger.info(
-                    f'Nearest node found: station {obs_p + 1} of {len(ctl_file_extract)}'
+                    f'Nearest node found: node {obs_p + 1} of {len(ctl_file_extract)}'
                 )
 
     elif model_source == 'roms':
@@ -295,7 +295,7 @@ def index_nearest_node(
             else:
                 index_min_dist.append(np.nan)
                 logger.warning(
-                    f'No nearby nodes found: station {obs_p + 1} of {len(ctl_file_extract)}'
+                    f'No nearby nodes found: node {obs_p + 1} of {len(ctl_file_extract)}'
                 )
 
     elif model_source == 'schism':
@@ -324,9 +324,9 @@ def index_nearest_node(
                     )
                     dist.append(dvalue)
 
-                index_min_dist.append(int(nearby_nodes[dist.index(min(dist))]))
+                index_min_dist.append(int(np.squeeze(nearby_nodes[dist.index(min(dist))])))
                 logger.info(
-                    f'Nearest node found: station {obs_p + 1} of {len(ctl_file_extract)}'
+                    f'Nearest node found: node {obs_p + 1} of {len(ctl_file_extract)}'
                 )
 
         elif 'stofs' in ofs:
@@ -453,9 +453,7 @@ def index_nearest_depth(
 
     Notes
     -----
-    Only applies to 'fields' file type (3D output).
-    For 'stations' file type, returns empty lists.
-    Model depths are typically negative (below surface).
+
     """
 
     if prop.ofsfiletype == 'fields':
@@ -487,9 +485,12 @@ def index_nearest_depth(
                 )
 
         elif model_source == 'schism' and ofs in ['secofs']:
-            z_np = np.array(model_netcdf['zCoordinates'])[0,:,:]    # Node depths
-
-
+            try:
+                z_np = np.array(model_netcdf['zCoordinates'])[0,:,:]    # Node depths
+            except KeyError:
+                logger.warning('SECOFS field file does not have depth '
+                               'info! Taking surface value...')
+                return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
         elif model_source == 'roms':
             lon_rho_np = np.array(model_netcdf['lon_rho'])
             s_rho_np = np.array(model_netcdf['s_rho'])
@@ -576,7 +577,7 @@ def index_nearest_depth(
                 index_min_depth.append(index_min_depth_node)
 
                 logger.info(
-                    f'Nearest depth found: node {idx + 1} of {len(index_min_dist)}'
+                    f'Nearest depth found: depth {idx + 1} of {len(index_min_dist)}'
                 )
 
             elif model_source == 'roms':
@@ -641,7 +642,7 @@ def index_nearest_depth(
                 index_min_depth.append(index_min_depth_node)
 
                 logger.info(
-                    f'Nearest depth found: node {idx + 1} of {len(index_min_dist)}'
+                    f'Nearest depth found: depth {idx + 1} of {len(index_min_dist)}'
                 )
 
             elif model_source == 'schism':
@@ -658,7 +659,6 @@ def index_nearest_depth(
                         logger.warning('SECOFS field file does not have depth '
                                        'info! Taking surface value...')
                         return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
-                    #z_coords_1d = model_netcdf['zCoordinates'].isel(time=0).load()  # to handle memory error
                     if np.asarray(model_netcdf['temp']).shape[1] == len(z_coords_1d):
                         # Transpose for secofs, or other OFS
                         # where the depth and node dims are reversed
@@ -690,7 +690,7 @@ def index_nearest_depth(
                     depth_value.append(model_depths[
                     index_min_depth_node])
                 logger.info(
-                  'Nearest depth found: node %s of %s', idx + 1,
+                  'Nearest depth found: depth %s of %s', idx + 1,
                   len(index_min_dist))
             elif model_source == 'adcirc':
                 if prop.ofs == 'stofs_2d_glo':

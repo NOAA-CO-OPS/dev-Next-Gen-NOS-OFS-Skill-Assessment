@@ -755,7 +755,7 @@ def _process_variable(variable, inventory, var_to_col, start_date, end_date,
                     station_overrides = bin_spec_lookup(
                         currents_bins_overrides, str(row['ID']))
                 futures.append(executor.submit(
-                    _process_coops_station,
+                _process_coops_station,
                     row['ID'], row['Name'], row['X'], row['Y'],
                     start_date, end_date, variable, name_var,
                     datum, datum_list, ofs, logger,
@@ -988,7 +988,7 @@ def write_obs_ctlfile(start_date , end_date , datum , path , ofs, stationowner,
         futures = []
         for variable in var_list:
             futures.append(executor.submit(
-                _process_variable,
+            _process_variable,
                 variable, inventory, var_to_col, start_date, end_date,
                 datum, datum_list, ofs, usgs_max_workers,
                 control_files_path, logger,
