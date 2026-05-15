@@ -33,6 +33,7 @@ Created: Fri Jun 6 09:11:51 2025
 """
 
 import os
+from datetime import datetime
 from logging import Logger
 from typing import Any, Union
 
@@ -463,11 +464,28 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
     elif prop.ofs == 'secofs':
         dir_params = utils.Utils().read_config_section('directories', logger)
         path = dir_params['local_vdatum']
-        try:
-            vdatums = pd.read_csv(path, sep='\t')
-            # Find ID number in dataframe
-            return float(vdatums[vdatums['ID']==int(id_number)]['Correction'])*-1
-        except (FileNotFoundError, TypeError, UnicodeDecodeError):
+        if prop.datum.lower() == 'mllw':
+            try:
+                vdatums = pd.read_csv(path, sep='\t')
+                # Find ID number in dataframe
+                if datetime.strptime(prop.start_date_full,'%Y-%m-%dT%H:%M:%SZ')\
+                    > datetime.strptime('04/30/2026','%m/%d/%Y'):
+                    corr_col = 'Correction2'
+                else:
+                    corr_col = 'Correction1'
+                wl_corr = float(vdatums[vdatums['ID']==int(id_number)][corr_col])*-1
+                return wl_corr
+            except (FileNotFoundError, TypeError, UnicodeDecodeError):
+                filename = 'secofs_vdatums.nc'
+                head, tail = os.path.split(dir_params['local_vdatum'])
+                path = os.path.join(head, filename)
+                try:
+                    vdatums = xr.open_dataset(path)
+                except FileNotFoundError:
+                    logger.error('Error finding SECOFS vdatum file -- datum conversion '
+                                  'is not possible.')
+                    return -9994
+        else:
             filename = 'secofs_vdatums.nc'
             head, tail = os.path.split(dir_params['local_vdatum'])
             path = os.path.join(head, filename)
@@ -495,9 +513,12 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         # Deal with SECOFS separately
         elif prop.ofs == 'secofs':
             try:
-                #datum_field1 = vdatums['xgeoid20btomsl']
-                datum_field = vdatums[f'{prop.datum.lower()}tomsl']
-                #datum_field = datum_field1 + datum_field2
+                datum_field1 = vdatums['navd88tomsl'] - vdatums['navd88toxgeoid20b']
+                if prop.datum.lower() == 'xgeoid20b':
+                    datum_field = datum_field1
+                else:
+                    datum_field2 = vdatums[f'{prop.datum.lower()}tomsl']
+                    datum_field = datum_field1 - datum_field2
             except Exception as e_x:
                 logger.error(f'Datum conversion error: {e_x}')
                 return -9991

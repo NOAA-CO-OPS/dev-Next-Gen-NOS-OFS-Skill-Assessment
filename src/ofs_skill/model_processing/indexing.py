@@ -460,7 +460,17 @@ def index_nearest_depth(
         index_min_depth: list[Any] = []
         depth_value: list[Any] = []
         length = len(index_min_dist)
-
+        if name_var == 'wl':
+            # Water level (zeta) is a 2D surface variable — no depth indexing needed
+            for idx in range(length):
+                if ~np.isnan(index_min_dist[idx]):
+                    index_min_depth.append(0)
+                    depth_value.append(0.0)
+                    logger.info('Nearest depth found: node %s of %s', idx + 1, length)
+                else:
+                    index_min_depth.append(np.nan)
+                    depth_value.append(np.nan)
+            return index_min_depth, np.abs(depth_value)
         if model_source == 'fvcom':
             if 'zc' in model_netcdf:
                 zc_np = np.array(model_netcdf['zc'])  # Element center depths
@@ -646,49 +656,45 @@ def index_nearest_depth(
                 )
 
             elif model_source == 'schism':
-                if name_var == 'wl':
-                    index_min_depth.append(0)
-                    depth_value.append(0)
-                else:
-                    # we assume layers are consistance at all the time steps,
-                    # therefore, we use depth layes at time 0
-                    #z_coords_1d = model_netcdf['zCoordinates'].load()
-                    try:
-                        z_coords_1d = np.asarray(model_netcdf['zCoordinates'])[0,:,:]
-                    except KeyError:
-                        logger.warning('SECOFS field file does not have depth '
-                                       'info! Taking surface value...')
-                        return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
-                    if np.asarray(model_netcdf['temp']).shape[1] == len(z_coords_1d):
-                        # Transpose for secofs, or other OFS
-                        # where the depth and node dims are reversed
-                        z_coords_1d = z_coords_1d.T
-                    node = index_min_dist[idx]
+                # we assume layers are consistance at all the time steps,
+                # therefore, we use depth layes at time 0
+                #z_coords_1d = model_netcdf['zCoordinates'].load()
+                try:
+                    z_coords_1d = np.asarray(model_netcdf['zCoordinates'])[0,:,:]
+                except KeyError:
+                    logger.warning('SECOFS field file does not have depth '
+                                   'info! Taking surface value...')
+                    return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
+                if np.asarray(model_netcdf['temp']).shape[1] == len(z_coords_1d):
+                    # Transpose for secofs, or other OFS
+                    # where the depth and node dims are reversed
+                    z_coords_1d = z_coords_1d.T
+                node = index_min_dist[idx]
 
-                    if np.isnan(node) or np.isnan(float(station_ctl_file_extract[idx][3])):
-                       logger.warning(f'No nearby depth found for node {idx + 1}')
-                       index_min_dist.append(-1)
-                       depth_value.append(-1)
-                       continue
+                if np.isnan(node) or np.isnan(float(station_ctl_file_extract[idx][3])):
+                   logger.warning(f'No nearby depth found for node {idx + 1}')
+                   index_min_dist.append(-1)
+                   depth_value.append(-1)
+                   continue
 
-                    #model_depths = z_coords_1d[0,node,:]
-                    model_depths = z_coords_1d[node,:]
-                    station_depth = np.array(station_ctl_file_extract)[:, 3][idx]
+                #model_depths = z_coords_1d[0,node,:]
+                model_depths = z_coords_1d[node,:]
+                station_depth = np.array(station_ctl_file_extract)[:, 3][idx]
 
-                    dist = []
-                    # this is positive here because model depths (depth) are negative
-                    # values and obs depths (station_depth) are positive
-                    for depth in model_depths:
+                dist = []
+                # this is positive here because model depths (depth) are negative
+                # values and obs depths (station_depth) are positive
+                for depth in model_depths:
 
-                        if  not np.isnan(depth):
-                            dist.append(float(station_depth) + depth)
-                        else:
-                            dist.append(np.nan)
-                    dist = [np.abs(i) for i in dist]
-                    index_min_depth_node = dist.index(np.nanmin(dist))
-                    index_min_depth.append(index_min_depth_node)
-                    depth_value.append(model_depths[
-                    index_min_depth_node])
+                    if  not np.isnan(depth):
+                        dist.append(float(station_depth) + depth)
+                    else:
+                        dist.append(np.nan)
+                dist = [np.abs(i) for i in dist]
+                index_min_depth_node = dist.index(np.nanmin(dist))
+                index_min_depth.append(index_min_depth_node)
+                depth_value.append(model_depths[
+                index_min_depth_node])
                 logger.info(
                   'Nearest depth found: depth %s of %s', idx + 1,
                   len(index_min_dist))
@@ -715,18 +721,18 @@ def index_nearest_depth(
         index_min_depth = []  # type: ignore[no-redef]
         depth_value = []  # type: ignore[no-redef]
         length = len(index_min_dist)
+        if name_var == 'wl':
+            # Water level (zeta) is a 2D surface variable — no depth indexing needed
+            for idx in range(length):
+                if ~np.isnan(index_min_dist[idx]):
+                    index_min_depth.append(0)
+                    depth_value.append(0.0)
+                    logger.info('Nearest depth found: node %s of %s', idx + 1, length)
+                else:
+                    index_min_depth.append(np.nan)
+                    depth_value.append(np.nan)
+            return index_min_depth, np.abs(depth_value)
         if model_source == 'fvcom':
-            if name_var == 'wl':
-                # Water level (zeta) is a 2D surface variable — no depth indexing needed
-                for idx in range(length):
-                    if ~np.isnan(index_min_dist[idx]):
-                        index_min_depth.append(0)
-                        depth_value.append(0.0)
-                        logger.info('Nearest depth found: node %s of %s', idx + 1, length)
-                    else:
-                        index_min_depth.append(np.nan)
-                        depth_value.append(np.nan)
-                return index_min_depth, np.abs(depth_value)
             if 'z' in model_netcdf:
                 z_np = np.array(model_netcdf['z'])
             else:
