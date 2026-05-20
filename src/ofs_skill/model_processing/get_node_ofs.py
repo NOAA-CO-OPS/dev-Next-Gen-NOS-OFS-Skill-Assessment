@@ -1775,7 +1775,8 @@ def get_node_ofs(prop, logger, model_dataset=None):
             for variable in prop.var_list:
                 prop_local = copy.deepcopy(prop)
                 prop_local.var_list = [variable]
-                futures.append(executor.submit(_extract_variable, variable, prop_local))
+                futures.append(executor.submit(
+                    _extract_variable, variable, prop_local))
             for f in futures:
                 f.result()  # Raise any exceptions
     else:
