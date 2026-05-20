@@ -36,6 +36,7 @@ from botocore.exceptions import ClientError
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours, get_s3_bucket
 from ofs_skill.obs_retrieval import utils
+from ofs_skill.model_processing import get_fcst_cycle
 
 
 def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str]:
@@ -503,7 +504,7 @@ def list_of_dir(prop: Any, logger: Logger) -> list[str]:
         use_s3_fallback = False
 
     # Deal with LOOFS2 -- switch off
-    if prop.ofs == 'loofs2' and prop.whichcast == 'hindcast':
+    if (prop.ofs == 'loofs2' and prop.whichcast == 'hindcast') or prop.ofs == 'secofs':
         use_s3_fallback = False
 
     dir_list = []
