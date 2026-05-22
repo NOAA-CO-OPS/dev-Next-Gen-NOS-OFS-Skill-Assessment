@@ -50,10 +50,9 @@ def get_variable_names(name_var):
         save_name = 'salinity'
         unit = ' PSU'
     elif name_var in ('cu', 'currents'):
-        plot_name = ['Current speed<br>(<i>meters/second</i>)',
-                     'Current direction<br>(<i>0-360 deg.</i>)']
+        plot_name = 'Current Speed (<i>knots</i>)'
         save_name = 'currents'
-        unit = ' m/s'
+        unit = ' knots'
     elif name_var == 'wind':
         plot_name = 'Wind Speed & Direction<br>(<i>m/s & deg</i>)'
         save_name = 'wind'
@@ -136,19 +135,42 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
         if len(parts) < 5:
             continue
 
-        # Parse based on file type
+        # Find where the cast starts ('forecast' or 'nowcast') to anchor our parsing
+        cast_idx = -1
+        for i, part in enumerate(parts):
+            if part in ['forecast', 'nowcast']:
+                cast_idx = i
+                break
+
+        if cast_idx == -1:
+            continue
+
+        # Parse based on file type robustly handling underscores in station IDs
         if file.endswith('.prd'):
-            station_id, ofs, var_name, node = parts[0], parts[1], parts[2], parts[3]
-            whichcast = parts[4]
-            if whichcast == 'forecast' and len(parts) > 5 and parts[5] in ['a', 'b']:
-                whichcast = f'forecast_{parts[5]}'
+            if cast_idx < 4:
+                continue
+
+            node = parts[cast_idx - 1]
+            var_name = parts[cast_idx - 2]
+            ofs = parts[cast_idx - 3]
+            station_id = '_'.join(parts[0:cast_idx - 3])
+
+            whichcast = parts[cast_idx]
+            if whichcast == 'forecast' and len(parts) > cast_idx + 1 and parts[cast_idx + 1] in ['a', 'b']:
+                whichcast = f'forecast_{parts[cast_idx + 1]}'
 
         elif file.endswith('.int'):
-            # .int format: ofs_var_stationID_node_whichcast...
-            ofs, var_name, station_id, node = parts[0], parts[1], parts[2], parts[3]
-            whichcast = parts[4]
-            if whichcast == 'forecast' and len(parts) > 5 and parts[5] in ['a', 'b']:
-                whichcast = f'forecast_{parts[5]}'
+            if cast_idx < 3:
+                continue
+
+            ofs = parts[0]
+            var_name = parts[1]
+            node = parts[cast_idx - 1]
+            station_id = '_'.join(parts[2:cast_idx - 1])
+
+            whichcast = parts[cast_idx]
+            if whichcast == 'forecast' and len(parts) > cast_idx + 1 and parts[cast_idx + 1] in ['a', 'b']:
+                whichcast = f'forecast_{parts[cast_idx + 1]}'
         else:
             continue
 
@@ -229,10 +251,10 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     plotinfo['station_name'] = match.iloc[0]['Name']
             # ----------------------------------
 
-            # Setup layout rules based on variable
+            # Setup layout rules (Cu and scalar plots are 1 row)
             if plotinfo['var_name'] in ('cu', 'currents'):
-                nrows = 2
-                sharexaxis = True
+                nrows = 1
+                sharexaxis = False
             elif plotinfo['var_name'] == 'wind':
                 nrows = 1
                 sharexaxis = False
@@ -253,50 +275,86 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 whichcast = file_info['whichcast']
                 is_int = file_path.endswith('.int')
 
-                # Format the display name (e.g. "Forecast" instead of "forecast_a")
+                # Format the display name to updated values
                 if 'forecast' in whichcast.lower():
-                    display_cast = 'Forecast'
+                    display_cast = 'Forecast Guidance'
                 elif 'nowcast' in whichcast.lower():
-                    display_cast = 'Nowcast'
+                    display_cast = 'Nowcast Guidance'
                 else:
                     display_cast = whichcast.capitalize()
 
                 if is_int:
                     try:
-                        df = pd.read_csv(file_path, sep=r'\s+', header=0)
-                        df.columns = df.columns.str.strip()
+                        # Scan file to bypass text headers to reach the 'YEAR' column row
+                        skip_rows = 0
+                        with open(file_path) as f:
+                            for i, line in enumerate(f):
+                                if 'year' in line.lower() or 'date' in line.lower():
+                                    skip_rows = i
+                                    break
 
-                        # Fallback if header=0 missed it
-                        if 'YEAR' not in df.columns:
-                            df = pd.read_csv(file_path, sep=r'\s+', header=None)
-                            if df.iloc[0].astype(str).str.contains('YEAR').any():
-                                df.columns = df.iloc[0].astype(str).str.strip()
-                                df = df[1:]
+                        df = pd.read_csv(file_path, sep=r'\s+', skiprows=skip_rows)
+                        df.columns = df.columns.str.strip().str.upper()
 
                         if not all(col in df.columns for col in ['YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE']):
                             logger.warning(f'Missing expected time columns in .int file: {os.path.basename(file_path)}')
                             continue
 
-                        # Ensure numeric types
+                        # Ensure numeric types for time
                         for c in ['YEAR', 'MONTH', 'DAY', 'HOUR', 'MINUTE']:
                             df[c] = pd.to_numeric(df[c], errors='coerce')
 
-                        # Map Observation columns
-                        if 'VAL_OB' in df.columns:
-                            df['OBS'] = pd.to_numeric(df['VAL_OB'], errors='coerce')
-                        if 'VAL_OB_DIR' in df.columns:
-                            df['OBS_DIR'] = pd.to_numeric(df['VAL_OB_DIR'], errors='coerce')
+                        # === DYNAMIC OBSERVATION MAPPING ===
+                        # 1. Search for standard scalar Observation columns
+                        for col in ['VAL_OB', 'VAL_OB_SPD', 'OB_SPD', 'SPEED_OB']:
+                            if col in df.columns:
+                                df['OBS'] = pd.to_numeric(df[col], errors='coerce')
+                                break
 
-                        # Map Model columns
-                        if 'VAL_MODEL' in df.columns:
-                            df['OFS'] = pd.to_numeric(df['VAL_MODEL'], errors='coerce')
-                        if 'VAL_MODEL_DIR' in df.columns:
-                            df['OFS_DIR'] = pd.to_numeric(df['VAL_MODEL_DIR'], errors='coerce')
+                        # 2. If scalar isn't found (like for currents), calculate from U and V components
+                        if 'OBS' not in df.columns:
+                            u_col = next((c for c in df.columns if c in ['VAL_OB_U', 'OB_U', 'U_OB']), None)
+                            v_col = next((c for c in df.columns if c in ['VAL_OB_V', 'OB_V', 'V_OB']), None)
+                            if u_col and v_col:
+                                u = pd.to_numeric(df[u_col], errors='coerce')
+                                v = pd.to_numeric(df[v_col], errors='coerce')
+                                df['OBS'] = np.sqrt(u**2 + v**2)
+
+                        # === DYNAMIC MODEL MAPPING ===
+                        # 1. Search for standard scalar Model columns
+                        for col in ['VAL_MODEL', 'VAL_MODEL_SPD', 'MOD_SPD', 'VAL_MOD', 'VAL_MOD_SPD', 'MODEL_SPD', 'SPEED_MODEL']:
+                            if col in df.columns:
+                                df['OFS'] = pd.to_numeric(df[col], errors='coerce')
+                                break
+
+                        # 2. If scalar isn't found, calculate from U and V components
+                        if 'OFS' not in df.columns:
+                            u_col = next((c for c in df.columns if c in ['VAL_MODEL_U', 'MOD_U', 'VAL_MOD_U', 'U_MOD', 'MODEL_U']), None)
+                            v_col = next((c for c in df.columns if c in ['VAL_MODEL_V', 'MOD_V', 'VAL_MOD_V', 'V_MOD', 'MODEL_V']), None)
+                            if u_col and v_col:
+                                u = pd.to_numeric(df[u_col], errors='coerce')
+                                v = pd.to_numeric(df[v_col], errors='coerce')
+                                df['OFS'] = np.sqrt(u**2 + v**2)
+
+                        # Grab Directions if present
+                        for col in ['VAL_OB_DIR', 'DIR_OB', 'OB_DIR']:
+                            if col in df.columns:
+                                df['OBS_DIR'] = pd.to_numeric(df[col], errors='coerce')
+                                break
+                        for col in ['VAL_MODEL_DIR', 'DIR_MODEL', 'MODEL_DIR']:
+                            if col in df.columns:
+                                df['OFS_DIR'] = pd.to_numeric(df[col], errors='coerce')
+                                break
 
                         df = df.dropna(subset=['YEAR', 'MONTH', 'DAY'])
                         df['DateTime'] = pd.to_datetime(
                             dict(year=df['YEAR'], month=df['MONTH'], day=df['DAY'], hour=df['HOUR'], minute=df['MINUTE'])
                         )
+
+                        if 'OFS' not in df.columns and 'OBS' not in df.columns:
+                            logger.warning(f'Could not extract Observation or Model runs from {os.path.basename(file_path)}. Found columns: {list(df.columns)}')
+                            continue
+
                     except Exception as e:
                         logger.warning(f'Error parsing .int file {os.path.basename(file_path)}: {e}')
                         continue
@@ -311,9 +369,29 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     df['DateTime'] = pd.to_datetime(
                         dict(year=df[1], month=df[2], day=df[3], hour=df[4], minute=df[5])
                     )
-                    df = df.rename(columns={6: 'OFS'})
-                    if plotinfo['var_name'] in ('cu', 'currents', 'wind'):
-                        df = df.rename(columns={7: 'OFS_DIR'})
+
+                    # PRD files for Currents output U and V natively. Calculate speed!
+                    if plotinfo['var_name'] in ('cu', 'currents'):
+                        u = pd.to_numeric(df[6], errors='coerce')
+                        v = pd.to_numeric(df[7], errors='coerce')
+                        df['OFS'] = np.sqrt(u**2 + v**2)
+                    else:
+                        df = df.rename(columns={6: 'OFS'})
+                        if plotinfo['var_name'] == 'wind':
+                            df = df.rename(columns={7: 'OFS_DIR'})
+
+                # Mask out negative NOAA missing value flags (-99.9, -9999.0) so they don't break the axes scale
+                if 'OBS' in df.columns:
+                    df.loc[df['OBS'] < -90, 'OBS'] = np.nan
+                if 'OFS' in df.columns:
+                    df.loc[df['OFS'] < -90, 'OFS'] = np.nan
+
+                # --- Apply Unit Conversions ---
+                if plotinfo['var_name'] in ('cu', 'currents'):
+                    if 'OBS' in df.columns:
+                        df['OBS'] = pd.to_numeric(df['OBS'], errors='coerce') * 1.943844
+                    if 'OFS' in df.columns:
+                        df['OFS'] = pd.to_numeric(df['OFS'], errors='coerce') * 1.943844
 
                 start_time = df['DateTime'].iloc[0]
                 end_time = df['DateTime'].iloc[-1]
@@ -324,13 +402,13 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
 
                 # === 1. Plot Observations (if they exist) ===
                 if 'OBS' in df.columns:
-                    hovertemplate_obs = f'Observation: %{{y:.2f}}{plotinfo["unit"]}<extra></extra>'
+                    hovertemplate_obs = f'Observations: %{{y:.2f}}{plotinfo["unit"]}<extra></extra>'
                     fig.add_trace(
-                        go.Scatter(  # Switched to regular Scatter to support range slider
+                        go.Scatter(
                             x=df['DateTime'],
                             y=df['OBS'],
-                            name='Observation',
-                            legendgroup='Observation',
+                            name='Observations',
+                            legendgroup='Observations',
                             showlegend=not obs_legend_added,
                             hovertemplate=hovertemplate_obs,
                             mode='lines',
@@ -341,11 +419,11 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
 
                     if nrows == 2 and 'OBS_DIR' in df.columns:
                         fig.add_trace(
-                            go.Scatter(  # Switched to regular Scatter to support range slider
+                            go.Scatter(
                                 x=df['DateTime'],
                                 y=df['OBS_DIR'],
-                                name='Observation',
-                                legendgroup='Observation',
+                                name='Observations',
+                                legendgroup='Observations',
                                 showlegend=False,
                                 hovertemplate='Obs Direction: %{y:.1f}\u00b0<extra></extra>',
                                 mode='lines',
@@ -363,14 +441,18 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     if plotinfo['var_name'] == 'wind' and 'OFS_DIR' in df.columns:
                         customdata = df['OFS_DIR']
                         hovertemplate_model = f'{display_cast} Speed: %{{y:.2f}} m/s<br>{display_cast} Direction: %{{customdata:.1f}}\u00b0<extra></extra>'
-                    elif plotinfo['var_name'] in ('cu', 'currents') and 'OFS_DIR' in df.columns:
-                        hovertemplate_model = f'{display_cast} Speed: %{{y:.2f}} m/s<br><extra></extra>'
+                    elif plotinfo['var_name'] in ('cu', 'currents'):
+                        hovertemplate_model = f'{display_cast} Speed: %{{y:.2f}} knots<br><extra></extra>'
 
                     c1, d1 = get_trace_styling(whichcast, 'primary')
 
+                    # Force solid lines purely for the wind charts
+                    if plotinfo['var_name'] == 'wind':
+                        d1 = 'solid'
+
                     # Primary Line (Speed/WL/Temp/Salt)
                     fig.add_trace(
-                        go.Scatter(  # Switched to regular Scatter to support range slider
+                        go.Scatter(
                             x=df['DateTime'],
                             y=df['OFS'],
                             name=display_cast,
@@ -389,7 +471,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     if nrows == 2 and 'OFS_DIR' in df.columns:
                         c2, d2 = get_trace_styling(whichcast, 'secondary')
                         fig.add_trace(
-                            go.Scatter(  # Switched to regular Scatter to support range slider
+                            go.Scatter(
                                 x=df['DateTime'],
                                 y=df['OFS_DIR'],
                                 name=display_cast,
@@ -406,25 +488,38 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     # === Wind Arrows (True Quiver Layout Annotations) ===
                     if plotinfo['var_name'] == 'wind' and 'OFS_DIR' in df.columns:
                         arrow_step = max(1, len(df) // 40)
-                        marker_color = 'green' if 'forecast' in whichcast else 'black'
 
                         subset = df.iloc[::arrow_step]
+
+                        # Adds a physical dot marker exactly where the arrow sprouts from the line
+                        fig.add_trace(
+                            go.Scatter(
+                                x=subset['DateTime'],
+                                y=subset['OFS'],
+                                mode='markers',
+                                showlegend=False,
+                                hoverinfo='skip',  # Keeps the hover-box clean
+                                marker=dict(size=6, color=c1, line=dict(width=1, color='white'))
+                            ), 1, 1
+                        )
+
                         for _, row in subset.iterrows():
                             angle_rad = np.radians(row['OFS_DIR'])
-                            length = 18  # Length of the arrow shaft in pixels
+                            length = 35  # Increased length for longer arrows
 
                             fig.add_annotation(
                                 x=row['DateTime'],
                                 y=row['OFS'],
-                                ax=-length * np.sin(angle_rad),
-                                ay=length * np.cos(angle_rad),
+                                ax=length * np.sin(angle_rad),
+                                ay=-length * np.cos(angle_rad),
                                 xref='x', yref='y',
                                 axref='pixel', ayref='pixel',
                                 showarrow=True,
-                                arrowhead=2,
-                                arrowsize=1.4,
-                                arrowwidth=1.5,
-                                arrowcolor=marker_color
+                                arrowhead=0,
+                                startarrowhead=2,
+                                startarrowsize=1.5,
+                                arrowwidth=1.0,
+                                arrowcolor=c1
                             )
 
             # --- Layout Configuration ---
@@ -452,29 +547,29 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     fig.add_annotation(
                         x=fc_start, y=1,
                         yref='paper',
-                        text='Forecast ➡️',
+                        text='<i>Forecast</i> ➡️',
                         showarrow=False,
                         xanchor='left',
                         yanchor='top',
                         xshift=8,                               # Spacer to the right
-                        font=dict(color='black', size=14)       # Increased size
+                        font=dict(color='grey', size=14)        # Increased size, set to grey
                     )
                     fig.add_annotation(
                         x=fc_start, y=1,
                         yref='paper',
-                        text='⬅️ Nowcast',
+                        text='⬅️ <i>Nowcast</i>',
                         showarrow=False,
                         xanchor='right',
                         yanchor='top',
                         xshift=-8,                              # Spacer to the left
-                        font=dict(color='black', size=14)       # Increased size
+                        font=dict(color='grey', size=14)        # Increased size, set to grey
                     )
 
             # Range Slider Instructions (Below Slider)
             fig.add_annotation(
                 text='<i>Click and drag the edges of the slider to adjust the time range.</i>',
                 xref='paper', yref='paper',
-                x=0.5, y=-0.36,  # Placed perfectly below the slider and title
+                x=0.5, y=-0.36,
                 yanchor='top',
                 showarrow=False,
                 font=dict(family='Open Sans', color='#555555', size=13)
@@ -489,14 +584,14 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 transition_ordering='traces first', dragmode='zoom',
                 height=550, width=900,
                 template='plotly_white',
-                margin=dict(t=100, b=160),  # Increased bottom margin heavily to fit both title and annotation
+                margin=dict(t=100, b=160),
                 legend=dict(
                     orientation='h',
                     yanchor='bottom',
                     y=1.02,
                     xanchor='left',
                     x=0,
-                    font=dict(size=16, color='black')  # Increased legend font to 16
+                    font=dict(size=16, color='black')
                 ),
 
                 # Clean, High-Fidelity Professional Hover Styling
@@ -511,13 +606,15 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
 
             # Axis Configuration
             fig.update_xaxes(
-                title_text='Time (UTC)',                                       # Reverted back to traditional X-Axis title
-                titlefont=dict(family='Open Sans', color='black', size=17),    # Size 16 font
+                title_text='<br>Time (UTC)',
+                titlefont=dict(family='Open Sans', color='black', size=18),    # Increased to 17
                 mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1,
                 showspikes=True, spikemode='across', spikesnap='cursor', showgrid=True,
                 tickfont=dict(family='Open Sans', color='black', size=14),
-                dtick=43200000,                  # 12 hours in milliseconds
+                minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                #dtick=43200000,                  # 12 hours in milliseconds
                 tickformat='%H:%M<br>%m/%d',     # Formats as HH:MM [line break] MM/DD
+                tickangle=0,
 
                 # Strips raw timestamp strings and formats nicely at the top of the unified hover box
                 hoverformat='%b %d, %Y, %H:%M UTC',
@@ -525,7 +622,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 # Added Range Slider
                 rangeslider=dict(
                     visible=True,
-                    thickness=0.08,  # Keeps it slim and professional
+                    thickness=0.08,
                     bordercolor='black',
                     borderwidth=1
                 )
@@ -535,8 +632,12 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 fig.update_yaxes(
                     mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1,
                     title_text=plotinfo['plot_name'][1],
-                    titlefont=dict(family='Open Sans', color='black', size=17),  # Increased to 16
+                    titlefont=dict(family='Open Sans', color='black', size=18),  # Increased to 17
                     tickfont=dict(family='Open Sans', color='black', size=14),
+                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                    zeroline=True,
+                    zerolinewidth=1,
+                    zerolinecolor='black',
                     row=2, col=1,
                 )
                 plotinfo['plot_name'] = plotinfo['plot_name'][0]
@@ -544,8 +645,12 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
             fig.update_yaxes(
                 mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1,
                 title_text=f'{plotinfo["plot_name"]}',
-                titlefont=dict(family='Open Sans', color='black', size=16),  # Increased to 16
+                titlefont=dict(family='Open Sans', color='black', size=17),  # Increased to 17
                 tickfont=dict(family='Open Sans', color='black', size=14),
+                minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                zeroline=True,
+                zerolinewidth=1,
+                zerolinecolor='black',
                 row=1, col=1,
             )
 
