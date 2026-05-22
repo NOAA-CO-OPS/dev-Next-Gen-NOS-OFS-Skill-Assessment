@@ -16,7 +16,7 @@ def format_scalar(
     timeseries: pd.DataFrame,
     start_date_full: str,
     end_date_full: str,
-    lookback_hours: int = 24,
+    lookback_hours: int,
 ) -> list[str]:
     """
     Format scalar observation data (water level, temperature, salinity).
@@ -107,7 +107,7 @@ def format_vector(
     timeseries: pd.DataFrame,
     start_date_full: str,
     end_date_full: str,
-    lookback_hours: int = 24,
+    lookback_hours: int,
 ) -> list[str]:
     """
     Format vector observation data (currents).
@@ -206,11 +206,13 @@ def format_vector(
 
 
 # Legacy function names for backward compatibility
-def scalar(timeseries: pd.DataFrame, start_date_full: str, end_date_full: str) -> list[str]:
+def scalar(timeseries: pd.DataFrame, start_date_full: str, end_date_full: str,
+           lookback_hours: int) -> list[str]:
     """Legacy function name - use format_scalar() instead."""
-    return format_scalar(timeseries, start_date_full, end_date_full)
+    return format_scalar(timeseries, start_date_full, end_date_full, lookback_hours)
 
 
-def vector(timeseries: pd.DataFrame, start_date_full: str, end_date_full: str) -> list[str]:
+def vector(timeseries: pd.DataFrame, start_date_full: str, end_date_full: str,
+           lookback_hours: int) -> list[str]:
     """Legacy function name - use format_vector() instead."""
-    return format_vector(timeseries, start_date_full, end_date_full)
+    return format_vector(timeseries, start_date_full, end_date_full, lookback_hours)

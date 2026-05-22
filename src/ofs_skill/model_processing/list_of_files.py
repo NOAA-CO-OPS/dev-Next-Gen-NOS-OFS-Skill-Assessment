@@ -516,7 +516,9 @@ def list_of_dir(prop: Any, logger: Logger) -> list[str]:
 
     dir_list = []
     if prop.whichcast != 'forecast_a':
-        dates = dates_range(prop.startdate, prop.enddate, prop.ofs,
+        lookback_start = datetime.strftime(datetime.strptime(prop.startdate,'%Y%m%d%H') - \
+            timedelta(days=prop.lookback),'%Y%m%d%H')
+        dates = dates_range(lookback_start, prop.enddate, prop.ofs,
                             prop.whichcast, logger)
     else:
         dates = dates_range(prop.startdate, prop.startdate, prop.ofs,
@@ -691,7 +693,7 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                 # cbofs.t00z.20240901.fields.n001.nc
                 # Old file format:
                 # nos.cbofs.fields.n001.20240901.t00z.nc
-
+                lookback_days = prop.lookback
                 try:
                     all_files = listdir(dir_list[i_index])
                 except OSError as e:
@@ -719,7 +721,7 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                 if (checkstr not in hr_cyc_day
                                     and (datetime.strptime(spltstr[-3], '%Y%m%d') >=
                                          datetime.strptime
-                                         (prop.startdate[:-2], '%Y%m%d'))
+                                         (prop.startdate[:-2], '%Y%m%d') - timedelta(days=lookback_days))
                                     and (datetime.strptime(spltstr[-3], '%Y%m%d') <=
                                          datetime.strptime
                                          (prop.enddate[:-2], '%Y%m%d') +
@@ -734,7 +736,7 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                 if (checkstr not in hr_cyc_day
                                     and (datetime.strptime(spltstr[-3], '%Y%m%d') >=
                                          datetime.strptime
-                                         (prop.startdate[:-2], '%Y%m%d'))
+                                         (prop.startdate[:-2], '%Y%m%d') - timedelta(days=lookback_days))
                                     and (datetime.strptime(spltstr[-3], '%Y%m%d') <=
                                          datetime.strptime
                                          (prop.enddate[:-2], '%Y%m%d') +

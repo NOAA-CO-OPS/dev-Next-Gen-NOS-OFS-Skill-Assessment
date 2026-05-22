@@ -19,7 +19,7 @@ def paired_scalar(
     start_date_full: str,
     end_date_full: str,
     logger: Logger,
-    lookback_hours: int = 6,
+    lookback_hours: int,
 ) -> Optional[tuple[list[list], pd.DataFrame]]:
     """
     Create paired time series for scalar variables.
@@ -226,7 +226,7 @@ def paired_vector(
     start_date_full: str,
     end_date_full: str,
     logger: Logger,
-    lookback_hours: int = 6,
+    lookback_hours: int,
 ) -> Optional[tuple[list[list], pd.DataFrame]]:
     """
     Create paired time series for vector variables.
