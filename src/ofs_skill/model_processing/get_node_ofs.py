@@ -53,6 +53,124 @@ _SCHISM_PHYSICAL_BOUNDS = {
     'currents_uv': (-10.0, 10.0),  # raw u or v component
 }
 
+def write_custom_variable_prd(prop, model, logger, variable, station_idx, station_id):
+    """
+    Extracts a specified variable from the combined model dataset, formats it
+    using scalar/vector rules, and writes a .prd file matching existing conventions.
+
+    Parameters
+    ----------
+    prop : ModelProperties
+        Program input arguments and configuration.
+    model : xarray.Dataset
+        The lazily loaded model dataset.
+    logger : Logger
+        The logging instance.
+    variable : str
+        The variable name to extract (e.g., 'wind' or a custom scalar like 'zeta').
+    station_idx : int
+        The node/station index to extract from the model array.
+    station_id : str
+        The string ID of the station.
+    """
+    logger.info(f"Extracting and writing .prd file for '{variable}' at station '{station_id}'...")
+
+    # Determine time coordinate
+    time_name = 'ocean_time' if prop.model_source == 'roms' else 'time'
+    try:
+        time_data = model[time_name].values
+    except KeyError:
+        logger.error(f"Time coordinate '{time_name}' not found. Cannot write .prd file.")
+        return
+
+    is_vector = False
+
+    # -------------- 1. Extract Data --------------
+    if variable == 'wind':
+        is_vector = True
+        if prop.model_source == 'roms':
+            u_var, v_var = 'Uwind', 'Vwind'
+        elif prop.model_source == 'fvcom':
+            u_var, v_var = 'uwind_speed', 'vwind_speed'
+        elif prop.model_source == 'schism':
+            u_var, v_var = 'windx', 'windy'
+        else:
+            u_var, v_var = 'u_wind', 'v_wind'
+
+        if u_var not in model.variables or v_var not in model.variables:
+            logger.warning(f"Wind variables '{u_var}'/'{v_var}' not found. Skipping.")
+            return
+
+        var_u_da = model[u_var]
+        var_v_da = model[v_var]
+
+        isel_dict = {dim: station_idx for dim in var_u_da.dims if dim != time_name}
+        u_data = var_u_da.isel(**isel_dict).values
+        v_data = var_v_da.isel(**isel_dict).values
+
+        # Calculate speed and direction matching the 'format_currents' convention
+        model_obs = np.sqrt(u_data**2 + v_data**2)
+        model_ang = np.array([math.atan2(u_data[t], v_data[t]) / math.pi * 180 % 360.0 for t in range(len(time_data))])
+
+        data_model = pd.DataFrame({'DateTime': time_data, 'DIR': model_ang, 'OBS': model_obs})
+        var_label = 'wind'
+
+    else:
+        # Scalar variable fallback (bypasses name_convent if it is a completely custom parameter)
+        try:
+            name_var, model_var = name_convent(variable)
+        except Exception:
+            name_var, model_var = variable, variable
+
+        if model_var not in model.variables:
+            # Fallback direct check
+            if variable in model.variables:
+                model_var = variable
+                name_var = variable
+            else:
+                logger.warning(f"Variable '{model_var}' not found in dataset. Skipping.")
+                return
+
+        var_da = model[model_var]
+        isel_dict = {dim: station_idx for dim in var_da.dims if dim != time_name}
+        model_obs = var_da.isel(**isel_dict).values
+
+        if prop.model_source == 'schism':
+            model_obs = _mask_schism_sentinels(model_obs, model_var, station_id, prop.ofs, logger)
+
+        data_model = pd.DataFrame({'DateTime': time_data, 'OBS': model_obs})
+        var_label = name_var
+
+    # -------------- 2. Format Data --------------
+    # Calculate extraction bounds matching standard logic
+    start_date = (
+        str((datetime.strptime(prop.start_date_full.split('T')[0].replace('-', ''), '%Y%m%d') - timedelta(days=2)).strftime('%Y%m%d'))
+        + '-01:01:01'
+    )
+    end_date = (
+        str((datetime.strptime(prop.end_date_full.split('T')[0].replace('-', ''), '%Y%m%d') + timedelta(days=2)).strftime('%Y%m%d'))
+        + '-01:01:01'
+    )
+
+    if is_vector:
+        formatted_series = vector(data_model, start_date, end_date, int(prop.lookback*24))
+    else:
+        formatted_series = scalar(data_model, start_date, end_date, int(prop.lookback*24))
+
+    # -------------- 3. Write .prd File --------------
+    # Mimic standard file naming based on whichcast
+    if prop.whichcast == 'forecast_a' and not getattr(prop, 'horizonskill', False):
+        filename = f'{station_id}_{prop.ofs}_{var_label}_{station_idx}_{prop.whichcast}_{prop.forecast_hr}_{prop.ofsfiletype}_model.prd'
+    else:
+        filename = f'{station_id}_{prop.ofs}_{var_label}_{station_idx}_{prop.whichcast}_{prop.ofsfiletype}_model.prd'
+
+    filepath = os.path.join(prop.data_model_1d_node_path, filename)
+
+    with open(filepath, 'w', encoding='utf-8') as output:
+        for line in formatted_series:
+            output.write(str(line) + '\n')
+
+    logger.info(f'Successfully created custom .prd file: {filepath}')
 
 def _mask_schism_sentinels(arr, kind, station_id, ofs, log):
     """Mask SCHISM dry/wet sentinels and blended transitional values.
@@ -340,11 +458,21 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
         actual_var = 'elevation' if prop.ofsfiletype == 'fields' else model_var
 
     if prop.model_source == 'fvcom':
-        scalar_data = _batch_extract(model, actual_var, indices, depths,
-                                     idx_first=False)
+        try:
+            scalar_data = _batch_extract(model, actual_var, indices, depths,
+                                         idx_first=False)
+        except IndexError:
+            # 2D variable (e.g., water level) — no depth dimension
+            scalar_data = _batch_extract(model, actual_var, indices, None)
+
     elif prop.model_source == 'roms':
-        scalar_data = _batch_extract(model, actual_var, indices, depths,
-                                     idx_first=True)
+        try:
+            scalar_data = _batch_extract(model, actual_var, indices, depths,
+                                         idx_first=True)
+        except IndexError:
+            # 2D variable (e.g., water level) — no depth dimension
+            scalar_data = _batch_extract(model, actual_var, indices, None)
+
     elif prop.model_source == 'schism':
         if 'stofs' in prop.ofs and model_var in ('temp', 'temperature'):
             scalar_data = _batch_extract(model, 'temperature', indices, None)
@@ -353,7 +481,7 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
                 scalar_data = _batch_extract(model, actual_var, indices, depths,
                                              idx_first=False)
             except IndexError:
-                # 2D variable (e.g. water level) — no depth dimension
+                # 2D variable (e.g., water level) — no depth dimension
                 scalar_data = _batch_extract(model, actual_var, indices, None)
 
     return {'scalar_data': scalar_data}
@@ -491,7 +619,7 @@ def format_temp_salt(prop, model, ofs_ctlfile, model_var, i, precomputed=None):
     )
 
     formatted_series = \
-        scalar(data_model, start_date, end_date)
+        scalar(data_model, start_date, end_date, int(prop.lookback*24))
     return formatted_series
 
 
@@ -671,7 +799,7 @@ def format_currents(prop, model, ofs_ctlfile, i, precomputed=None):
         + '-01:01:01'
     )
     formatted_series = \
-        vector(mfp.data_model, start_date, end_date)
+        vector(mfp.data_model, start_date, end_date, int(prop.lookback*24))
 
     return formatted_series
 
@@ -778,7 +906,7 @@ def format_waterlevel(prop, model, ofs_ctlfile, model_var,
     )
 
     formatted_series = \
-        scalar(data_model, start_date, end_date)
+        scalar(data_model, start_date, end_date, int(prop.lookback*24))
 
     return formatted_series, datum_offset
 
@@ -1097,6 +1225,23 @@ def get_node_ofs(prop, logger, model_dataset=None):
                 """
                 datum_offset = None
                 model_station = None
+
+                # ==========================================================
+                # If this is 'wind' or another non-standard parameter, write it
+                # using the new custom format function and return immediately.
+                if prop_local.ex_vars:
+                    station_idx = int(ofs_ctlfile[1][i])
+                    station_id = str(ofs_ctlfile[4][i])
+
+                    if prop_local.ofsfiletype == 'fields':
+                        logger.warning(f"2D node extraction for '{variable}' requires i/j translation. Skipping.")
+                    else:
+                        for ex_var in prop_local.ex_vars:
+                            write_custom_variable_prd(
+                                prop_local, model, logger, ex_var,
+                                station_idx=station_idx, station_id=station_id
+                            )
+                # ==========================================================
 
                 if variable in ('salinity', 'water_temperature'):
                     formatted_series = format_temp_salt(

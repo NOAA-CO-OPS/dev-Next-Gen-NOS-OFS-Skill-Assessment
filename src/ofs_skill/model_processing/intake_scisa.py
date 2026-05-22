@@ -200,7 +200,7 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
             'mask_psi', 'mask_u', 'mask_v', 'ndefHIS', 'ndtfast', 'nHIS',
             'nRST', 'nSTA', 'ntimes', 'Pair', 'pm', 'pn', 'rdrg', 'rdrg2',
             'rho0', 's_w', 'spherical', 'Tcline', 'theta_b', 'theta_s',
-            'Tnudg', 'Tobc_in', 'Tobc_out', 'Uwind', 'Vwind', 'Vstretching',
+            'Tnudg', 'Tobc_in', 'Tobc_out', 'Vstretching',
             'Vtransform', 'w', 'wetdry_mask_psi', 'wetdry_mask_rho',
             'wetdry_mask_u', 'wetdry_mask_v', 'xl', 'Znudg', 'Zob', 'Zos',
         ]
