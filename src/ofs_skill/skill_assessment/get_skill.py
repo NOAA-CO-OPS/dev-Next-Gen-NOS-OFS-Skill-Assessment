@@ -245,12 +245,12 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
             if name_var == 'cu':
                 formatted_series = format_paired_one_d.paired_vector(
                     obs_df, ofs_df, prop.start_date_full, prop.end_date_full,
-                    logger
+                    logger, int(prop.lookback*24)
                 )
             else:
                 formatted_series = format_paired_one_d.paired_scalar(
                     obs_df, ofs_df, prop.start_date_full, prop.end_date_full,
-                    logger
+                    logger, int(prop.lookback*24)
                 )
 
     return formatted_series

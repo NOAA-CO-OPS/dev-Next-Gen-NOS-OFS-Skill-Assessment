@@ -317,7 +317,8 @@ def _apply_datum_shift(
     return timeseries
 
 
-def _format_timeseries(timeseries, variable, start_date_full, end_date_full):
+def _format_timeseries(timeseries, variable, start_date_full, end_date_full,
+                       lookback_days):
     """Dispatch timeseries formatting based on variable type.
 
     Parameters
@@ -336,16 +337,17 @@ def _format_timeseries(timeseries, variable, start_date_full, end_date_full):
     list
         Formatted timeseries lines.
     """
+    lookback_hours = int(lookback_days*24)
     if variable == 'currents':
-        return vector(timeseries, start_date_full, end_date_full)
+        return vector(timeseries, start_date_full, end_date_full, lookback_hours)
     else:
-        return scalar(timeseries, start_date_full, end_date_full)
+        return scalar(timeseries, start_date_full, end_date_full, lookback_hours)
 
 
 def _fetch_and_format_station(
     station_info, station_metadata, variable, name_var, datum, datum_list,
     start_date, end_date, start_date_full, end_date_full, ofs,
-    data_observations_1d_station_path, logger, control_files_path, config_file=None,
+    data_observations_1d_station_path, lookback_days, logger, control_files_path, config_file=None,
 ):
     """Fetch observation data for a single station, format it, and write .obs file.
 
@@ -451,7 +453,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    lookback_days
                 )
             except Exception as e_x:
                 logger.error('Fail when getting COOPS %s data for '
@@ -480,7 +483,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    lookback_days
                 )
             except Exception as e_x:
                 logger.error('Fail when getting USGS '
@@ -509,7 +513,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    lookback_days
                 )
             except Exception as e_x:
                 logger.error('Fail when getting NDBC %s '
@@ -538,7 +543,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    lookback_days
                 )
             except Exception as e_x:
                 logger.error('Fail when getting CHS %s '
@@ -803,6 +809,7 @@ def _process_variable_obs(
                             end_date_full,
                             ofs,
                             data_observations_1d_station_path,
+                            prop.lookback,
                             logger,
                             control_files_path,
                             config_file,
@@ -915,8 +922,11 @@ def get_station_observations(prop,logger):
     start_date_full = start_date_full.replace('T', '-')
     end_date_full = end_date_full.replace ( 'T' , '-' )
 
+    # Include lookback if applicable
+    lookback_days = prop.lookback + 3
+
     start_dt = datetime.strptime(
-        start_date, '%Y%m%d') - timedelta(days=3)
+        start_date, '%Y%m%d') - timedelta(days=lookback_days)
     end_dt = datetime.strptime(
         end_date, '%Y%m%d') + timedelta(days=3)
 

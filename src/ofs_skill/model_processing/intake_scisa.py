@@ -198,18 +198,17 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         # concatenated along time and never read by anything.)
         drop_variables = [
             'Akk_bak', 'Akp_bak', 'Akt_bak', 'Akv_bak', 'Cs_r', 'Cs_w',
-            'dstart', 'dtfast', 'el', 'f', 'Falpha', 'Fbeta', 'Fgamma',
-            'FSobc_in', 'FSobc_out', 'gamma2', 'grid', 'hc', 'lat_psi',
-            'lon_psi', 'Lm2CLM', 'Lm3CLM', 'LnudgeM2CLM', 'LnudgeM3CLM',
-            'LnudgeTCLM', 'LsshCLM', 'LtracerCLM', 'LtracerSrc', 'LuvSrc',
-            'LwSrc', 'M2nudg', 'M2obc_in', 'M2obc_out', 'M3nudg',
-            'M3obc_in', 'M3obc_out', 'mask_psi', 'mask_u', 'mask_v',
-            'ndefHIS', 'ndtfast', 'nHIS', 'nRST', 'nSTA', 'ntimes',
-            'Pair', 'pm', 'pn', 'rdrg', 'rdrg2', 'rho0', 's_w', 'spherical',
-            'Tcline', 'theta_b', 'theta_s', 'Tnudg', 'Tobc_in', 'Tobc_out',
-            'Uwind', 'Vwind', 'Vstretching', 'Vtransform', 'w',
-            'wetdry_mask_psi', 'wetdry_mask_rho', 'wetdry_mask_u',
-            'wetdry_mask_v', 'xl', 'Znudg', 'Zob', 'Zos',
+            'dtfast', 'el', 'f', 'Falpha', 'Fbeta', 'Fgamma', 'FSobc_in',
+            'FSobc_out', 'gamma2', 'grid', 'hc', 'lat_psi', 'lon_psi',
+            'Lm2CLM', 'Lm3CLM', 'LnudgeM2CLM', 'LnudgeM3CLM', 'LnudgeTCLM',
+            'LsshCLM', 'LtracerCLM', 'LtracerSrc', 'LuvSrc', 'LwSrc', 'M2nudg',
+            'M2obc_in', 'M2obc_out', 'M3nudg', 'M3obc_in', 'M3obc_out',
+            'mask_psi', 'mask_u', 'mask_v', 'ndefHIS', 'ndtfast', 'nHIS',
+            'nRST', 'nSTA', 'ntimes', 'Pair', 'pm', 'pn', 'rdrg', 'rdrg2',
+            'rho0', 's_w', 'spherical', 'Tcline', 'theta_b', 'theta_s',
+            'Tnudg', 'Tobc_in', 'Tobc_out', 'Vstretching',
+            'Vtransform', 'w', 'wetdry_mask_psi', 'wetdry_mask_rho',
+            'wetdry_mask_u', 'wetdry_mask_v', 'xl', 'Znudg', 'Zob', 'Zos',
         ]
     elif prop.model_source == 'fvcom':
         time_name = 'time'
