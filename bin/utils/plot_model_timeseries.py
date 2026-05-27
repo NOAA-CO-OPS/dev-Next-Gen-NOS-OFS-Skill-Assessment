@@ -6,6 +6,7 @@ observation data from .int files (preferring .int over .prd when both exist).
 """
 
 import argparse
+import difflib
 import glob
 import logging
 import logging.config
@@ -21,6 +22,67 @@ from plotly.subplots import make_subplots
 
 # Import from ofs_skill package
 from ofs_skill.obs_retrieval import utils
+from ofs_skill.obs_retrieval.get_station_tidal_data import get_station_tidal_data
+from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
+
+
+def get_pcd_value(ctl_file, target_id, target_name, logger):
+    """
+    Extracts the Principal Current Direction (PCD) value from the control file
+    using exact ID matching or closest (fuzzy) string matching for station names.
+    """
+    if not os.path.exists(ctl_file):
+        # Fallback: check if the control file is in the current working directory
+        fallback_file = os.path.basename(ctl_file)
+        if os.path.exists(fallback_file):
+            ctl_file = fallback_file
+        else:
+            logger.warning(f'Could not find control file to read PCD: {ctl_file}')
+            return None
+
+    try:
+        name_to_pcd = {}
+        id_to_pcd = {}
+
+        with open(ctl_file) as file:
+            for line in file:
+                if line.startswith('ST='):
+                    parts = line.split("'")
+                    if len(parts) >= 5:
+                        st_name = parts[1].strip().lower()
+                        st_abbr = parts[3].strip().lower()
+                        numeric_data = parts[4].split()
+                        if len(numeric_data) >= 3:
+                            pcd = float(numeric_data[2])
+                            name_to_pcd[st_name] = pcd
+                            id_to_pcd[st_abbr] = pcd
+
+        target_id_clean = target_id.strip().lower() if target_id else ''
+        target_name_clean = target_name.strip().lower() if target_name else ''
+
+        # 1. Exact match on ID
+        if target_id_clean and target_id_clean in id_to_pcd:
+            return id_to_pcd[target_id_clean]
+
+        # 2. Substring match on ID
+        for abbr, pcd in id_to_pcd.items():
+            if target_id_clean and (target_id_clean in abbr or abbr in target_id_clean):
+                return pcd
+
+        # 3. Fuzzy match on Station Name
+        if target_name_clean and name_to_pcd:
+            # Find the closest match above a 60% similarity threshold
+            matches = difflib.get_close_matches(target_name_clean, name_to_pcd.keys(), n=1, cutoff=0.6)
+            if matches:
+                best_match = matches[0]
+                if best_match != target_name_clean:
+                    logger.info(f"Using fuzzy match '{best_match}' for target station '{target_name_clean}'.")
+                return name_to_pcd[best_match]
+
+    except Exception as e:
+        logger.warning(f'Error parsing {ctl_file} for PCD: {e}')
+
+    return None
 
 
 def get_plot_title(plotinfo):
@@ -28,19 +90,25 @@ def get_plot_title(plotinfo):
     start_str = datetime.strftime(plotinfo['start'], '%Y/%m/%d %H:%M:%S')
     end_str = datetime.strftime(plotinfo['end'], '%Y/%m/%d %H:%M:%S')
 
-    return (f'<b>NOAA/National Ocean Service, {plotinfo["ofs"].upper()} <br>'
-            f'Station Name:&nbsp;{plotinfo["station_name"]} &nbsp;&nbsp;&nbsp;'
-            f'Station ID:&nbsp;{plotinfo["station_id"]}'
-            f'<br>From:&nbsp;{start_str}'
-            f'&nbsp;&nbsp;&nbsp;To:&nbsp;{end_str}<b>')
+    title = (f'<b>NOAA/National Ocean Service, {plotinfo["ofs"].upper()} <br>'
+             f'Station Name:&nbsp;{plotinfo["station_name"]} &nbsp;&nbsp;&nbsp;'
+             f'Station ID:&nbsp;{plotinfo["station_id"]}')
+
+    if plotinfo.get('pcd_value') is not None:
+        title += f'<br>Along-Channel Direction:&nbsp;{plotinfo["pcd_value"]}\u00b0 (Positive = Flood, Negative = Ebb)'
+
+    title += (f'<br>From:&nbsp;{start_str}'
+              f'&nbsp;&nbsp;&nbsp;To:&nbsp;{end_str}</b>')
+
+    return title
 
 
-def get_variable_names(name_var):
+def get_variable_names(name_var, datum):
     """Maps short variable names to full plot titles and save names."""
     if name_var == 'wl':
-        plot_name = 'Water Level (<i>meters</i>)'
+        plot_name = f'Water Level (<i>feet {datum}</i>)'
         save_name = 'water_level'
-        unit = ' m'
+        unit = ' ft'
     elif name_var in ('temp', 'water_temperature'):
         plot_name = 'Water Temperature (<i>\u00b0C</i>)'
         save_name = 'water_temperature'
@@ -78,7 +146,8 @@ def get_trace_styling(whichcast, trace_type):
     return color, dash
 
 
-def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None):
+def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None,
+         datum=None):
     """This function plots combined time series from .prd and .int files"""
 
     # Directories from conf file
@@ -109,10 +178,16 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
         home_path, dir_params['data_dir'], dir_params['model_dir'],
         dir_params['1d_node_dir']
     )
+    os.makedirs(prd_folder, exist_ok=True)
     int_folder = os.path.join(
         home_path, dir_params['data_dir'], dir_params['skill_dir'],
         dir_params['1d_pair_dir']
     )
+    os.makedirs(int_folder, exist_ok=True)
+    ctl_folder = os.path.join(
+        home_path, dir_params['control_files_dir']
+    )
+    os.makedirs(ctl_folder, exist_ok=True)
     save_path = os.path.join(prd_folder, 'prd_plots')
     os.makedirs(save_path, exist_ok=True)
 
@@ -193,6 +268,19 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
 
     logger.info(f'Found {sum(len(v) for v in grouped_files.values())} matching files. Grouping by station and variable...')
 
+    # Assign datum -- check for datum input argument first, then check for ctl file
+    if datum:
+        logger.info('Datum input argument found!')
+    else:
+        logger.info('No datum input argument found. Reading datum from control file...')
+        try:
+            read_station_ctl_file = station_ctl_file_extract(
+                r'' + ctl_folder + '/' + ofs + '_' + var_name + '_station.ctl')
+            logger.info('Station ctl file (%s_%s_station.ctl) found.', ofs_filter, var_name)
+            datum = read_station_ctl_file[1][0][-1].upper()
+        except (FileNotFoundError, IndexError, TypeError):
+            logger.error('Station ctl file not found. No datum found, so tide predictions will not be plotted.')
+
     # Cache for inventory lookup
     inv_cache = {}
 
@@ -207,7 +295,8 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 'station_name': 'Unknown'
             }
 
-            plotinfo['plot_name'], plotinfo['save_name'], plotinfo['unit'] = get_variable_names(plotinfo['var_name'])
+            plotinfo['plot_name'], plotinfo['save_name'], plotinfo['unit'] = \
+                get_variable_names(plotinfo['var_name'], datum)
 
             # --- Deduplicate: Prefer .int over .prd for the same run ---
             deduped_files = []
@@ -246,16 +335,29 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 inv_df = inv_cache[ofs]
 
             if inv_df is not None and 'ID' in inv_df.columns and 'Name' in inv_df.columns:
-                match = inv_df[inv_df['ID'] == station_id]
+                match = inv_df[inv_df['ID'].str.contains(station_id.split('_')[0], case=False, na=False)]
                 if not match.empty:
                     plotinfo['station_name'] = match.iloc[0]['Name']
             # ----------------------------------
 
-            # Setup layout rules (Cu and scalar plots are 1 row)
+            # --- PCD LOOKUP LOGIC FOR ALONG-CHANNEL ---
+            pcd_value = None
             if plotinfo['var_name'] in ('cu', 'currents'):
-                nrows = 1
-                sharexaxis = False
-            elif plotinfo['var_name'] == 'wind':
+                # Force 'cu' naming convention for control file lookup just in case 'currents' was passed
+                search_var = 'cu'
+                ctl_file_path = os.path.join(ctl_folder, f'plot_timeseries_{search_var}_{ofs}.ctl')
+
+                pcd_value = get_pcd_value(ctl_file_path, plotinfo['station_id'], plotinfo['station_name'], logger)
+
+                if pcd_value is not None:
+                    logger.info(f'Found PCD value {pcd_value}\u00b0 for station {station_id}. Computing along-channel velocity.')
+                    plotinfo['plot_name'] = 'Along-Channel Velocity (<i>knots</i>)'
+                    plotinfo['pcd_value'] = pcd_value  # Passed down to the title formatter
+                else:
+                    logger.warning(f"Missing PCD mapping for '{station_id}' / '{plotinfo['station_name']}'. Reverting to absolute speed.")
+
+            # Setup layout rules (Cu and scalar plots are 1 row)
+            if plotinfo['var_name'] in ('cu', 'currents', 'wind'):
                 nrows = 1
                 sharexaxis = False
             else:
@@ -269,7 +371,11 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
             time_bounds = {}
             obs_legend_added = False
 
-            # Plot each file in this group
+            parsed_data = []
+
+            # ==============================================================
+            # PASS 1: Extract, Process, and Collect all Data for this Station
+            # ==============================================================
             for file_info in files_list:
                 file_path = file_info['path']
                 whichcast = file_info['whichcast']
@@ -305,13 +411,11 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                             df[c] = pd.to_numeric(df[c], errors='coerce')
 
                         # === DYNAMIC OBSERVATION MAPPING ===
-                        # 1. Search for standard scalar Observation columns
                         for col in ['VAL_OB', 'VAL_OB_SPD', 'OB_SPD', 'SPEED_OB']:
                             if col in df.columns:
                                 df['OBS'] = pd.to_numeric(df[col], errors='coerce')
                                 break
 
-                        # 2. If scalar isn't found (like for currents), calculate from U and V components
                         if 'OBS' not in df.columns:
                             u_col = next((c for c in df.columns if c in ['VAL_OB_U', 'OB_U', 'U_OB']), None)
                             v_col = next((c for c in df.columns if c in ['VAL_OB_V', 'OB_V', 'V_OB']), None)
@@ -319,15 +423,14 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                                 u = pd.to_numeric(df[u_col], errors='coerce')
                                 v = pd.to_numeric(df[v_col], errors='coerce')
                                 df['OBS'] = np.sqrt(u**2 + v**2)
+                                df['OBS_DIR'] = np.mod(90 - np.degrees(np.arctan2(v, u)), 360)
 
                         # === DYNAMIC MODEL MAPPING ===
-                        # 1. Search for standard scalar Model columns
                         for col in ['VAL_MODEL', 'VAL_MODEL_SPD', 'MOD_SPD', 'VAL_MOD', 'VAL_MOD_SPD', 'MODEL_SPD', 'SPEED_MODEL']:
                             if col in df.columns:
                                 df['OFS'] = pd.to_numeric(df[col], errors='coerce')
                                 break
 
-                        # 2. If scalar isn't found, calculate from U and V components
                         if 'OFS' not in df.columns:
                             u_col = next((c for c in df.columns if c in ['VAL_MODEL_U', 'MOD_U', 'VAL_MOD_U', 'U_MOD', 'MODEL_U']), None)
                             v_col = next((c for c in df.columns if c in ['VAL_MODEL_V', 'MOD_V', 'VAL_MOD_V', 'V_MOD', 'MODEL_V']), None)
@@ -335,14 +438,15 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                                 u = pd.to_numeric(df[u_col], errors='coerce')
                                 v = pd.to_numeric(df[v_col], errors='coerce')
                                 df['OFS'] = np.sqrt(u**2 + v**2)
+                                df['OFS_DIR'] = np.mod(90 - np.degrees(np.arctan2(v, u)), 360)
 
-                        # Grab Directions if present
+                        # Grab Directions if present and not already derived
                         for col in ['VAL_OB_DIR', 'DIR_OB', 'OB_DIR']:
-                            if col in df.columns:
+                            if col in df.columns and 'OBS_DIR' not in df.columns:
                                 df['OBS_DIR'] = pd.to_numeric(df[col], errors='coerce')
                                 break
                         for col in ['VAL_MODEL_DIR', 'DIR_MODEL', 'MODEL_DIR']:
-                            if col in df.columns:
+                            if col in df.columns and 'OFS_DIR' not in df.columns:
                                 df['OFS_DIR'] = pd.to_numeric(df[col], errors='coerce')
                                 break
 
@@ -375,6 +479,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                         u = pd.to_numeric(df[6], errors='coerce')
                         v = pd.to_numeric(df[7], errors='coerce')
                         df['OFS'] = np.sqrt(u**2 + v**2)
+                        df['OFS_DIR'] = np.mod(90 - np.degrees(np.arctan2(v, u)), 360)
                     else:
                         df = df.rename(columns={6: 'OFS'})
                         if plotinfo['var_name'] == 'wind':
@@ -386,12 +491,29 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 if 'OFS' in df.columns:
                     df.loc[df['OFS'] < -90, 'OFS'] = np.nan
 
-                # --- Apply Unit Conversions ---
+                # --- Apply Unit Conversions & Along-Channel Projections ---
                 if plotinfo['var_name'] in ('cu', 'currents'):
                     if 'OBS' in df.columns:
                         df['OBS'] = pd.to_numeric(df['OBS'], errors='coerce') * 1.943844
                     if 'OFS' in df.columns:
                         df['OFS'] = pd.to_numeric(df['OFS'], errors='coerce') * 1.943844
+
+                    # Convert to along-channel direction if PCD exists
+                    if pcd_value is not None:
+                        if 'OBS' in df.columns and 'OBS_DIR' in df.columns:
+                            df['OBS'] = df['OBS'] * np.cos(np.radians(df['OBS_DIR'] - pcd_value))
+                        if 'OFS' in df.columns and 'OFS_DIR' in df.columns:
+                            df['OFS'] = df['OFS'] * np.cos(np.radians(df['OFS_DIR'] - pcd_value))
+
+                elif plotinfo['var_name'] == 'wl':
+                    if 'OBS' in df.columns:
+                        df['OBS'] = pd.to_numeric(df['OBS'], errors='coerce') * 3.28084
+                    if 'OFS' in df.columns:
+                        df['OFS'] = pd.to_numeric(df['OFS'], errors='coerce') * 3.28084
+
+                # Ensure dataframe has data remaining
+                if df.empty:
+                    continue
 
                 start_time = df['DateTime'].iloc[0]
                 end_time = df['DateTime'].iloc[-1]
@@ -400,9 +522,34 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 global_ends.append(end_time)
                 time_bounds[whichcast] = {'start': start_time, 'end': end_time}
 
+                # Store the processed dataframe for Pass 2 plotting
+                parsed_data.append({
+                    'df': df,
+                    'whichcast': whichcast,
+                    'display_cast': display_cast
+                })
+
+            if not global_starts:
+                continue # Skip if all files were empty
+
+            plotinfo['start'] = min(global_starts)
+            plotinfo['end'] = max(global_ends)
+
+            # ==============================================================
+            # PASS 2: Plot the Data
+            # ==============================================================
+            for data in parsed_data:
+                df = data['df']
+                whichcast = data['whichcast']
+                display_cast = data['display_cast']
+
                 # === 1. Plot Observations (if they exist) ===
                 if 'OBS' in df.columns:
-                    hovertemplate_obs = f'Observations: %{{y:.2f}}{plotinfo["unit"]}<extra></extra>'
+                    if plotinfo['var_name'] in ('cu', 'currents') and pcd_value is not None:
+                        hovertemplate_obs = f'Obs Velocity: %{{y:.2f}}{plotinfo["unit"]}<extra></extra>'
+                    else:
+                        hovertemplate_obs = f'Observations: %{{y:.2f}}{plotinfo["unit"]}<extra></extra>'
+
                     fig.add_trace(
                         go.Scatter(
                             x=df['DateTime'],
@@ -433,7 +580,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                         )
                     obs_legend_added = True
 
-                # === 2. Plot Model Runs (from either PRD or INT) ===
+                # === 2. Plot Model Runs ===
                 if 'OFS' in df.columns:
                     customdata = None
                     hovertemplate_model = f'{display_cast}: %{{y:.2f}}{plotinfo["unit"]}<extra></extra>'
@@ -442,7 +589,10 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                         customdata = df['OFS_DIR']
                         hovertemplate_model = f'{display_cast} Speed: %{{y:.2f}} m/s<br>{display_cast} Direction: %{{customdata:.1f}}\u00b0<extra></extra>'
                     elif plotinfo['var_name'] in ('cu', 'currents'):
-                        hovertemplate_model = f'{display_cast} Speed: %{{y:.2f}} knots<br><extra></extra>'
+                        if pcd_value is not None:
+                            hovertemplate_model = f'{display_cast} Velocity: %{{y:.2f}} knots<br><extra></extra>'
+                        else:
+                            hovertemplate_model = f'{display_cast} Speed: %{{y:.2f}} knots<br><extra></extra>'
 
                     c1, d1 = get_trace_styling(whichcast, 'primary')
 
@@ -487,9 +637,9 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
 
                     # === Wind Arrows (True Quiver Layout Annotations) ===
                     if plotinfo['var_name'] == 'wind' and 'OFS_DIR' in df.columns:
-                        arrow_step = max(1, len(df) // 40)
 
-                        subset = df.iloc[::arrow_step]
+                        # Filter to only grab data points strictly at the top of the hour (00 minutes)
+                        subset = df[df['DateTime'].dt.minute == 0].dropna(subset=['OFS', 'OFS_DIR'])
 
                         # Adds a physical dot marker exactly where the arrow sprouts from the line
                         fig.add_trace(
@@ -505,7 +655,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
 
                         for _, row in subset.iterrows():
                             angle_rad = np.radians(row['OFS_DIR'])
-                            length = 35  # Increased length for longer arrows
+                            length = 18  # Reduced length for shorter arrows
 
                             fig.add_annotation(
                                 x=row['DateTime'],
@@ -519,15 +669,70 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                                 startarrowhead=2,
                                 startarrowsize=1.5,
                                 arrowwidth=1.0,
-                                arrowcolor=c1
+                                arrowcolor='blue'
                             )
 
-            # --- Layout Configuration ---
-            if not global_starts:
-                continue # Skip if all files were empty
+            # ==============================================================
+            # PASS 3: Tides (Water Level Only)
+            # ==============================================================
+            # Add tidal predictions for water level plots excluding Great Lakes (ofs starting with 'l')
+            if plotinfo['var_name'] == 'wl' and plotinfo['ofs'][0].lower() != 'l' and datum:
+                # Create a minimal Mock property object so get_station_tidal_data can parse it standalone
+                class MockProp:
+                    def __init__(self, ofs_name):
+                        self.ofs = ofs_name
+                        self.datum = datum
+                        self.time_zone = 'GMT'
+                        self.control_files_path = ctl_folder
 
-            plotinfo['start'] = min(global_starts)
-            plotinfo['end'] = max(global_ends)
+                try:
+                    start_dt = plotinfo['start'].to_pydatetime()
+                    end_dt = plotinfo['end'].to_pydatetime()
+                    tidal_data, tidal_info = get_station_tidal_data(
+                        start_dt, end_dt, MockProp(plotinfo['ofs']), plotinfo['station_id'], logger
+                    )
+
+                    if tidal_data is not None and not tidal_data.empty:
+                        tidal_data['TIDE'] = pd.to_numeric(tidal_data['TIDE'], errors='coerce') * 3.28084
+                        if tidal_info.get('tidal_station_name'):
+                            source_text = f'CO-OPS Station {tidal_info["tidal_station_id"]} ({tidal_info["tidal_station_name"]})'
+                        else:
+                            source_text = f'CO-OPS Station {tidal_info["tidal_station_id"]}'
+
+                        distance = tidal_info.get('tidal_station_distance')
+                        distance_text = f'<br>Distance: {distance:.1f} km' if distance and distance > 0 else ''
+
+                        used_datum = tidal_info.get('used_datum', 'MSL')
+                        datum_text = f'<br>Datum: {used_datum}'
+
+                        hover_text = (
+                            f'Tidal Prediction: %{{y:.2f}}{plotinfo["unit"]}'
+                            f'<br><i>Source: {source_text}{distance_text}{datum_text}</i><extra></extra>'
+                        )
+
+                        fig.add_trace(
+                            go.Scatter(
+                                x=tidal_data['DateTime'],
+                                y=tidal_data['TIDE'],
+                                name='Tidal Predictions',
+                                hovertemplate=hover_text,
+                                mode='lines',
+                                opacity=0.7,
+                                line=dict(color='purple', width=1.5, dash='dot'),
+                                legendgroup='tide',
+                            ), 1, 1
+                        )
+                        logger.info(f"Tidal predictions successfully added to plot for station {plotinfo['station_id']}.")
+                except Exception as ex:
+                    logger.warning(f"Could not retrieve tidal predictions for station {plotinfo['station_id']}: {ex}")
+
+            # --- Layout Configuration ---
+            # Set dynamic margins and annotation positions based on plot type
+            is_currents = plotinfo['var_name'] in ('cu', 'currents')
+            top_margin = 130 if is_currents else 100
+            title_y = 0.98 if is_currents else 0.97
+            annotation_y = -0.42 if is_currents else -0.36
+            bottom_margin = 180 if is_currents else 160
 
             # Check if nowcast and forecast_a are sequential and not overlapping
             if 'nowcast' in time_bounds and 'forecast_a' in time_bounds:
@@ -569,7 +774,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
             fig.add_annotation(
                 text='<i>Click and drag the edges of the slider to adjust the time range.</i>',
                 xref='paper', yref='paper',
-                x=0.5, y=-0.36,
+                x=0.5, y=annotation_y,  # Dynamically positioned based on variable
                 yanchor='top',
                 showarrow=False,
                 font=dict(family='Open Sans', color='#555555', size=13)
@@ -579,19 +784,22 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 title=dict(
                     text=get_plot_title(plotinfo),
                     font=dict(size=14, color='black', family='Open Sans'),
-                    y=0.97, x=0.5, xanchor='center', yanchor='top',
+                    y=title_y, x=0.5, xanchor='center', yanchor='top',
                 ),
                 transition_ordering='traces first', dragmode='zoom',
                 height=550, width=900,
                 template='plotly_white',
-                margin=dict(t=100, b=160),
+                # Dynamically set top/bottom margin
+                margin=dict(t=top_margin, b=bottom_margin),
                 legend=dict(
                     orientation='h',
                     yanchor='bottom',
                     y=1.02,
                     xanchor='left',
                     x=0,
-                    font=dict(size=16, color='black')
+                    font=dict(size=16, color='black'),
+                    itemclick=False,         # Disable toggling via click
+                    itemdoubleclick=False    # Disable isolation via double-click
                 ),
 
                 # Clean, High-Fidelity Professional Hover Styling
@@ -635,9 +843,10 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     titlefont=dict(family='Open Sans', color='black', size=18),  # Increased to 17
                     tickfont=dict(family='Open Sans', color='black', size=14),
                     minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
-                    zeroline=True,
+                    zeroline=(plotinfo['var_name'] == 'wl'),
                     zerolinewidth=1,
                     zerolinecolor='black',
+                    #rangemode='tozero' if plotinfo['var_name'] != 'wl' else 'normal',
                     row=2, col=1,
                 )
                 plotinfo['plot_name'] = plotinfo['plot_name'][0]
@@ -648,9 +857,10 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 titlefont=dict(family='Open Sans', color='black', size=17),  # Increased to 17
                 tickfont=dict(family='Open Sans', color='black', size=14),
                 minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
-                zeroline=True,
+                zeroline=(plotinfo['var_name'] == 'wl'),
                 zerolinewidth=1,
                 zerolinecolor='black',
+                #rangemode='tozero' if plotinfo['var_name'] != 'wl' else 'normal',
                 row=1, col=1,
             )
 
@@ -669,7 +879,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         prog='python plot_model_timeseries.py',
         usage='%(prog)s',
-        description='Plot model time series from .prd files',
+        description='Plot model time series from .prd or .int files',
     )
     parser.add_argument(
         '-c',
@@ -683,7 +893,7 @@ if __name__ == '__main__':
         default=None
     )
     parser.add_argument(
-        '-v',
+        '-vs',
         '--variable',
         help='Specify a single variable to plot (e.g., wl, temp, salt, cu, wind). Defaults to all.',
         default=None
@@ -694,7 +904,14 @@ if __name__ == '__main__':
         help='Specify a single OFS to plot (e.g., cbofs, dbofs). Defaults to all.',
         default=None
     )
+    parser.add_argument(
+        '-d', '--datum',
+        required=False,
+        default=None,
+        help="datum options: 'MHW', 'MHHW' \
+        'MLW', 'MLLW', 'NAVD88', 'XGEOID20B', 'IGLD85', 'LWD'")
 
     args = parser.parse_args()
 
-    main(None, _conf=args.config, inventory_file=args.inventory, variable=args.variable, ofs_filter=args.ofs)
+    main(None, _conf=args.config, inventory_file=args.inventory, variable=args.variable, ofs_filter=args.ofs,
+         datum=args.datum)
