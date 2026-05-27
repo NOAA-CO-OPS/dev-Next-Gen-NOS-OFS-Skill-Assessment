@@ -526,7 +526,7 @@ def create_1dplot_2nd_part(
             + var_info[1] + '_station.ctl'
         )
         logger.info(
-            'Station ctl file (%s_%s_station.ctl) found in get_title. ',
+            'Station ctl file (%s_%s_station.ctl) found. ',
             prop.ofs,
             var_info[1]
         )
