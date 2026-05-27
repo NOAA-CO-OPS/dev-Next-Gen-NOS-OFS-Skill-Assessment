@@ -157,12 +157,12 @@ def write_custom_variable_prd(prop, model, logger, variable, station_idx, statio
     # -------------- 2. Format Data --------------
     # Calculate extraction bounds matching standard logic
     start_date = (
-        str((datetime.strptime(prop.start_date_full.split('T')[0].replace('-', ''), '%Y%m%d') - timedelta(days=2)).strftime('%Y%m%d'))
-        + '-01:01:01'
+        str((datetime.strptime(prop.start_date_full.split('T')[0].replace('-', ''), '%Y%m%d') - timedelta(days=0)).strftime('%Y%m%d'))
+        + '-00:00:00'
     )
     end_date = (
-        str((datetime.strptime(prop.end_date_full.split('T')[0].replace('-', ''), '%Y%m%d') + timedelta(days=2)).strftime('%Y%m%d'))
-        + '-01:01:01'
+        str((datetime.strptime(prop.end_date_full.split('T')[0].replace('-', ''), '%Y%m%d') + timedelta(days=0)).strftime('%Y%m%d'))
+        + '-00:00:00'
     )
 
     if is_vector:
