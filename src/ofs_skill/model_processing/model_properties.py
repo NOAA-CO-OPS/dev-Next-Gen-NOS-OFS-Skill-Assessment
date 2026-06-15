@@ -114,7 +114,7 @@ class ModelProperties:
         self.user_input_location: Any = ''
         self.horizonskill: Any = ''
         self.lookback: Any = ''
-        self.ex_vars: Any = ''
+        self.aux_vars: Any = ''
         self.var_list: Any = ''
         self.filecheck: Any = ''
         # Extension attrs set dynamically by various CLI entrypoints.

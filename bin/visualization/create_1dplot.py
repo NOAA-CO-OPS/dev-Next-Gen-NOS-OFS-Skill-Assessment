@@ -722,7 +722,7 @@ def create_1dplot(prop, logger):
     prop.whichcasts = parse_arguments_to_list(prop.whichcasts, logger)
     prop.stationowner = parse_arguments_to_list(prop.stationowner, logger)
     prop.var_list = parse_arguments_to_list(prop.var_list, logger)
-    prop.ex_vars = parse_arguments_to_list(prop.ex_vars, logger)
+    prop.aux_vars = parse_arguments_to_list(prop.aux_vars, logger)
     # Format the other incoming arguments
     prop.ofs = prop.ofs.lower()
     prop.datum = prop.datum.upper()
@@ -1173,12 +1173,12 @@ if __name__ == '__main__':
         action='store_false',
         help='Use the SA package to make COMF graphics.')
     parser.add_argument(
-        '-ex',
-        '--Extra_Model_Variables',
+        '-aux',
+        '--Auxiliary_Model_Variables',
         required=False,
         default=None,
         help='Plot time series of other variables including heat flux and winds. '
-        'No skill assessment is completed for these variables, only plots '
+        'No skill assessment is completed for these variables, only time series & plots '
         'are made. Options: "wind", "heat_flux"')
 
     args = parser.parse_args()
@@ -1203,7 +1203,7 @@ if __name__ == '__main__':
     prop1.currents_bins_csv = args.Currents_Bins_Csv
     prop1.filecheck = args.Disable_Model_File_Check
     prop1.config_file = args.config
-    prop1.ex_vars = args.Extra_Model_Variables
+    prop1.aux_vars = args.Auxiliary_Model_Variables
 
     # This can only be changed if directly running get_node_ofs.py!
     prop1.user_input_location = False
