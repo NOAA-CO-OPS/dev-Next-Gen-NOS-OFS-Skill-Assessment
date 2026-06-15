@@ -1811,14 +1811,14 @@ def get_node_ofs(prop, logger, model_dataset=None):
                 # ==========================================================
                 # If this is 'wind' or another non-standard parameter, write it
                 # using the new custom format function and return immediately.
-                if prop_local.ex_vars:
+                if prop_local.aux_vars:
                     station_idx = int(ofs_ctlfile[1][i])
                     station_id = str(ofs_ctlfile[4][i])
 
                     if prop_local.ofsfiletype == 'fields':
                         logger.warning(f"2D node extraction for '{variable}' requires i/j translation. Skipping.")
                     else:
-                        for ex_var in prop_local.ex_vars:
+                        for ex_var in prop_local.aux_vars:
                             write_custom_variable_prd(
                                 prop_local, model, logger, ex_var,
                                 station_idx=station_idx, station_id=station_id
