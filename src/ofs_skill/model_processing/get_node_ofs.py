@@ -80,7 +80,7 @@ def write_custom_variable_prd(prop, model, logger, variable, station_idx, statio
     logger : Logger
         The logging instance.
     variable : str
-        The variable name to extract (e.g., 'wind' or a custom scalar like 'zeta').
+        The variable name to extract (e.g., 'wind', 'latent_heat_flux').
     station_idx : int
         The node/station index to extract from the model array.
     station_id : str
@@ -95,6 +95,8 @@ def write_custom_variable_prd(prop, model, logger, variable, station_idx, statio
     except KeyError:
         logger.error(f"Time coordinate '{time_name}' not found. Cannot write .prd file.")
         return
+    if prop.ofsfiletype == 'fields' and prop.model_source == 'roms':
+        i_index,j_index = roms_nodes(model, station_idx)
 
     is_vector = False
 
@@ -128,6 +130,29 @@ def write_custom_variable_prd(prop, model, logger, variable, station_idx, statio
         data_model = pd.DataFrame({'DateTime': time_data, 'DIR': model_ang, 'OBS': model_obs})
         var_label = 'wind'
 
+    elif 'heat_flux' in variable:
+        if prop.ofsfiletype == 'fields':
+            if prop.model_source == 'roms':
+                logger.warning('Heat flux variables are not available '
+                               'in ROMS output. Skipping.')
+                return
+            if variable not in model.variables:
+                logger.warning(f"Heat flux variable '{variable}' not found in dataset. Skipping.")
+                return
+
+            var_da = model[variable]
+
+            # Isolate the station node while ignoring the time dimension
+            isel_dict = {dim: station_idx for dim in var_da.dims if dim != time_name}
+            model_obs = var_da.isel(**isel_dict).values
+
+            data_model = pd.DataFrame({'DateTime': time_data, 'OBS': model_obs})
+            var_label = variable
+        else:
+            logger.error('Variable %s cannot be extracted from station files! '
+                         'Please use field files for %s.', variable, variable)
+            return
+
     else:
         # Scalar variable fallback (bypasses name_convent if it is a completely custom parameter)
         try:
@@ -158,11 +183,11 @@ def write_custom_variable_prd(prop, model, logger, variable, station_idx, statio
     # Calculate extraction bounds matching standard logic
     start_date = (
         str((datetime.strptime(prop.start_date_full.split('T')[0].replace('-', ''), '%Y%m%d') - timedelta(days=0)).strftime('%Y%m%d'))
-        + '-00:00:00'
+        + '-' + prop.start_date_full.split('T')[1].replace('Z','')
     )
     end_date = (
         str((datetime.strptime(prop.end_date_full.split('T')[0].replace('-', ''), '%Y%m%d') + timedelta(days=0)).strftime('%Y%m%d'))
-        + '-00:00:00'
+        + '-' + prop.end_date_full.split('T')[1].replace('Z','')
     )
 
     if is_vector:
@@ -1815,14 +1840,11 @@ def get_node_ofs(prop, logger, model_dataset=None):
                     station_idx = int(ofs_ctlfile[1][i])
                     station_id = str(ofs_ctlfile[4][i])
 
-                    if prop_local.ofsfiletype == 'fields':
-                        logger.warning(f"2D node extraction for '{variable}' requires i/j translation. Skipping.")
-                    else:
-                        for ex_var in prop_local.aux_vars:
-                            write_custom_variable_prd(
-                                prop_local, model, logger, ex_var,
-                                station_idx=station_idx, station_id=station_id
-                            )
+                    for aux_var in prop_local.aux_vars:
+                        write_custom_variable_prd(
+                            prop_local, model, logger, aux_var,
+                            station_idx=station_idx, station_id=station_id
+                        )
                 # ==========================================================
 
                 if variable in ('salinity', 'water_temperature'):
