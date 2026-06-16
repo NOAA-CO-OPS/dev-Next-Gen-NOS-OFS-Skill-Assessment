@@ -125,6 +125,18 @@ def get_variable_names(name_var, datum):
         plot_name = 'Wind Speed & Direction<br>(<i>m/s & deg</i>)'
         save_name = 'wind'
         unit = ' m/s'
+    elif name_var == 'latent_heat_flux':
+        plot_name = 'Latent Heat Flux (<i>W/m\u00b2</i>)'
+        save_name = 'latent_heat_flux'
+        unit = ' W/m\u00b2'
+    elif name_var == 'sensible_heat_flux':
+        plot_name = 'Sensible Heat Flux (<i>W/m\u00b2</i>)'
+        save_name = 'sensible_heat_flux'
+        unit = ' W/m\u00b2'
+    elif name_var == 'net_heat_flux':
+        plot_name = 'Net Heat Flux (<i>W/m\u00b2</i>)'
+        save_name = 'net_heat_flux'
+        unit = ' W/m\u00b2'
     else:
         plot_name = f'{name_var.capitalize()}'
         save_name = name_var
@@ -220,15 +232,29 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
         if cast_idx == -1:
             continue
 
-        # Parse based on file type robustly handling underscores in station IDs
+        # Parse based on file type robustly handling underscores in station IDs and multi-word Variables
         if file.endswith('.prd'):
             if cast_idx < 4:
                 continue
 
             node = parts[cast_idx - 1]
-            var_name = parts[cast_idx - 2]
-            ofs = parts[cast_idx - 3]
-            station_id = '_'.join(parts[0:cast_idx - 3])
+
+            # Check if the variable contains underscores (e.g., latent_heat_flux)
+            var_candidates_3 = '_'.join(parts[cast_idx - 4: cast_idx - 1]) if cast_idx >= 6 else ''
+            var_candidates_2 = '_'.join(parts[cast_idx - 3: cast_idx - 1]) if cast_idx >= 5 else ''
+
+            if var_candidates_3 in ['latent_heat_flux', 'sensible_heat_flux', 'net_heat_flux']:
+                var_name = var_candidates_3
+                ofs = parts[cast_idx - 5]
+                station_id = '_'.join(parts[0:cast_idx - 5])
+            elif var_candidates_2 in ['water_temperature']:
+                var_name = var_candidates_2
+                ofs = parts[cast_idx - 4]
+                station_id = '_'.join(parts[0:cast_idx - 4])
+            else:
+                var_name = parts[cast_idx - 2]
+                ofs = parts[cast_idx - 3]
+                station_id = '_'.join(parts[0:cast_idx - 3])
 
             whichcast = parts[cast_idx]
             if whichcast == 'forecast' and len(parts) > cast_idx + 1 and parts[cast_idx + 1] in ['a', 'b']:
@@ -239,9 +265,18 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                 continue
 
             ofs = parts[0]
-            var_name = parts[1]
             node = parts[cast_idx - 1]
-            station_id = '_'.join(parts[2:cast_idx - 1])
+
+            # Check if the variable contains underscores (e.g., latent_heat_flux)
+            if len(parts) >= 6 and '_'.join(parts[1:4]) in ['latent_heat_flux', 'sensible_heat_flux', 'net_heat_flux']:
+                var_name = '_'.join(parts[1:4])
+                station_id = '_'.join(parts[4:cast_idx - 1])
+            elif len(parts) >= 5 and '_'.join(parts[1:3]) in ['water_temperature']:
+                var_name = '_'.join(parts[1:3])
+                station_id = '_'.join(parts[3:cast_idx - 1])
+            else:
+                var_name = parts[1]
+                station_id = '_'.join(parts[2:cast_idx - 1])
 
             whichcast = parts[cast_idx]
             if whichcast == 'forecast' and len(parts) > cast_idx + 1 and parts[cast_idx + 1] in ['a', 'b']:
@@ -895,7 +930,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-vs',
         '--variable',
-        help='Specify a single variable to plot (e.g., wl, temp, salt, cu, wind). Defaults to all.',
+        help='Specify a single variable to plot (e.g., wl, temp, salt, cu, wind, latent_heat_flux, sensible_heat_flux, net_heat_flux). Defaults to all.',
         default=None
     )
     parser.add_argument(
