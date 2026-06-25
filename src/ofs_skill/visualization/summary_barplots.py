@@ -177,9 +177,7 @@ def write_html_summary_bars(df: pd.DataFrame, name_var: str, variable: str,
     x1, _ = plotting_functions.get_error_range(name_var, prop, logger)
     labels = _x_labels(df, name_var)
     rmse_vals = pd.to_numeric(df['rmse'], errors='coerce').replace({np.nan: None}).tolist()
-    #rmse_vals = [float(v) if pd.notna(v) else None for v in df['rmse']]
     cf_vals = pd.to_numeric(df['central_freq'], errors='coerce').replace({np.nan: None}).tolist()
-    #cf_vals = [float(v) if pd.notna(v) else None for v in df['central_freq']]
 
     custom = list(zip(
         df.get('ID', pd.Series([''] * len(df))).astype(str),
