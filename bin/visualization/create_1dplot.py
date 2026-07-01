@@ -1071,12 +1071,40 @@ def create_1dplot(prop, logger):
     return logger
 
 
-# Execution:
-if __name__ == '__main__':
-    # Arguments:
-    # Parse (optional and required) command line arguments
+def _run_pipeline(run_args):
+    """Build ModelProperties and execute create_1dplot.
+
+    Wrapped in a function so the GUI can drive it from a background
+    thread (keeping the launch progressbar animating) while CLI
+    invocations call it directly.
+    """
+    prop1 = model_properties.ModelProperties()
+    prop1.ofs = run_args.OFS
+    prop1.path = run_args.Path
+    prop1.start_date_full = run_args.StartDate_full
+    prop1.end_date_full = run_args.EndDate_full
+    prop1.whichcasts = run_args.Whichcasts
+    prop1.datum = run_args.Datum
+    prop1.ofsfiletype = run_args.FileType
+    prop1.stationowner = run_args.Station_Owner
+    prop1.horizonskill = run_args.Horizon_Skill
+    prop1.forecast_hr = run_args.Forecast_Hr
+    prop1.var_list = run_args.Var_Selection
+    prop1.currents_bins_csv = run_args.Currents_Bins_Csv
+    prop1.filecheck = run_args.Disable_Model_File_Check
+    prop1.config_file = run_args.config
+
+    # This can only be changed if directly running get_node_ofs.py!
+    prop1.user_input_location = False
+
+    logger = create_1dplot(prop1, None)
+    logger.info('Finished create_1dplot!')
+
+
+def main(argv=None):
+    """Entry point for the create-1dplot console script."""
     parser = argparse.ArgumentParser(
-        prog='create_1dplot.py', usage='%(prog)s',
+        prog='create-1dplot', usage='%(prog)s',
         description='Run skill assessment program', )
     parser.add_argument(
         '-o', '--OFS',
@@ -1164,33 +1192,14 @@ if __name__ == '__main__':
         '-c', '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')
 
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    # Launch GUI to accept argument input if no OFS args are present
     if args.OFS is None:
-        args = create_gui.create_gui(parser)
-        gc.collect() # garbage collect from GUI window not in main thread
-
-    prop1 = model_properties.ModelProperties()
-    prop1.ofs = args.OFS
-    prop1.path = args.Path
-    prop1.start_date_full = args.StartDate_full
-    prop1.end_date_full = args.EndDate_full
-    prop1.whichcasts = args.Whichcasts
-    prop1.datum = args.Datum
-    prop1.ofsfiletype = args.FileType
-    prop1.stationowner = args.Station_Owner
-    prop1.horizonskill = args.Horizon_Skill
-    prop1.forecast_hr = args.Forecast_Hr
-    prop1.var_list = args.Var_Selection
-    prop1.currents_bins_csv = args.Currents_Bins_Csv
-    prop1.filecheck = args.Disable_Model_File_Check
-    prop1.config_file = args.config
+        create_gui.create_gui(parser, runner=_run_pipeline)
+        gc.collect()
+    else:
+        _run_pipeline(args)
 
 
-    # This can only be changed if directly running get_node_ofs.py!
-    prop1.user_input_location = False
-
-    logger = create_1dplot(prop1, None)
-
-    logger.info('Finished create_1dplot!')
+if __name__ == '__main__':
+    main()

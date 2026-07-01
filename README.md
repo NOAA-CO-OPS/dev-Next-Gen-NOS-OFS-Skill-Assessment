@@ -189,9 +189,13 @@ The codebase is organized into two main sections:
 
 **📁 `bin/` - Command-Line Interface (CLI) Scripts**
 - Contains user-facing scripts for running skill assessments
-- `bin/visualization/create_1dplot.py` - Generate 1D time series plots
-- `bin/visualization/create_2dplot.py` - Generate 2D spatial plots
-- These scripts can be called directly from the command line (see [Section 3](#3-installing--running-the-skill-assessment))
+- `bin/visualization/create_1dplot.py` - 1D station skill assessment
+- `bin/visualization/create_2dplot.py` - 2D field skill assessment
+- `bin/visualization/gui_launcher.py` - Launcher menu for all graphical interfaces
+- `bin/skill_assessment/do_iceskill.py` - Great Lakes ice skill assessment
+- `bin/obs_retrieval/get_station_observations_cli.py` - Observation retrieval
+- `bin/model_processing/get_node_cli.py` - Model time series extraction
+- These scripts can be called from the command line with arguments, or without required arguments to open a GUI (see [Section 3.4.2](#342-graphical-user-interface-gui))
 
 **📦 `src/ofs_skill/` - Importable Python Package**
 - Contains all reusable library code organized into modules:
@@ -567,21 +571,98 @@ If you would like to manually download your own model data, the table below list
 |__Field files__|all hourly nowcast files for each model cycle|All OFS except WCOFS: the first 6 hours of data for each model cycle. WCOFS: the first 24 hours of data for each model cycle.|
 |__Station files__|all nowcast files for each model cycle|all forecast files for each model cycle|
 
+### 3.4.2 Graphical user interface (GUI)
+
+Most pipeline scripts in this package can be run through a graphical interface instead of typing command-line arguments. A central **launcher** opens any of the five available tools, or you can open a specific GUI directly from its entry-point script.
+
+#### Launching the GUI
+
+After installing the package (`pip install -e .`), use any of the following:
+
+```bash
+# Open the launcher menu (recommended starting point)
+ofs-skill-gui
+
+# Or run the launcher script directly
+python ./bin/visualization/gui_launcher.py
+```
+
+The launcher presents a menu of all available tools:
+
+![NOS OFS Skill Assessment GUI launcher](./readme_images/gui_launcher.png)
+
+Each tool can also be opened on its own by calling its entry-point script **without** the required OFS argument:
+
+| Tool | GUI launch command |
+|:---|:---|
+| 1D Skill Assessment (Station) | `python ./bin/visualization/create_1dplot.py` |
+| 2D Skill Assessment (Field) | `python ./bin/visualization/create_2dplot.py` |
+| GLOFS Ice Skill Assessment | `python ./bin/skill_assessment/do_iceskill.py` |
+| Observation Retrieval | `python ./bin/obs_retrieval/get_station_observations_cli.py` |
+| Model Time Series Extraction | `python ./bin/model_processing/get_node_cli.py` |
+
+The same commands are available as console scripts after `pip install -e .`: `create-1dplot`, `create-2dplot`, `do-iceskill`, `get-station-observations`, and `get-node-ofs` (run without `-o` / `-OFS` to open the GUI).
+
+#### Shared GUI behavior
+
+All GUIs share the same layout and workflow:
+
+1. **Fill in the form** — home directory, config file, OFS, date range, and tool-specific options. Hover the **ⓘ** icons next to labels for short help text.
+2. **Submit** — the GUI validates required fields and date ranges, then shows a **review dialog** summarizing your run parameters.
+3. **Launch** — confirm in the review dialog to start the pipeline. A progress overlay appears while the run executes in the background; keep the window open until it finishes.
+
+Common settings (home directory, config path, OFS, dates, hours, and datum where applicable) are **remembered across GUIs** and restored the next time you open any tool, so you do not need to re-enter them for every run.
+
+Use **Reset to defaults** at the bottom of any form to clear fields back to their starting values.
+
+#### 1D Skill Assessment (Station)
+
+The 1D GUI is the full station-based skill assessment form. It collects general paths, time range, whichcasts, datum, station providers, variables, and advanced options such as forecast-horizon skill and currents-bins CSV.
+
+**Quick Run Mode** (1D only): after selecting a home directory and OFS, click **⚡ Quick Run Mode** to start a one-click assessment of the most recent available model cycle without filling every field manually. Quick Run uses a 24-hour window ending one day after the chosen cycle, runs nowcast and forecast_a, all default station providers and variables, station file type, and a per-OFS default datum (IGLD85 for Great Lakes, NAVD88 for STOFS, MLLW for tidal coastal OFSes).
+
+![1D skill assessment GUI — general settings and time range](./readme_images/1d_part1.png)
+
+![1D skill assessment GUI — datum, providers, variables, and advanced options](./readme_images/1d_part2.png)
+
+Click **Run skill assessment!** after reviewing your inputs. The pipeline is the same as running `create_1dplot.py` from the command line ([Section 3.5](#35-running-the-1d-skill-assessment)).
+
+#### 2D Skill Assessment (Field)
+
+The 2D GUI collects home directory, config, OFS, date range, and whichcasts (nowcast and/or forecast_b). It runs the same pipeline as `create_2dplot.py` ([Section 3.8](#38-running-the-2d-skill-assessment)).
+
+![2D skill assessment GUI](./readme_images/2d.png)
+
+#### GLOFS Ice Skill Assessment
+
+The ice GUI is limited to Great Lakes OFSes. In addition to paths, dates, and whichcasts, it exposes **Daily average** and **Time step** (hourly or daily) options used by `do_iceskill.py` ([Section 4.1](#41-running-the-ice-skill-assessment)).
+
+![GLOFS ice skill assessment GUI](./readme_images/ice_skill.png)
+
+#### Observation Retrieval
+
+The observation retrieval GUI fetches station observations without running the full skill assessment. It includes datum selection, station providers, variables, and an expandable **Advanced** section for optional currents-bins CSV input.
+
+![Observation retrieval GUI](./readme_images/obs_retrieval.png)
+
+#### Model Time Series Extraction
+
+The model time series GUI wraps `get_node_cli.py`. It supports datum, file type (stations or fields), whichcasts, forecast hour, variables, and advanced options including forecast-horizon assessment.
+
+![Model time series extraction GUI](./readme_images/model_time_Series.png)
+
 ## 3.5 Running the 1D skill assessment
 🚨🚨🚨 It is recommended to delete, rename, or relocate the 'data' and 'control_files' directories from previous skill assessment runs before starting a new skill assessment run. Otherwise you may encounter errors, and the skill assessment may crash (See [Section 5](#5-troubleshooting), Troubleshooting).
 
 First, if you haven't already, make sure the 'ofs_dps_env' environment is activated (type 'conda activate ofs_dps_env'), then navigate to your `working directory`. The following skill assessment run will use the exact example data downloaded in [Section 3.4](#34-download-ofs-model-data) with nowcast and forecast_b modes.
 
-There are two ways to run the skill assessment: using the GUI or a command line interface. Unlike the command line, where you must know all input arguments and options beforehand, you can run the program using a GUI by calling `create_1dplot.py` without input arguments:
+There are two ways to run the skill assessment: using the [graphical user interface (GUI)](#342-graphical-user-interface-gui) or the command line. To use the GUI, call `create_1dplot.py` without the `-o` argument:
 
 ```
 python ./bin/visualization/create_1dplot.py
 ```
 
-In the GUI, all input options are displayed, and you can visually select the options you want. Then click 'Run skill assessment', and the program will start.
-
-![GUI](./readme_images/GUI_example.png)
-
+Fill in the form, review the summary dialog, and click **Run skill assessment!** Screenshots and a full walkthrough of all GUI tools are in [Section 3.4.2](#342-graphical-user-interface-gui).
 
 Using the command line, you can more quickly start a skill assessment run by calling the entry point script, `create_1dplot.py` with a command line call and input arguments. For example:
 
@@ -862,14 +943,16 @@ While `create_1dplot.py` is the entry point for the skill assessment, there are 
 |Script|Explanation|File input|File output|
 |:---|:---|:---|:---|
 |ofs_inventory_stations.py|Creates an inventory of all observation stations in an OFS.|None|[Inventory .csv file in `/working_directory/control_files/`](#361-inventory-and-control-files)|
-|get_station_observations.py|Writes control files and observation time series for each station in an OFS across the date range of your choice.|None|[.obs text files in `working_directory/data/observations/1d_station/`](#363-station-observations-time-series)|
-|get_node_ofs.py|Writes control files and model time series across the date range of your choice.|OFS output (field or station files) and either a list of geographic coordinates, or observation control files|[.prd text files in `working_directory/data/model/1d_node/`](#364-ofs-model-time-series)|
+|get_station_observations_cli.py|CLI/GUI entry point for observation retrieval; calls `get_station_observations` in the package.|None|[.obs text files in `working_directory/data/observations/1d_station/`](#363-station-observations-time-series)|
+|get_node_cli.py|CLI/GUI entry point for model time series extraction; calls `get_node_ofs` in the package.|OFS output (field or station files) and either a list of geographic coordinates, or observation control files|[.prd text files in `working_directory/data/model/1d_node/`](#364-ofs-model-time-series)|
 |get_skill.py|Writes paired model + observation time series for each station in the OFS and date range of your choice.|.obs and .prd files|[.int text files in `working_directory/data/skill/1d_pair/`](#365-skill-assessment-metrics)|
 
-Input arguments and options can be found in each script. There are two ways to make model time series using `get_node_ofs.py`: by either running with an existing [observation control file](#361-inventory-and-control-files), or by specifying in a text file the geographic coordinates where model time series should be extracted. For the latter option, in the [configuration file, `ofs_dps.conf`](#33-updating-the-conf-and-logging-files), there is a section called [xy_user_input] with instructions on how to format the text file. There is a variable called `user_xy_path` to assign the file's path to. Then, you can run `get_node_ofs.py` with the optional argument `-ui` to make model time series at the inputted coordinates, for example:
+To open the observation retrieval or model time series GUIs, run `python ./bin/obs_retrieval/get_station_observations_cli.py` or `python ./bin/model_processing/get_node_cli.py` without the required `-OFS` argument, or select the tool from the [GUI launcher](#342-graphical-user-interface-gui). The console-script equivalents are `get-station-observations` and `get-node-ofs`. See [Section 3.4.2](#342-graphical-user-interface-gui) for screenshots and usage.
+
+Input arguments and options can be found in each script. There are two ways to make model time series using `get_node_cli.py`: by either running with an existing [observation control file](#361-inventory-and-control-files), or by specifying in a text file the geographic coordinates where model time series should be extracted. For the latter option, in the [configuration file, `ofs_dps.conf`](#33-updating-the-conf-and-logging-files), there is a section called [xy_user_input] with instructions on how to format the text file. There is a variable called `user_xy_path` to assign the file's path to. Then, you can run `get_node_cli.py` with the optional argument `-ui` to make model time series at the inputted coordinates, for example:
 
 ```
-python ./bin/model_processing/get_node_ofs.py -p ./ -o cbofs -s 11-01-2025T00:00:00Z -e 11-10-2025T00:00:00Z -ws nowcast -d MLLW -ui
+python ./bin/model_processing/get_node_cli.py -p ./ -o cbofs -s 11-01-2025T00:00:00Z -e 11-10-2025T00:00:00Z -ws nowcast -d MLLW -ui
 ```
 
 ## 3.8 Running the 2D skill assessment
@@ -912,6 +995,8 @@ When the satellite data download is complete, run the 2D skill assessment **usin
 ```
 python ./bin/visualization/create_2dplot.py -o sfbofs -p ./ -s 2025-06-01T00:00:00Z -e 2025-06-02T00:00:00Z -ws nowcast,forecast_b
 ```
+
+Alternatively, open the [2D skill assessment GUI](#342-graphical-user-interface-gui) by running `python ./bin/visualization/create_2dplot.py` without the `-o` argument.
 
 All arguments are the same as described in [Section 3.5](#35-running-the-1d-skill-assessment):
 * _-o_ is the name of the OFS (in this case, SFBOFS)
@@ -1062,6 +1147,9 @@ Make sure the 'ofs_dps_env' environment is activated, then in the Anaconda Promp
 ```
 python ./bin/skill_assessment/do_iceskill.py -p ./ -o leofs -s 2025-02-01T00:00:00Z -e 2025-02-28T00:00:00Z -ws nowcast -da True
 ```
+
+You can also run the ice skill assessment through the [GUI](#342-graphical-user-interface-gui) by calling `python ./bin/skill_assessment/do_iceskill.py` without the `-o` argument.
+
 where
 * _-o_ is the name of the OFS (in this case, LEOFS (Lake Erie))
 * _-p_ is the path to `working directory` (which you are currently in, thus it is followed by './')
