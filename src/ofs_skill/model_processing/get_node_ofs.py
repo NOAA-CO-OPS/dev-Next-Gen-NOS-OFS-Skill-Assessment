@@ -39,16 +39,47 @@ from ofs_skill.obs_retrieval.utils import get_parallel_config
 
 logger = logging.getLogger(__name__)
 
-# Serializes dask.compute() inside _batch_extract across the variable
-# threads dispatched from get_node_ofs. NECOFS uses engine='netcdf4'
-# which isn't thread-safe under concurrent reads; in addition, four
-# threads each materializing a different time-varying var concurrently
-# spikes memory to 4× the per-var peak (~4-5 GB observed on real runs,
-# triggering Windows paging at 94% RAM). The lock caps memory at one
-# variable at a time without breaking the rest of the parallelism (the
-# indexing phase, formatting, .prd writing, and plotting still
-# parallelize across variable threads).
-_BATCH_EXTRACT_LOCK = threading.Lock()
+# Serializes / bounds dask.compute() inside _batch_extract across the
+# variable threads dispatched from get_node_ofs. Two independent reasons
+# to limit concurrency:
+#   1. Thread safety: engine='netcdf4' (libnetCDF/HDF5 C bindings) and
+#      engine='scipy' hold process-global state and are not safe under
+#      concurrent reads → concurrency must be 1 for those engines.
+#      engine='h5netcdf' releases the GIL and supports concurrent reads.
+#   2. Memory: N threads each materializing a different time-varying var
+#      concurrently spikes memory to N× the per-var peak (~4-5 GB per
+#      var observed on real NECOFS runs, triggering Windows paging at
+#      94% RAM) → even under h5netcdf, concurrency is capped by the
+#      parallel_extract_slots config setting (default 2).
+# The guard only covers the dask.compute call; the indexing phase,
+# formatting, .prd writing, and plotting still parallelize freely
+# across variable threads.
+_EXTRACT_GUARDS: dict[int, threading.BoundedSemaphore] = {}
+_EXTRACT_GUARDS_LOCK = threading.Lock()
+
+
+def _extract_guard(engine=None, slots=None):
+    """Return the semaphore bounding concurrent dask.compute calls.
+
+    ``engine`` is the xarray engine the model dataset was opened with
+    (recorded on ``prop.netcdf_engine`` by ``intake_model``). Anything
+    other than ``'h5netcdf'`` — including ``None``, when the engine is
+    unknown — serializes fully (1 slot). h5netcdf gets ``slots``
+    concurrent computes (memory cap, default 2).
+    """
+    if engine != 'h5netcdf':
+        n_slots = 1
+    else:
+        try:
+            n_slots = max(1, int(slots))
+        except (TypeError, ValueError):
+            n_slots = 2
+    with _EXTRACT_GUARDS_LOCK:
+        guard = _EXTRACT_GUARDS.get(n_slots)
+        if guard is None:
+            guard = _EXTRACT_GUARDS[n_slots] = threading.BoundedSemaphore(
+                n_slots)
+    return guard
 
 
 # Per-variable physical bounds used to catch blended SCHISM dry/wet
@@ -379,7 +410,8 @@ _BATCH_EXTRACT_TIME_CHUNK = 1000
 
 
 def _batch_extract(model, var_name, idx_list, dep_list, idx_first=False,
-                   logger=None, time_chunk=_BATCH_EXTRACT_TIME_CHUNK):
+                   logger=None, time_chunk=_BATCH_EXTRACT_TIME_CHUNK,
+                   engine=None, extract_slots=None):
     """Extract all stations for a variable via batched dask.compute().
 
     The time axis is split into windows of ``time_chunk`` steps. Each
@@ -444,12 +476,13 @@ def _batch_extract(model, var_name, idx_list, dep_list, idx_first=False,
         return np.stack([np.array(s) for s in lazy], axis=1)
 
     # Dask-backed path: window the time axis.
+    guard = _extract_guard(engine, extract_slots)
     chunk = max(1, int(time_chunk))
     if n_time <= chunk:
         # Single-window fast path: behaviour matches the pre-chunking
         # implementation exactly when the dataset fits in one window.
         lazy = _select(probe_da, 0, n_time)
-        with _BATCH_EXTRACT_LOCK:
+        with guard:
             computed = dask.compute(*[s.data for s in lazy])
         return np.stack(computed, axis=1)
 
@@ -466,10 +499,10 @@ def _batch_extract(model, var_name, idx_list, dep_list, idx_first=False,
         t0 = ci * chunk
         t1 = min(n_time, t0 + chunk)
         lazy = _select(probe_da, t0, t1)
-        # Serialize the dask.compute across variable threads. NetCDF4
-        # isn't thread-safe under concurrent reads and 4 simultaneous
-        # computes would quadruple peak memory.
-        with _BATCH_EXTRACT_LOCK:
+        # Bound the dask.compute across variable threads: fully serial
+        # for thread-unsafe engines, parallel_extract_slots concurrent
+        # computes under h5netcdf (memory cap). See _extract_guard.
+        with guard:
             computed = dask.compute(*[s.data for s in lazy])
         parts.append(np.stack(computed, axis=1))
         if logger is not None:
@@ -487,7 +520,8 @@ def _batch_extract(model, var_name, idx_list, dep_list, idx_first=False,
 
 
 def _batch_extract_multi(model, var_names, idx_list, dep_list, idx_first=False,
-                         logger=None, time_chunk=_BATCH_EXTRACT_TIME_CHUNK):
+                         logger=None, time_chunk=_BATCH_EXTRACT_TIME_CHUNK,
+                         engine=None, extract_slots=None):
     """Extract multiple variables that share backing files in one fused compute.
 
     When two variables (e.g. ``u`` and ``v``) come from the same files,
@@ -499,7 +533,7 @@ def _batch_extract_multi(model, var_names, idx_list, dep_list, idx_first=False,
 
     Same chunking and locking discipline as :func:`_batch_extract`: split
     the time axis into ``time_chunk``-step windows, compute each window
-    under ``_BATCH_EXTRACT_LOCK``, ``gc.collect`` between, concatenate.
+    under the extract guard, ``gc.collect`` between, concatenate.
 
     Parameters
     ----------
@@ -560,12 +594,13 @@ def _batch_extract_multi(model, var_names, idx_list, dep_list, idx_first=False,
             results.append(np.stack([np.array(s) for s in lazy], axis=1))
         return results
 
+    guard = _extract_guard(engine, extract_slots)
     chunk = max(1, int(time_chunk))
     if n_time <= chunk:
         # Single-window fast path: one fused compute over all vars + stations.
         per_var_lazy = [_select_one(model[v], 0, n_time) for v in var_names]
         flat = [s.data for lst in per_var_lazy for s in lst]
-        with _BATCH_EXTRACT_LOCK:
+        with guard:
             computed = dask.compute(*flat)
         results = []
         for vi, _ in enumerate(var_names):
@@ -587,7 +622,7 @@ def _batch_extract_multi(model, var_names, idx_list, dep_list, idx_first=False,
         t1 = min(n_time, t0 + chunk)
         per_var_lazy = [_select_one(model[v], t0, t1) for v in var_names]
         flat = [s.data for lst in per_var_lazy for s in lst]
-        with _BATCH_EXTRACT_LOCK:
+        with guard:
             computed = dask.compute(*flat)
         for vi in range(len(var_names)):
             start = vi * n
@@ -603,6 +638,20 @@ def _batch_extract_multi(model, var_names, idx_list, dep_list, idx_first=False,
     return [np.concatenate(parts, axis=0) for parts in parts_per_var]
 
 
+def _extract_concurrency_kwargs(prop):
+    """Extract-guard kwargs for _batch_extract(_multi) from prop.
+
+    ``netcdf_engine`` is recorded by ``intake_model`` at open time;
+    ``extract_slots`` is set from the parallelization config before the
+    variable threads are dispatched. Both default to the safe fully
+    serialized guard when absent (e.g. pre-loaded model datasets).
+    """
+    return {
+        'engine': getattr(prop, 'netcdf_engine', None),
+        'extract_slots': getattr(prop, 'extract_slots', None),
+    }
+
+
 def _precompute_current_data(prop, model, ofs_ctlfile, logger):
     """Batch-extract current (u/v) station data in a single Dask compute call.
 
@@ -615,24 +664,26 @@ def _precompute_current_data(prop, model, ofs_ctlfile, logger):
     n_stations = len(ofs_ctlfile[1])
     indices = [int(ofs_ctlfile[1][i]) for i in range(n_stations)]
     depths = [int(ofs_ctlfile[2][i]) for i in range(n_stations)]
+    extract_kwargs = _extract_concurrency_kwargs(prop)
 
     if prop.model_source == 'fvcom':
         u_data, v_data = _batch_extract_multi(
             model, ['u', 'v'], indices, depths,
-            idx_first=False, logger=logger)
+            idx_first=False, logger=logger, **extract_kwargs)
     elif prop.model_source == 'roms':
         u_data, v_data = _batch_extract_multi(
             model, ['u_east', 'v_north'], indices, depths,
-            idx_first=True, logger=logger)
+            idx_first=True, logger=logger, **extract_kwargs)
     elif prop.model_source == 'schism':
         if 'stofs' not in prop.ofs:
             u_data, v_data = _batch_extract_multi(
                 model, ['u', 'v'], indices, depths,
-                idx_first=False, logger=logger)
+                idx_first=False, logger=logger, **extract_kwargs)
         else:
             # STOFS-3D-Atl 2-D currents (no depth dim).
             u_data, v_data = _batch_extract_multi(
-                model, ['u', 'v'], indices, None, logger=logger)
+                model, ['u', 'v'], indices, None, logger=logger,
+                **extract_kwargs)
 
     return {'u_data': u_data, 'v_data': v_data}
 
@@ -660,35 +711,39 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
     # back to slow per-station extraction. Detect dimensionality up front
     # so the batch path stays on for water level too.
     is_2d = model[actual_var].ndim < 3
+    extract_kwargs = _extract_concurrency_kwargs(prop)
 
     if prop.model_source == 'fvcom':
         if is_2d:
             scalar_data = _batch_extract(model, actual_var, indices, None,
-                                         logger=logger)
+                                         logger=logger, **extract_kwargs)
         else:
             scalar_data = _batch_extract(model, actual_var, indices, depths,
-                                         idx_first=False, logger=logger)
+                                         idx_first=False, logger=logger,
+                                         **extract_kwargs)
     elif prop.model_source == 'roms':
         if is_2d:
             scalar_data = _batch_extract(model, actual_var, indices, None,
-                                         logger=logger)
+                                         logger=logger, **extract_kwargs)
         else:
             scalar_data = _batch_extract(model, actual_var, indices, depths,
-                                         idx_first=True, logger=logger)
+                                         idx_first=True, logger=logger,
+                                         **extract_kwargs)
     elif prop.model_source == 'schism':
         if 'stofs' in prop.ofs and model_var in ('temp', 'temperature'):
             scalar_data = _batch_extract(model, 'temperature', indices, None,
-                                         logger=logger)
+                                         logger=logger, **extract_kwargs)
         elif is_2d:
             scalar_data = _batch_extract(model, actual_var, indices, None,
-                                         logger=logger)
+                                         logger=logger, **extract_kwargs)
         else:
             try:
                 scalar_data = _batch_extract(model, actual_var, indices, depths,
-                                             idx_first=False, logger=logger)
+                                             idx_first=False, logger=logger,
+                                             **extract_kwargs)
             except IndexError:
                 scalar_data = _batch_extract(model, actual_var, indices, None,
-                                             logger=logger)
+                                             logger=logger, **extract_kwargs)
 
     return {'scalar_data': scalar_data}
 
@@ -1907,7 +1962,16 @@ def get_node_ofs(prop, logger, model_dataset=None):
         logger,
         config_file=getattr(prop, 'config_file', None),
     )
+    # Concurrency cap for dask.compute inside _batch_extract, carried on
+    # prop so the per-variable deepcopies inherit it (see _extract_guard).
+    prop.extract_slots = parallel_cfg['parallel_extract_slots']
     if parallel_cfg['parallel_variables'] and len(prop.var_list) > 1:
+        logger.info(
+            "Variable threads will extract with engine '%s' "
+            '(%s concurrent dask.compute slot(s) when h5netcdf)',
+            getattr(prop, 'netcdf_engine', None) or 'unknown -> serialized',
+            prop.extract_slots,
+        )
         _preload_static_coords(model, prop.model_source, logger)
         logger.info('Processing %d variables in parallel', len(prop.var_list))
         with ThreadPoolExecutor(max_workers=min(len(prop.var_list), 4)) as executor:

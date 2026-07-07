@@ -51,6 +51,7 @@ import numpy as np
 import xarray as xr
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours
+from ofs_skill.model_processing.netcdf_engine import resolve_engine
 
 
 def _extract_filename_from_encoding(ds):
@@ -228,20 +229,15 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         ]
         time_name = 'time'
 
-    # Custom NECOFS free-run station files are NetCDF3 and need the scipy
-    # engine. They are identified by this filename marker; if other NetCDF3
-    # custom files are added, extend this list. The intake_model call below
-    # also falls back with a clear error if the wrong engine is selected.
-    _netcdf3_filename_markers = ('2017_free_run_station',)
-    if prop.ofs in ['stofs_2d_glo'] or any(
-            marker in f
-            for f in file_list
-            for marker in _netcdf3_filename_markers):
-        engine = 'scipy'
-    elif prop.ofs in ['necofs', 'loofs2', 'secofs']:
-        engine = 'netcdf4'
-    else:
-        engine = 'h5netcdf'
+    # Choose the engine by detecting the batch's on-disk format (magic
+    # bytes) rather than a hardcoded per-OFS list — formats differ per
+    # OFS, per file type (stofs_2d_glo stations are NetCDF-3 while its
+    # fields are HDF5), and per source archive. See netcdf_engine.py;
+    # the [settings] engine_strategy config key can force an engine.
+    engine = resolve_engine(file_list, prop, logger)
+    # Record the engine so downstream extraction (get_node_ofs) can relax
+    # the thread-serialization guard when the engine is thread-safe.
+    prop.netcdf_engine = engine
 
     urlpaths = file_list
     if len(urlpaths) == 0:
@@ -378,83 +374,100 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     ]
     preprocess_fn = make_preprocess_with_filename(raw_paths)
 
-    if dim_compat:  # This will only be FALSE for stations files when
-        # station dimensions do not match! Always True for fields
-        # files
-        # If station dimensions are all the same/compatible, send in all file
-        # names (urlpaths) at one time and let xarray/intake automagically
-        # combine datasets
-        if prop.model_source == 'schism':
-            if  prop.ofsfiletype == 'fields':
-                source = intake.open_netcdf(
-                    urlpath=urlpaths,
-                    xarray_kwargs={
-                        'combine': 'by_coords',  # <-- align files by coordinates
-                        'engine': engine,
-                        'preprocess': preprocess_fn,
-                        'drop_variables': drop_variables,
-                        'chunks': {'time': 1},
-                    },
-                    **s3_storage_opts,
-                )
+    def _open_dataset(open_engine):
+        if dim_compat:  # This will only be FALSE for stations files when
+            # station dimensions do not match! Always True for fields
+            # files
+            # If station dimensions are all the same/compatible, send in
+            # all file names (urlpaths) at one time and let xarray/intake
+            # automagically combine datasets
+            if prop.model_source == 'schism':
+                if prop.ofsfiletype == 'fields':
+                    source = intake.open_netcdf(
+                        urlpath=urlpaths,
+                        xarray_kwargs={
+                            'combine': 'by_coords',  # <-- align files by coordinates
+                            'engine': open_engine,
+                            'preprocess': preprocess_fn,
+                            'drop_variables': drop_variables,
+                            'chunks': {'time': 1},
+                        },
+                        **s3_storage_opts,
+                    )
+                else:
+                    source = intake.open_netcdf(
+                        urlpath=urlpaths,
+                        xarray_kwargs={
+                            'combine': 'nested',
+                            'engine': open_engine,
+                            'preprocess': preprocess_fn,
+                            'concat_dim': time_name,
+                            'decode_times': True,
+                            'chunks': 'auto',  # Enables lazy loading with Dask
+                        },
+                        **s3_storage_opts,
+                    )
+
             else:
+                # For fields files, chunk by single time step to bound memory
+                # for monthly/yearly runs with hundreds of files. Stations
+                # files have small spatial dims, so auto-chunking is safe.
+                chunk_spec: Any
+                if prop.ofsfiletype == 'fields':
+                    chunk_spec = {time_name: 1}
+                else:
+                    chunk_spec = 'auto'
+                # ``data_vars='minimal'`` stops xarray from replicating static
+                # mesh vars (lon, lat, lonc, latc, h, siglay, ...) along the
+                # concat time dim during multi-file open. On long windows
+                # this saves the per-whichcast cost of materializing static
+                # coords across hundreds of backing files and frees the
+                # downstream resample helper from having to walk those vars.
+                # ``indexing.py`` was previously coupled to the legacy
+                # ``(time, station)`` replicated shape via ad-hoc ``[0]`` /
+                # ``[1]`` time slicing; the ``_static_coord_1d`` helper in
+                # indexing.py now normalises both shapes so the call sites
+                # are happy under either mode.
                 source = intake.open_netcdf(
                     urlpath=urlpaths,
                     xarray_kwargs={
                         'combine': 'nested',
-                        'engine': engine,
+                        'engine': open_engine,
                         'preprocess': preprocess_fn,
                         'concat_dim': time_name,
+                        'data_vars': 'minimal',
                         'decode_times': True,
-                        'chunks': 'auto',  # Enables lazy loading with Dask
+                        'drop_variables': drop_variables,
+                        'chunks': chunk_spec,
                     },
                     **s3_storage_opts,
                 )
-
-        else:
-            # For fields files, chunk by single time step to bound memory
-            # for monthly/yearly runs with hundreds of files. Stations
-            # files have small spatial dims, so auto-chunking is safe.
-            chunk_spec: Any
-            if prop.ofsfiletype == 'fields':
-                chunk_spec = {time_name: 1}
-            else:
-                chunk_spec = 'auto'
-            # ``data_vars='minimal'`` stops xarray from replicating static
-            # mesh vars (lon, lat, lonc, latc, h, siglay, ...) along the
-            # concat time dim during multi-file open. On long windows
-            # this saves the per-whichcast cost of materializing static
-            # coords across hundreds of backing files and frees the
-            # downstream resample helper from having to walk those vars.
-            # ``indexing.py`` was previously coupled to the legacy
-            # ``(time, station)`` replicated shape via ad-hoc ``[0]`` /
-            # ``[1]`` time slicing; the ``_static_coord_1d`` helper in
-            # indexing.py now normalises both shapes so the call sites
-            # are happy under either mode.
-            source = intake.open_netcdf(
-                urlpath=urlpaths,
-                xarray_kwargs={
-                    'combine': 'nested',
-                    'engine': engine,
-                    'preprocess': preprocess_fn,
-                    'concat_dim': time_name,
-                    'data_vars': 'minimal',
-                    'decode_times': True,
-                    'drop_variables': drop_variables,
-                    'chunks': chunk_spec,
-                },
-                **s3_storage_opts,
-            )
-        # Read the dataset lazily
-        logger.info('No dimension changes needed, lazy loading catalog ...')
-        ds = source.to_dask()
-    else:
+            # Read the dataset lazily
+            logger.info('No dimension changes needed, lazy loading catalog ...')
+            return source.to_dask()
         logger.info('Station dimensions are inconsistent! Slicing stations...')
-        ds = remove_extra_stations(
-            engine,
+        return remove_extra_stations(
+            open_engine,
             urlpaths, dim_ref, drop_variables or [],
             time_name or '', logger,
         )
+
+    try:
+        ds = _open_dataset(engine)
+    except OSError as ex:
+        # h5netcdf refuses non-HDF5 files with "file signature not
+        # found". Formats are detected before opening, but a sampled
+        # batch can hide a stray NetCDF-3 file — degrade to the
+        # netcdf4-family engine, which reads every format.
+        if engine == 'h5netcdf' and 'signature not found' in str(ex):
+            engine = 'netcdf4'
+            prop.netcdf_engine = engine
+            logger.warning(
+                'h5netcdf could not open the batch (%s); retrying with '
+                "engine='netcdf4'", ex)
+            ds = _open_dataset(engine)
+        else:
+            raise
 
     # If ADCIRC, we need to subset times to the appropriate whichcast.
     # Note that this needs to be done before removal of duplicate times.
