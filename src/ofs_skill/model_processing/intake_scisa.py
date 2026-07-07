@@ -51,6 +51,7 @@ import numpy as np
 import xarray as xr
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours
+from ofs_skill.model_processing.model_file_validation import validate_model_files
 from ofs_skill.model_processing.netcdf_engine import resolve_engine
 
 
@@ -235,6 +236,19 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     # fields are HDF5), and per source archive. See netcdf_engine.py;
     # the [settings] engine_strategy config key can force an engine.
     engine = resolve_engine(file_list, prop, logger)
+
+    # Drop unreadable / incomplete / dimensionally inconsistent files
+    # up front (with warnings) instead of letting them crash the
+    # multi-file open — files left behind by an interrupted forecast
+    # were failing whole multi-month runs (issue #194).
+    file_list, dropped_files = validate_model_files(
+        file_list, engine, time_name, prop.ofsfiletype, logger)
+    if dropped_files:
+        # Corrupt files sniff as 'unknown' and can pull the whole batch
+        # down to netcdf4; re-resolve now that they are gone (cached
+        # sniffs make this cheap).
+        engine = resolve_engine(file_list, prop, logger)
+
     # Record the engine so downstream extraction (get_node_ofs) can relax
     # the thread-serialization guard when the engine is thread-safe.
     prop.netcdf_engine = engine
