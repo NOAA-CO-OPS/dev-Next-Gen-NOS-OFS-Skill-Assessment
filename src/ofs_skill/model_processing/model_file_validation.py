@@ -46,12 +46,16 @@ from __future__ import annotations
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
+import time
 from typing import Any, Optional
 
 import numpy as np
 import xarray as xr
 
 _REMOTE_PREFIXES = ('http://', 'https://', 's3://')
+
+# Progress heartbeat interval (files) for the serial validation loop.
+_PROGRESS_EVERY = 50
 
 
 def _is_remote(path: Any) -> bool:
@@ -161,6 +165,17 @@ def validate_model_files(
     if not local:
         return list(file_list), []
 
+    # This pass can take a while on long runs (hundreds of files,
+    # serial for NetCDF-3 batches), so announce it and report progress
+    # — otherwise the run appears hung between obs retrieval and the
+    # catalog open.
+    start = time.perf_counter()
+    logger.info(
+        'Validating %d local model file(s) before open (engine=%s, '
+        '%s) ...', len(local), engine,
+        'parallel' if engine == 'h5netcdf' and len(local) > 1
+        else 'serial — NetCDF-3 libraries are not thread-safe')
+
     # netcdf4/scipy hold process-global C state, so per-file probing is
     # serialized for those engines; h5netcdf probes in parallel.
     if engine == 'h5netcdf' and len(local) > 1:
@@ -168,7 +183,14 @@ def validate_model_files(
             checks = list(pool.map(
                 lambda p: _check_file(p, engine, time_name), local))
     else:
-        checks = [_check_file(p, engine, time_name) for p in local]
+        checks = []
+        for i, path in enumerate(local, 1):
+            checks.append(_check_file(path, engine, time_name))
+            if i % _PROGRESS_EVERY == 0 and i < len(local):
+                logger.info('Validated %d/%d model files (%.0f s elapsed)',
+                            i, len(local), time.perf_counter() - start)
+    logger.info('Model file validation finished: %d file(s) in %.1f s',
+                len(local), time.perf_counter() - start)
 
     dropped: list[tuple[str, str]] = []
     surviving: dict[str, dict] = {}
