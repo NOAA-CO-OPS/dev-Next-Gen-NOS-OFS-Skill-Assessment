@@ -241,7 +241,7 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     # up front (with warnings) instead of letting them crash the
     # multi-file open — files left behind by an interrupted forecast
     # were failing whole multi-month runs (issue #194).
-    file_list, dropped_files = validate_model_files(
+    file_list, dropped_files, file_dims = validate_model_files(
         file_list, engine, time_name, prop.ofsfiletype, logger)
     if dropped_files:
         # Corrupt files sniff as 'unknown' and can pull the whole batch
@@ -272,14 +272,31 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     dim_ref: Any = None
 
     if prop.ofsfiletype == 'stations':
-        try:
-            dim_compat, dim_ref = get_station_dim(
-                engine, urlpaths, drop_variables or [], logger)
-        except Exception as ex:
-            logger.warning('Could not check number of stations before '
-                           'combining netcdfs in intake! Error: %s. '
-                           'Continuing...',
-                           ex)
+        # The validation pass already probed every local file's
+        # dimensions — reuse them instead of re-opening all files
+        # (get_station_dim was a second multi-minute pass over slow
+        # archive storage). Fall back to get_station_dim whenever any
+        # file wasn't probed (remote URLs) or lacks a station dim.
+        station_dims = [
+            file_dims[f]['station'] for f in urlpaths
+            if f in file_dims and 'station' in file_dims[f]
+        ]
+        if len(station_dims) == len(urlpaths):
+            if np.nanmax(np.diff(station_dims)) != 0:
+                dim_compat = False
+                dim_ref = int(np.argmin(station_dims))
+            logger.info(
+                'Station dimension check reused validation probes for '
+                '%d files (compatible=%s)', len(urlpaths), dim_compat)
+        else:
+            try:
+                dim_compat, dim_ref = get_station_dim(
+                    engine, urlpaths, drop_variables or [], logger)
+            except Exception as ex:
+                logger.warning('Could not check number of stations before '
+                               'combining netcdfs in intake! Error: %s. '
+                               'Continuing...',
+                               ex)
     # Build storage_options for S3 streaming when remote files are present.
     # Only use S3-specific options (anon, block_size) when URLs use s3://
     # protocol. For https:// URLs, use simpler HTTP-compatible options.

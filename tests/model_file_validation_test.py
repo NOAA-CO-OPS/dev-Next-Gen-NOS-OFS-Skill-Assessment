@@ -74,7 +74,7 @@ def _truncate(path, keep_fraction):
 
 def test_all_good_files_pass(tmp_path):
     files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(3)]
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         files, 'netcdf4', 'time', 'stations', LOG)
     assert valid == files
     assert dropped == []
@@ -84,7 +84,7 @@ def test_zero_byte_file_dropped(tmp_path):
     good = _write_nc3(tmp_path, 'good.nc')
     bad = tmp_path / 'empty.nc'
     bad.write_bytes(b'')
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, str(bad)], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [good]
     assert len(dropped) == 1 and dropped[0][0] == str(bad)
@@ -95,7 +95,7 @@ def test_garbage_file_dropped(tmp_path):
     good = _write_nc3(tmp_path, 'good.nc')
     bad = tmp_path / 'garbage.nc'
     bad.write_bytes(b'this is not a netcdf file' * 100)
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, str(bad)], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [good]
     assert dropped[0][0] == str(bad)
@@ -104,7 +104,7 @@ def test_garbage_file_dropped(tmp_path):
 def test_truncated_netcdf3_dropped(tmp_path):
     good = _write_nc3(tmp_path, 'good.nc')
     bad = _truncate(_write_nc3(tmp_path, 'trunc.nc'), 0.4)
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, bad], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [good]
     assert dropped[0][0] == bad
@@ -113,7 +113,7 @@ def test_truncated_netcdf3_dropped(tmp_path):
 def test_truncated_hdf5_dropped(tmp_path):
     good = _write_nc4(tmp_path, 'good.nc')
     bad = _truncate(_write_nc4(tmp_path, 'trunc.nc'), 0.4)
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, bad], 'h5netcdf', 'time', 'stations', LOG)
     assert valid == [good]
     assert dropped[0][0] == bad
@@ -122,7 +122,7 @@ def test_truncated_hdf5_dropped(tmp_path):
 def test_empty_time_dimension_dropped(tmp_path):
     good = _write_nc3(tmp_path, 'good.nc')
     bad = _write_nc3(tmp_path, 'notime.nc', ds=_stations_ds(n_time=0))
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, bad], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [good]
     assert "empty 'time'" in dropped[0][1]
@@ -134,7 +134,7 @@ def test_missing_time_dimension_dropped(tmp_path):
         {'h': (('station',), np.zeros(N_STATION))})
     bad = _write_nc3(tmp_path, 'static.nc', ds=static_only,
                      unlimited=False)
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, bad], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [good]
     assert "missing 'time'" in dropped[0][1]
@@ -151,7 +151,7 @@ def test_zero_filled_time_tail_dropped(tmp_path):
     tvals[N_TIME // 2:] = tvals[0]  # simulate the zero-filled tail
     ds = ds.assign_coords(time=tvals)
     bad = _write_nc3(tmp_path, 'zerofill.nc', ds=ds)
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [good, bad], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [good]
     assert 'not strictly increasing' in dropped[0][1]
@@ -165,7 +165,7 @@ def test_minority_siglay_mismatch_dropped(tmp_path):
     files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(3)]
     odd = _write_nc3(tmp_path, 'odd.nc',
                      ds=_stations_ds(n_siglay=N_SIGLAY + 2))
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         files + [odd], 'netcdf4', 'time', 'stations', LOG)
     assert valid == files
     assert dropped[0][0] == odd
@@ -178,7 +178,7 @@ def test_station_dim_mismatch_exempt_for_stations(tmp_path):
     files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(2)]
     fewer = _write_nc3(tmp_path, 'fewer.nc',
                        ds=_stations_ds(n_station=N_STATION - 4))
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         files + [fewer], 'netcdf4', 'time', 'stations', LOG)
     assert valid == files + [fewer]
     assert dropped == []
@@ -188,7 +188,7 @@ def test_station_dim_mismatch_dropped_for_fields(tmp_path):
     files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(2)]
     fewer = _write_nc3(tmp_path, 'fewer.nc',
                        ds=_stations_ds(n_station=N_STATION - 4))
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         files + [fewer], 'netcdf4', 'time', 'fields', LOG)
     assert valid == files
     assert dropped[0][0] == fewer
@@ -200,7 +200,7 @@ def test_differing_time_lengths_are_fine(tmp_path):
     full = _write_nc3(tmp_path, 'full.nc')
     short = _write_nc3(tmp_path, 'short.nc',
                        ds=_stations_ds(n_time=N_TIME // 3))
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [full, short], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [full, short]
     assert dropped == []
@@ -224,7 +224,7 @@ def test_remote_urls_pass_through(tmp_path):
     urls = ['https://noaa-nos-ofs-pds.s3.amazonaws.com/x.nc',
             'simplecache::https://noaa-nos-ofs-pds.s3.amazonaws.com/y.nc',
             's3://bucket/z.nc']
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         urls, 'h5netcdf', 'time', 'stations', LOG)
     assert valid == urls
     assert dropped == []
@@ -234,7 +234,7 @@ def test_mixed_remote_and_bad_local(tmp_path):
     url = 'https://noaa-nos-ofs-pds.s3.amazonaws.com/x.nc'
     bad = tmp_path / 'bad.nc'
     bad.write_bytes(b'garbage')
-    valid, dropped = validate_model_files(
+    valid, dropped, _ = validate_model_files(
         [url, str(bad)], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [url]
     assert dropped[0][0] == str(bad)
@@ -245,9 +245,24 @@ def test_order_preserved_after_drop(tmp_path):
     bad = tmp_path / 'b.nc'
     bad.write_bytes(b'junk')
     f3 = _write_nc3(tmp_path, 'c.nc')
-    valid, _ = validate_model_files(
+    valid, _, _ = validate_model_files(
         [f1, str(bad), f3], 'netcdf4', 'time', 'stations', LOG)
     assert valid == [f1, f3]
+
+
+def test_dims_returned_for_surviving_local_files(tmp_path):
+    # Callers reuse the probed dimensions (e.g. the station-dimension
+    # compatibility check) instead of re-opening every file.
+    files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(2)]
+    url = 'https://noaa-nos-ofs-pds.s3.amazonaws.com/x.nc'
+    bad = tmp_path / 'bad.nc'
+    bad.write_bytes(b'junk')
+    valid, dropped, dims = validate_model_files(
+        files + [url, str(bad)], 'netcdf4', 'time', 'stations', LOG)
+    assert set(dims) == set(files)          # local survivors only
+    assert dims[files[0]]['station'] == N_STATION
+    assert dims[files[0]]['time'] == N_TIME
+    assert url in valid and str(bad) not in valid
 
 
 # ---------------------------------------------------------------------

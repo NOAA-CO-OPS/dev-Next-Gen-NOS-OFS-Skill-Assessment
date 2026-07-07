@@ -44,13 +44,12 @@ path.
 from __future__ import annotations
 
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
 import time
 from typing import Any, Optional
 
+import netCDF4
 import numpy as np
-import xarray as xr
 
 _REMOTE_PREFIXES = ('http://', 'https://', 's3://')
 
@@ -66,39 +65,49 @@ def _is_remote(path: Any) -> bool:
     return tail.startswith(_REMOTE_PREFIXES)
 
 
-def _check_file(path: str, engine: str,
+def _check_file(path: str,
                 time_name: Optional[str]) -> tuple[Optional[str], dict]:
     """Validate one local file.
 
     Returns ``(reason, dims)`` — ``reason`` is None when the file is
     valid, otherwise a short description of why it was rejected;
     ``dims`` is the file's dimension-size mapping (empty on failure).
+
+    The probe uses ``netCDF4.Dataset`` directly rather than a full
+    ``xr.open_dataset``: libnetCDF reads every on-disk format, and a
+    bare header open plus one coordinate read is several times cheaper
+    than building an xarray Dataset — this loop runs once per model
+    file and dominated start-up on slow archive storage.
     """
     try:
-        ds = xr.open_dataset(path, engine=engine, decode_times=False)
+        nc = netCDF4.Dataset(path, 'r')
     except Exception as ex:  # noqa: BLE001 - any open failure = bad file
         return (f'unreadable ({type(ex).__name__}: '
                 f'{str(ex)[:120]})'), {}
     try:
-        dims = dict(ds.sizes)
+        dims = {name: len(dim) for name, dim in nc.dimensions.items()}
         if time_name:
             if time_name not in dims:
                 return (f"missing '{time_name}' dimension "
                         '(incomplete file?)'), {}
             if dims[time_name] < 1:
                 return f"empty '{time_name}' dimension", {}
-        if len(ds.data_vars) == 0:
-            return 'no data variables (header-only file?)', {}
-        if time_name:
+        if len(nc.variables) == 0:
+            return 'no variables (header-only file?)', {}
+        if time_name and time_name in nc.variables:
             try:
-                tvals = np.asarray(ds[time_name].values, dtype='float64')
+                raw = nc.variables[time_name][:]
+                tvals = np.ma.filled(
+                    np.ma.masked_invalid(
+                        np.asarray(raw, dtype='float64')), np.nan)
             except Exception as ex:  # noqa: BLE001
                 return (f'time coordinate unreadable — truncated file? '
                         f'({type(ex).__name__}: {str(ex)[:120]})'), {}
             # Model time axes are strictly increasing within a file.
             # libnetCDF silently zero-fills NetCDF-3 reads past EOF, so
             # a truncated file reads back with a zeroed time tail —
-            # detectable here, invisible to the open itself.
+            # detectable here, invisible to the open itself. (NaN /
+            # masked time values fail the check too, deliberately.)
             if tvals.size > 1:
                 diffs = np.diff(tvals)
                 if not np.all(diffs > 0):
@@ -108,7 +117,7 @@ def _check_file(path: str, engine: str,
                             'truncated file?'), {}
         return None, dims
     finally:
-        ds.close()
+        nc.close()
 
 
 def _majority_dims(per_file_dims: list[dict], exempt: set) -> dict:
@@ -129,7 +138,7 @@ def validate_model_files(
     time_name: Optional[str],
     ofsfiletype: str,
     logger: Logger,
-) -> tuple[list, list[tuple[str, str]]]:
+) -> tuple[list, list[tuple[str, str]], dict[str, dict]]:
     """
     Drop unreadable, incomplete, or structurally inconsistent files.
 
@@ -139,6 +148,8 @@ def validate_model_files(
         Model file paths and/or remote URLs about to be opened together.
     engine : str
         xarray engine chosen for the batch (see netcdf_engine.py).
+        Currently informational — the probes read headers via netCDF4,
+        which handles every on-disk format.
     time_name : str or None
         Name of the concat/time dimension ('time', 'ocean_time', ...).
     ofsfiletype : str
@@ -150,10 +161,13 @@ def validate_model_files(
 
     Returns
     -------
-    tuple of (list, list)
-        ``(valid_files, dropped)`` where ``dropped`` holds
-        ``(path, reason)`` pairs. Remote URLs are always passed
-        through as valid.
+    tuple of (list, list, dict)
+        ``(valid_files, dropped, dims_by_path)`` — ``dropped`` holds
+        ``(path, reason)`` pairs; ``dims_by_path`` maps each surviving
+        LOCAL path to its dimension-size dict, so callers can reuse
+        the probed dimensions (e.g. the station-dimension compatibility
+        check) instead of re-opening every file. Remote URLs are always
+        passed through as valid and do not appear in ``dims_by_path``.
 
     Raises
     ------
@@ -163,32 +177,28 @@ def validate_model_files(
     local = [f for f in file_list if isinstance(f, str)
              and not _is_remote(f)]
     if not local:
-        return list(file_list), []
+        return list(file_list), [], {}
 
-    # This pass can take a while on long runs (hundreds of files,
-    # serial for NetCDF-3 batches), so announce it and report progress
-    # — otherwise the run appears hung between obs retrieval and the
+    # This pass can take a while on long runs (hundreds of files on
+    # slow archive storage), so announce it and report progress —
+    # otherwise the run appears hung between obs retrieval and the
     # catalog open.
     start = time.perf_counter()
     logger.info(
-        'Validating %d local model file(s) before open (engine=%s, '
-        '%s) ...', len(local), engine,
-        'parallel' if engine == 'h5netcdf' and len(local) > 1
-        else 'serial — NetCDF-3 libraries are not thread-safe')
+        'Validating %d local model file(s) before open '
+        '(lightweight header probes) ...', len(local))
 
-    # netcdf4/scipy hold process-global C state, so per-file probing is
-    # serialized for those engines; h5netcdf probes in parallel.
-    if engine == 'h5netcdf' and len(local) > 1:
-        with ThreadPoolExecutor(max_workers=min(8, len(local))) as pool:
-            checks = list(pool.map(
-                lambda p: _check_file(p, engine, time_name), local))
-    else:
-        checks = []
-        for i, path in enumerate(local, 1):
-            checks.append(_check_file(path, engine, time_name))
-            if i % _PROGRESS_EVERY == 0 and i < len(local):
-                logger.info('Validated %d/%d model files (%.0f s elapsed)',
-                            i, len(local), time.perf_counter() - start)
+    # The probes run serially on purpose: concurrent netCDF4.Dataset
+    # open/close across threads races in libnetCDF's global file table
+    # ("NetCDF: Not a valid ID"). Serial is fine — the probe is a bare
+    # header open plus one coordinate read, so per-file cost is
+    # milliseconds locally and I/O-latency-bound on network storage.
+    checks = []
+    for i, path in enumerate(local, 1):
+        checks.append(_check_file(path, time_name))
+        if i % _PROGRESS_EVERY == 0 and i < len(local):
+            logger.info('Validated %d/%d model files (%.0f s elapsed)',
+                        i, len(local), time.perf_counter() - start)
     logger.info('Model file validation finished: %d file(s) in %.1f s',
                 len(local), time.perf_counter() - start)
 
@@ -220,7 +230,7 @@ def validate_model_files(
                 del surviving[path]
 
     if not dropped:
-        return list(file_list), []
+        return list(file_list), [], dict(surviving)
 
     for path, reason in dropped:
         logger.warning('Skipping model file %s: %s', path, reason)
@@ -239,4 +249,4 @@ def validate_model_files(
             'See the warnings above for per-file reasons.',
             len(file_list))
         raise SystemExit
-    return valid, dropped
+    return valid, dropped, dict(surviving)
