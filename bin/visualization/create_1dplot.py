@@ -77,6 +77,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from ofs_skill.model_processing import (
@@ -525,7 +526,7 @@ def create_1dplot_2nd_part(
             + var_info[1] + '_station.ctl'
         )
         logger.info(
-            'Station ctl file (%s_%s_station.ctl) found in get_title. ',
+            'Station ctl file (%s_%s_station.ctl) found. ',
             prop.ofs,
             var_info[1]
         )
@@ -721,6 +722,7 @@ def create_1dplot(prop, logger):
     prop.whichcasts = parse_arguments_to_list(prop.whichcasts, logger)
     prop.stationowner = parse_arguments_to_list(prop.stationowner, logger)
     prop.var_list = parse_arguments_to_list(prop.var_list, logger)
+    prop.aux_vars = parse_arguments_to_list(prop.aux_vars, logger)
     # Format the other incoming arguments
     prop.ofs = prop.ofs.lower()
     prop.datum = prop.datum.upper()
@@ -743,11 +745,13 @@ def create_1dplot(prop, logger):
     prop.start_date_full_original = prop.start_date_full
 
     # Do forecast_a start and end date reshuffle
-
+    prop.lookback = 0
     if 'forecast_a' in prop.whichcasts:
         if prop.forecast_hr is not None:
             prop.start_date_full, prop.end_date_full =\
             get_fcst_dates(prop, logger)
+            if 'now-' in prop.forecast_hr:
+                prop.lookback = int(np.abs(int(prop.forecast_hr.split('-')[-1])))
             prop.forecast_hr = prop.start_date_full.split('T')[1][0:2] + 'z'
             logger.info(f'Forecast_a: start date reassigned to '
                              f'{prop.start_date_full}')
@@ -1163,6 +1167,19 @@ if __name__ == '__main__':
     parser.add_argument(
         '-c', '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')
+    parser.add_argument(
+        '-comf',
+        '--Make_COMF_Graphics',
+        action='store_false',
+        help='Use the SA package to make COMF graphics.')
+    parser.add_argument(
+        '-aux',
+        '--Auxiliary_Model_Variables',
+        required=False,
+        default=None,
+        help='Plot time series of other variables including heat flux and winds. '
+        'No skill assessment is completed for these variables, only time series & plots '
+        'are made. Options: "wind", "heat_flux"')
 
     args = parser.parse_args()
 
@@ -1186,7 +1203,7 @@ if __name__ == '__main__':
     prop1.currents_bins_csv = args.Currents_Bins_Csv
     prop1.filecheck = args.Disable_Model_File_Check
     prop1.config_file = args.config
-
+    prop1.aux_vars = args.Auxiliary_Model_Variables
 
     # This can only be changed if directly running get_node_ofs.py!
     prop1.user_input_location = False

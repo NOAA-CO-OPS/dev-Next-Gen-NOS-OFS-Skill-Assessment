@@ -141,7 +141,7 @@ def oned_scalar_plot(
 
     # give an extra boost if there are gaps causing disconnected lines, or
     # a lot of data points
-    if not connectgaps:
+    if not connectgaps and prop.lookback < 1:
         if valid_count < 240:
             marker_size_obs *= 2
         else:
@@ -249,7 +249,8 @@ def oned_scalar_plot(
             logger.error('No hoverinfo filenames available!')
             hovertemplate='%{y:.2f}'
             namekey = None
-
+        #TODO: IndexError here on second trip through the loop when using nowcast & forecast_a with 7-day lookback.
+        #error comes from now_fores_paired[i]
         fig.add_trace(
             go.Scattergl(
                 x=list(now_fores_paired[i].DateTime),
