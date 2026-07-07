@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -1267,6 +1268,547 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
         ctl_folder=ctl_folder,
         inv_cache=inv_cache
     )
+
+def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, home_path, datum, logger):
+    """Ingests paired datasets for overlapping stations, creates interactive Plotly time series, and paginated Matplotlib scatter grids."""
+    import glob
+    import math
+    import os
+
+    import numpy as np
+    import pandas as pd
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    # Helper to resolve target error range robustly
+    def fetch_error_range(short_var, base_path):
+        class MockProp:
+            def __init__(self, path):
+                self.path = path
+
+        try:
+            from ofs_skill.visualization.plotting_functions import get_error_range
+            return get_error_range(short_var, MockProp(base_path), logger)[0]
+        except ImportError:
+            pass
+
+        try:
+            from plotting_functions import get_error_range
+            return get_error_range(short_var, MockProp(base_path), logger)[0]
+        except ImportError:
+            pass
+
+        logger.warning('Could not import get_error_range. Using direct CSV fallback for target error.')
+        config_path = os.path.join(base_path, 'conf', 'error_ranges.csv')
+        defaults = {'salt': 3.5, 'temp': 3.0, 'wl': 0.15, 'cu': 0.26, 'ice_conc': 10.0}
+
+        if os.path.exists(config_path):
+            try:
+                df_err = pd.read_csv(config_path)
+                match = df_err[df_err['name_var'] == short_var]
+                if not match.empty:
+                    return float(match.iloc[0]['X1'])
+            except Exception as e:
+                logger.warning(f'Error reading {config_path}: {e}')
+
+        return defaults.get(short_var, 0)
+
+    logger.info('--- Starting Comparison Plotting ---')
+
+    try:
+        inventory = pd.read_csv(overlap_csv)
+        station_col = 'ID' if 'ID' in inventory.columns else inventory.columns[0]
+        overlap_stations = inventory[station_col].astype(str).unique().tolist()
+    except Exception as e:
+        logger.error(f'Failed to read inventory CSV: {e}')
+        return
+
+    pair_dir = os.path.join(home_path, 'data', 'skill', '1d_pair')
+    visual_dir = os.path.join(home_path, 'data', 'visual', 'comparisons')
+    os.makedirs(visual_dir, exist_ok=True)
+
+    vars_to_process = var_selection.split(',')
+
+    for var in vars_to_process:
+        var = var.strip()
+        display_var = var.replace('_', ' ').title()
+
+        var_map = {'water_level': 'wl', 'water_temperature': 'temp', 'salinity': 'salt', 'currents': 'cu'}
+        short_var = var_map.get(var, var)
+
+        if short_var == 'wl':
+            y_title = f'Water Level (<i>meters {datum}</i>)'
+            unit = 'm'
+        elif short_var == 'temp':
+            y_title = 'Water Temperature (<i>\u00b0C</i>)'
+            unit = '\u00b0C'
+        elif short_var == 'cu':
+            y_title = 'Current Speed (<i>knots</i>)'
+            unit = 'knots'
+        elif short_var == 'salt':
+            y_title = 'Salinity (<i>PSU</i>)'
+            unit = 'PSU'
+        else:
+            y_title = display_var
+            unit = ''
+
+        if short_var == 'cu':
+            col_names = ['Julian', 'year', 'month', 'day', 'hour', 'minute', 'OBS_SPD', 'OFS_SPD', 'BIAS_SPD', 'OBS_DIR', 'OFS_DIR', 'BIAS_DIR']
+        else:
+            col_names = ['Julian', 'year', 'month', 'day', 'hour', 'minute', 'OBS', 'OFS', 'BIAS']
+
+        X1 = fetch_error_range(short_var, home_path)
+        if short_var == 'cu':
+            X1 *= 1.943844
+
+        # Dictionary to store valid dataframes for the scatter grid phase
+        station_data_map = {}
+
+        for station in overlap_stations:
+            logger.info(f'Processing comparison for station {station}, variable {short_var}')
+
+            ofs1_pattern = os.path.join(pair_dir, f'{ofs1}_{short_var}_{station}_*_pair.int')
+            ofs2_pattern = os.path.join(pair_dir, f'{ofs2}_{short_var}_{station}_*_pair.int')
+
+            ofs1_files = glob.glob(ofs1_pattern)
+            ofs2_files = glob.glob(ofs2_pattern)
+
+            if not ofs1_files or not ofs2_files:
+                logger.warning(f'Missing pair files for station {station}. Skipping.')
+                continue
+
+            try:
+                df1 = pd.read_csv(ofs1_files[0], sep=r'\s+', names=col_names, header=0)
+                df2 = pd.read_csv(ofs2_files[0], sep=r'\s+', names=col_names, header=0)
+
+                df1['DateTime'] = pd.to_datetime(df1[['year', 'month', 'day', 'hour', 'minute']])
+                df2['DateTime'] = pd.to_datetime(df2[['year', 'month', 'day', 'hour', 'minute']])
+
+                if short_var == 'cu':
+                    df1['OBS'] = df1['OBS_SPD'] * 1.943844
+                    df1['OFS'] = df1['OFS_SPD'] * 1.943844
+                    df2['OBS'] = df2['OBS_SPD'] * 1.943844
+                    df2['OFS'] = df2['OFS_SPD'] * 1.943844
+
+                merged = pd.merge(
+                    df1[['DateTime', 'OBS', 'OFS']],
+                    df2[['DateTime', 'OFS']],
+                    on='DateTime',
+                    suffixes=(f'_{ofs1}', f'_{ofs2}')
+                )
+
+                if merged.empty:
+                    logger.warning(f'No overlapping timeframe for station {station}. Skipping.')
+                    continue
+
+                ts_hover = f'<b>Time:</b> %{{x|%m/%d/%Y %H:%M}}<br><b>%{{data.name}}:</b> %{{y:.2f}} {unit}<extra></extra>'
+                err_hover = f'<b>Time:</b> %{{x|%m/%d/%Y %H:%M}}<br><b>%{{data.name}}:</b> %{{y:.2f}} {unit}<extra></extra>'
+
+                merged[f'Error_{ofs1}'] = merged[f'OFS_{ofs1}'] - merged['OBS']
+                merged[f'Error_{ofs2}'] = merged[f'OFS_{ofs2}'] - merged['OBS']
+
+                # Store for scatter plots later
+                station_data_map[station] = merged
+
+                # =========================================================
+                # 1. TIME SERIES & ERROR PLOT (Plotly HTML - per station)
+                # =========================================================
+                fig_ts = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08, row_heights=[0.7, 0.3])
+
+                fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged['OBS'], name='Observation', mode='lines', hovertemplate=ts_hover, line=dict(color='red', width=2)), row=1, col=1)
+                fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'OFS_{ofs1}'], name=ofs1.upper(), mode='lines', hovertemplate=ts_hover, line=dict(color='#d55e00', width=1.5), opacity=0.8, legendgroup=ofs1), row=1, col=1)
+                fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'OFS_{ofs2}'], name=ofs2.upper(), mode='lines', hovertemplate=ts_hover, line=dict(color='#0072b2', width=1.5), opacity=0.8, legendgroup=ofs2), row=1, col=1)
+
+                min_dt = merged['DateTime'].min()
+                max_dt = merged['DateTime'].max()
+
+                if X1 > 0:
+                    X2 = X1 * 2
+                    fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt, max_dt, min_dt], y=[X2, X2, -X2, -X2], fill='toself', fillcolor='rgba(255, 0, 0, 0.15)', line=dict(color='rgba(255,255,255,0)'), name=f'2x Target Error (\u00B1{X2:.2f} {unit})', hoverinfo='skip'), row=2, col=1)
+                    fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt, max_dt, min_dt], y=[X1, X1, -X1, -X1], fill='toself', fillcolor='rgba(255, 165, 0, 0.3)', line=dict(color='rgba(255,255,255,0)'), name=f'Target Error (\u00B1{X1:.2f} {unit})', hoverinfo='skip'), row=2, col=1)
+
+                fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt], y=[0, 0], mode='lines', name='Zero Error', showlegend=False, hoverinfo='skip', line=dict(color='black', dash='dash', width=1)), row=2, col=1)
+                fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs1}'], name=f'{ofs1.upper()} Error', mode='lines', hovertemplate=err_hover, line=dict(color='#d55e00', width=1.5), opacity=0.8, showlegend=False, legendgroup=ofs1), row=2, col=1)
+                fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs2}'], name=f'{ofs2.upper()} Error', mode='lines', hovertemplate=err_hover, line=dict(color='#0072b2', width=1.5), opacity=0.8, showlegend=False, legendgroup=ofs2), row=2, col=1)
+
+                fig_ts.update_layout(
+                    title=dict(text=f'<b>Time Series Comparison: {station} - {display_var}</b>', font=dict(size=14, color='black', family='Open Sans'), y=0.97, x=0.5, xanchor='center', yanchor='top'),
+                    template='plotly_white', hovermode='x unified', hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
+                    legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0, font=dict(size=16, color='black'), itemclick='toggle', itemdoubleclick=False),
+                    margin=dict(t=100, b=120), height=750, width=900
+                )
+                fig_ts.update_xaxes(mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showspikes=True, spikemode='across', spikesnap='cursor', showgrid=True, tickfont=dict(family='Open Sans', color='black', size=14), minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False), tickformat='%H:%M<br>%m/%d', hoverformat='%b %d, %Y, %H:%M UTC')
+                fig_ts.update_xaxes(title_text='<br>Time (UTC)', titlefont=dict(family='Open Sans', color='black', size=18), rangeslider=dict(visible=True, thickness=0.06, bordercolor='black', borderwidth=1), row=2, col=1)
+                fig_ts.update_yaxes(title_text=y_title, titlefont=dict(family='Open Sans', color='black', size=17), mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, tickfont=dict(family='Open Sans', color='black', size=14), minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False), zeroline=(short_var == 'wl'), zerolinewidth=1, zerolinecolor='black', row=1, col=1)
+                fig_ts.update_yaxes(title_text=f'Error ({unit})' if unit else 'Error', titlefont=dict(family='Open Sans', color='black', size=17), mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, tickfont=dict(family='Open Sans', color='black', size=14), minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False), zeroline=False, row=2, col=1)
+
+                ts_out = os.path.join(visual_dir, f'{ofs1}_vs_{ofs2}_{short_var}_{station}_timeseries.html')
+                fig_ts.write_html(ts_out)
+
+            except Exception as e:
+                logger.error(f'Error plotting TS for station {station}: {e}')
+
+        # =========================================================
+        # 2. SCATTER PLOT GRID (Matplotlib - Paginated)
+        # =========================================================
+        max_plots_per_page = 12
+        stations_with_data = list(station_data_map.keys())
+
+        for batch_idx in range(0, len(stations_with_data), max_plots_per_page):
+            batch_stations = stations_with_data[batch_idx : batch_idx + max_plots_per_page]
+            num_stations = len(batch_stations)
+
+            cols = min(3, num_stations)
+            rows = math.ceil(num_stations / cols)
+
+            fig_width = cols * 4.5
+            fig_height = rows * 4.5
+
+            fig_scat_all, axes = plt.subplots(nrows=rows, ncols=cols, figsize=(fig_width, fig_height))
+            if num_stations > 0:
+                axes = np.atleast_1d(axes).flatten()
+
+            plot_idx = 0
+
+            for station in batch_stations:
+                merged = station_data_map[station]
+                ax = axes[plot_idx]
+
+                min_val = min(merged['OBS'].min(), merged[f'OFS_{ofs1}'].min(), merged[f'OFS_{ofs2}'].min())
+                max_val = max(merged['OBS'].max(), merged[f'OFS_{ofs1}'].max(), merged[f'OFS_{ofs2}'].max())
+
+                if pd.notna(min_val) and pd.notna(max_val):
+                    buffer = (max_val - min_val) * 0.05 if (max_val - min_val) != 0 else 0.1
+                    ax_min, ax_max = min_val - buffer, max_val + buffer
+
+                    if X1 > 0:
+                        X2 = X1 * 2
+                        ax.fill_between([ax_min, ax_max], [ax_min - X2, ax_max - X2], [ax_min + X2, ax_max + X2],
+                                        color='red', alpha=0.15, edgecolor='none', label=f'2x Target Error (\u00B1{X2:.2f} {unit})')
+
+                        ax.fill_between([ax_min, ax_max], [ax_min - X1, ax_max - X1], [ax_min + X1, ax_max + X1],
+                                        color='orange', alpha=0.3, edgecolor='none', label=f'Target Error (\u00B1{X1:.2f} {unit})')
+
+                    ax.plot([ax_min, ax_max], [ax_min, ax_max], 'k--', label='1:1 Line')
+                    ax.set_xlim(ax_min, ax_max)
+                    ax.set_ylim(ax_min, ax_max)
+
+                ax.scatter(merged['OBS'], merged[f'OFS_{ofs1}'], color='#d55e00', s=20, alpha=0.6, label=ofs1.upper())
+                ax.scatter(merged['OBS'], merged[f'OFS_{ofs2}'], color='#0072b2', s=20, alpha=0.6, label=ofs2.upper())
+
+                ax.set_title(f'Station: {station}', fontsize=13, pad=8)
+                ax.set_xlabel(f'Observation ({unit})' if unit else 'Observation', fontsize=11)
+                ax.set_ylabel(f'Model ({unit})' if unit else 'Model', fontsize=11)
+                ax.set_aspect('equal', adjustable='box')
+                ax.grid(True, linestyle='--', alpha=0.6)
+
+                plot_idx += 1
+
+            # Clean up empty subplots
+            for j in range(plot_idx, len(axes)):
+                fig_scat_all.delaxes(axes[j])
+
+            # Restrict rect so title and legend have dedicated space at the top without overlapping plots
+            plt.tight_layout(rect=[0, 0, 1, 0.90])
+
+            # Deduplicate labels and add unified legend
+            handles, labels = axes[0].get_legend_handles_labels()
+            by_label = dict(zip(labels, handles))
+            fig_scat_all.legend(by_label.values(), by_label.keys(), loc='lower center', bbox_to_anchor=(0.5, 0.90), ncol=5, frameon=False, fontsize=12)
+
+            page_text = f' (Page {batch_idx // max_plots_per_page + 1})' if len(stations_with_data) > max_plots_per_page else ''
+            fig_scat_all.suptitle(f'Scatter Comparisons: {display_var}{page_text}', fontsize=16, y=0.98)
+
+            page_suffix = f'_page{batch_idx // max_plots_per_page + 1}' if len(stations_with_data) > max_plots_per_page else ''
+            scat_out_all = os.path.join(visual_dir, f'{ofs1}_vs_{ofs2}_{short_var}_all_scatter{page_suffix}.png')
+
+            fig_scat_all.savefig(scat_out_all, bbox_inches='tight', dpi=150)
+            logger.info(f'Saved aggregated Matplotlib scatter grid to {scat_out_all}')
+
+            plt.close(fig_scat_all)
+
+def generate_stat_comparisons(ofs1, ofs2, home_path, logger):
+    """Reads the generated skill stat CSVs and plots interactive categorical and identically scaled 1-to-1 scatters with bounded target thresholds."""
+    import os
+
+    import pandas as pd
+    import plotly.graph_objects as go
+
+    # Helper to resolve target error range robustly
+    def fetch_error_range(short_var, base_path):
+        class MockProp:
+            def __init__(self, path):
+                self.path = path
+        try:
+            from ofs_skill.visualization.plotting_functions import get_error_range
+            return get_error_range(short_var, MockProp(base_path), logger)[0]
+        except ImportError:
+            pass
+
+        try:
+            from plotting_functions import get_error_range
+            return get_error_range(short_var, MockProp(base_path), logger)[0]
+        except ImportError:
+            pass
+
+        logger.warning('Could not import get_error_range. Using direct CSV fallback for target error.')
+        config_path = os.path.join(base_path, 'conf', 'error_ranges.csv')
+        defaults = {'salt': 3.5, 'temp': 3.0, 'wl': 0.15, 'cu': 0.26, 'ice_conc': 10.0}
+
+        if os.path.exists(config_path):
+            try:
+                df_err = pd.read_csv(config_path)
+                match = df_err[df_err['name_var'] == short_var]
+                if not match.empty:
+                    return float(match.iloc[0]['X1'])
+            except Exception as e:
+                logger.warning(f'Error reading {config_path}: {e}')
+
+        return defaults.get(short_var, 0)
+
+    logger.info('--- Starting Stats Comparison Plotting (Plotly) ---')
+
+    stats_dir = os.path.join(home_path, 'data', 'skill', 'stats')
+    vis_dir = os.path.join(home_path, 'data', 'visual', 'comparisons')
+    os.makedirs(vis_dir, exist_ok=True)
+
+    ofs1_file = os.path.join(stats_dir, f'skill_{ofs1}_all_stations.csv')
+    ofs2_file = os.path.join(stats_dir, f'skill_{ofs2}_all_stations.csv')
+
+    if not os.path.exists(ofs1_file):
+        ofs1_file = os.path.join(home_path, f'skill_{ofs1}_all_stations.csv')
+    if not os.path.exists(ofs2_file):
+        ofs2_file = os.path.join(home_path, f'skill_{ofs2}_all_stations.csv')
+
+    if not os.path.exists(ofs1_file) or not os.path.exists(ofs2_file):
+        logger.warning(f'Stats files not found. Searched {stats_dir} and {home_path}. Skipping stats comparison.')
+        return
+
+    try:
+        df1 = pd.read_csv(ofs1_file)
+        df2 = pd.read_csv(ofs2_file)
+
+        df1['ID'] = df1['ID'].astype(str)
+        df2['ID'] = df2['ID'].astype(str)
+
+        merged = pd.merge(df1, df2, on=['ID', 'variable'], suffixes=(f'_{ofs1}', f'_{ofs2}'))
+
+        if merged.empty:
+            logger.warning('No overlapping stations found in the stats files.')
+            return
+
+        # Map internal column names to display names
+        stats_to_plot = {
+            'rmse': 'RMSE',
+            'bias': 'Bias',
+            'central_freq': 'Central Frequency'
+        }
+
+        for var in merged['variable'].unique():
+            var_data = merged[merged['variable'] == var].reset_index(drop=True)
+            display_var = var.replace('_', ' ').title()
+
+            # Detect the base variable to fetch the correct error range (ignores "high tide" and "low tide")
+            var_lower = var.strip().lower()
+            if 'water level' in var_lower or var_lower == 'wl':
+                base_var = 'wl'
+            elif 'temperature' in var_lower or var_lower == 'temp':
+                base_var = 'temp'
+            elif 'salinity' in var_lower or var_lower == 'salt':
+                base_var = 'salt'
+            elif 'current' in var_lower or var_lower == 'cu':
+                base_var = 'cu'
+            else:
+                base_var = var.replace(' ', '_').lower()
+
+            file_var = var.replace(' ', '_').lower()
+
+            # Fetch target error range for thresholds
+            X1 = fetch_error_range(base_var, home_path)
+
+            for stat_key, stat_display in stats_to_plot.items():
+                stat1 = f'{stat_key}_{ofs1}'
+                stat2 = f'{stat_key}_{ofs2}'
+
+                if stat1 not in var_data.columns or stat2 not in var_data.columns:
+                    continue
+                if var_data[stat1].isna().all() and var_data[stat2].isna().all():
+                    continue
+
+                bar_hover = f'<b>Station ID:</b> %{{x}}<br><b>Model:</b> %{{data.name}}<br><b>{stat_display}:</b> %{{y:.3f}}<extra></extra>'
+
+                # --- 1. Grouped Bar Plot (Plotly) ---
+                fig_bar = go.Figure()
+                fig_bar.add_trace(go.Bar(x=var_data['ID'], y=var_data[stat1], name=ofs1.upper(), hovertemplate=bar_hover, marker_color='#d55e00'))
+                fig_bar.add_trace(go.Bar(x=var_data['ID'], y=var_data[stat2], name=ofs2.upper(), hovertemplate=bar_hover, marker_color='#0072b2'))
+
+                # Add Threshold Lines to Bar Plot (Solid)
+                if stat_key == 'central_freq':
+                    fig_bar.add_hline(y=90, line_dash='solid', line_color='red',
+                                      annotation_text='90% Target', annotation_position='top left',
+                                      annotation_font=dict(color='red', size=13))
+                elif stat_key == 'rmse' and X1 > 0:
+                    fig_bar.add_hline(y=X1, line_dash='solid', line_color='red',
+                                      annotation_text=f'Target Error ({X1:.2f})', annotation_position='top left',
+                                      annotation_font=dict(color='red', size=13))
+                elif stat_key == 'bias' and X1 > 0:
+                    fig_bar.add_hline(y=X1, line_dash='solid', line_color='red',
+                                      annotation_text=f'+Target Error (+{X1:.2f})', annotation_position='top left',
+                                      annotation_font=dict(color='red', size=13))
+                    fig_bar.add_hline(y=-X1, line_dash='solid', line_color='red',
+                                      annotation_text=f'-Target Error (-{X1:.2f})', annotation_position='bottom left',
+                                      annotation_font=dict(color='red', size=13))
+
+                fig_bar.update_layout(
+                    barmode='group',
+                    title=dict(
+                        text=f'<b>Station-by-Station {stat_display} Comparison: {display_var}</b>',
+                        font=dict(size=14, color='black', family='Open Sans'),
+                        y=0.97, x=0.5, xanchor='center', yanchor='top',
+                    ),
+                    template='plotly_white', hovermode='x unified',
+                    hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
+                    legend=dict(
+                        orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
+                        font=dict(size=16, color='black'),
+                        itemclick=False, itemdoubleclick=False
+                    ),
+                    margin=dict(t=100, b=100), height=550, width=1000
+                )
+                fig_bar.update_xaxes(
+                    title_text='Station ID',
+                    titlefont=dict(family='Open Sans', color='black', size=18),
+                    mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, tickangle=45,
+                    tickfont=dict(family='Open Sans', color='black', size=14),
+                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False)
+                )
+
+                # Update Y-Axes (Includes explicit zeroline injection for Bias)
+                fig_bar.update_yaxes(
+                    title_text=stat_display,
+                    titlefont=dict(family='Open Sans', color='black', size=17),
+                    mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showgrid=True,
+                    tickfont=dict(family='Open Sans', color='black', size=14),
+                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                    zeroline=(stat_key == 'bias'), zerolinewidth=1, zerolinecolor='black'
+                )
+
+                out_file_cat = os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_{file_var}_{stat_key}_stations.html')
+                fig_bar.write_html(out_file_cat)
+
+                # --- 2. 1-to-1 Scatter (Plotly) ---
+                fig_stat_scat = go.Figure()
+
+                stat_scat_hover = f'<b>Station ID:</b> %{{customdata}}<br><b>{ofs1.upper()}:</b> %{{x:.3f}}<br><b>{ofs2.upper()}:</b> %{{y:.3f}}<extra></extra>'
+
+                fig_stat_scat.add_trace(go.Scatter(
+                    x=var_data[stat1], y=var_data[stat2], mode='markers',
+                    customdata=var_data['ID'], hovertemplate=stat_scat_hover,
+                    name='Stations', marker=dict(size=10, color='#009E73', opacity=0.7, line=dict(color='black', width=1))
+                ))
+
+                min_val = min(var_data[stat1].min(), var_data[stat2].min())
+                max_val = max(var_data[stat1].max(), var_data[stat2].max())
+
+                # Check thresholds to ensure axes encompass the threshold lines
+                if stat_key == 'central_freq':
+                    min_val = min(min_val, 85) # Provide buffer below 90
+                    max_val = max(max_val, 100)
+                elif stat_key == 'rmse' and X1 > 0:
+                    max_val = max(max_val, X1 * 1.1)
+                elif stat_key == 'bias' and X1 > 0:
+                    min_val = min(min_val, -X1 * 1.1)
+                    max_val = max(max_val, X1 * 1.1)
+
+                axis_range = None
+                if pd.notna(min_val) and pd.notna(max_val):
+                    buffer = (max_val - min_val) * 0.1 if (max_val - min_val) != 0 else 0.1
+                    axis_range = [min_val - buffer, max_val + buffer]
+
+                    # Add 1:1 line
+                    fig_stat_scat.add_trace(go.Scatter(
+                        x=axis_range, y=axis_range,
+                        mode='lines', name='1:1 Line', hoverinfo='skip', showlegend=False, line=dict(color='black', dash='dash')
+                    ))
+
+                    # Add Bounded Threshold Lines
+                    if stat_key == 'central_freq':
+                        fig_stat_scat.add_trace(go.Scatter(
+                            x=[axis_range[0], 90, 90], y=[90, 90, axis_range[0]],
+                            mode='lines', name='90% Target', showlegend=False, hoverinfo='skip',
+                            line=dict(color='red', width=1.5, dash='solid')
+                        ))
+                    elif stat_key == 'rmse' and X1 > 0:
+                        fig_stat_scat.add_trace(go.Scatter(
+                            x=[axis_range[0], X1, X1], y=[X1, X1, axis_range[0]],
+                            mode='lines', name='Target Error', showlegend=False, hoverinfo='skip',
+                            line=dict(color='red', width=1.5, dash='solid')
+                        ))
+                    elif stat_key == 'bias' and X1 > 0:
+                        fig_stat_scat.add_trace(go.Scatter(
+                            x=[-X1, X1, X1, -X1, -X1], y=[-X1, -X1, X1, X1, -X1],
+                            mode='lines', name='Target Error', showlegend=False, hoverinfo='skip',
+                            line=dict(color='red', width=1.5, dash='solid')
+                        ))
+
+                # Top-Left Annotation
+                fig_stat_scat.add_annotation(
+                    text=f'Higher {stat_display} for {ofs2.upper()}',
+                    xref='paper', yref='paper', x=0.02, y=0.98,
+                    xanchor='left', yanchor='top', showarrow=False,
+                    font=dict(family='Open Sans', size=15, color='black'),
+                    bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                )
+
+                # Bottom-Right Annotation
+                fig_stat_scat.add_annotation(
+                    text=f'Higher {stat_display} for {ofs1.upper()}',
+                    xref='paper', yref='paper', x=0.98, y=0.02,
+                    xanchor='right', yanchor='bottom', showarrow=False,
+                    font=dict(family='Open Sans', size=15, color='black'),
+                    bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                )
+
+                fig_stat_scat.update_layout(
+                    title=dict(
+                        text=f'<b>{ofs1.upper()} vs {ofs2.upper()} {stat_display}: {display_var}</b>',
+                        font=dict(size=14, color='black', family='Open Sans'),
+                        y=0.97, x=0.5, xanchor='center', yanchor='top',
+                    ),
+                    template='plotly_white', hovermode='closest',
+                    hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
+                    legend=dict(
+                        orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
+                        font=dict(size=16, color='black'),
+                        itemclick=False, itemdoubleclick=False
+                    ),
+                    margin=dict(t=100, b=100), height=650, width=650
+                )
+
+                fig_stat_scat.update_xaxes(
+                    title_text=f'{ofs1.upper()} {stat_display}', range=axis_range,
+                    titlefont=dict(family='Open Sans', color='black', size=18),
+                    mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showgrid=True,
+                    tickfont=dict(family='Open Sans', color='black', size=14),
+                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                    zeroline=(stat_key == 'bias'), zerolinewidth=1, zerolinecolor='black'
+                )
+                fig_stat_scat.update_yaxes(
+                    title_text=f'{ofs2.upper()} {stat_display}', range=axis_range,
+                    titlefont=dict(family='Open Sans', color='black', size=17),
+                    mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showgrid=True,
+                    tickfont=dict(family='Open Sans', color='black', size=14),
+                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                    scaleanchor='x', scaleratio=1,
+                    zeroline=(stat_key == 'bias'), zerolinewidth=1, zerolinecolor='black'
+                )
+
+                out_file_scat = os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_{file_var}_{stat_key}_scatter.html')
+                fig_stat_scat.write_html(out_file_scat)
+
+        logger.info(f'Saved stats comparisons to {vis_dir}')
+    except Exception as e:
+        logger.error(f'Error generating stat comparisons: {e}')
 
 
 if __name__ == '__main__':
