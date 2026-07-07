@@ -485,6 +485,17 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
 
     try:
         ds = _open_dataset(engine)
+    except xr.MergeError as ex:
+        logger.error(
+            'Model files could not be combined: %s. Static metadata '
+            '(station coordinates/names/sigma levels) differs between '
+            'files in the batch even though their dimensions match — '
+            'the assessment window likely spans a model configuration '
+            'change. Stations batches with a clear majority drop the '
+            'minority files automatically during validation; otherwise '
+            'split the assessment window at the configuration-change '
+            'date.', ex)
+        raise
     except OSError as ex:
         # h5netcdf refuses non-HDF5 files with "file signature not
         # found". Formats are detected before opening, but a sampled

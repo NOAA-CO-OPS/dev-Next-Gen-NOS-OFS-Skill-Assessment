@@ -44,6 +44,7 @@ path.
 from __future__ import annotations
 
 from collections import Counter
+import hashlib
 from logging import Logger
 import time
 from typing import Any, Optional
@@ -56,6 +57,12 @@ _REMOTE_PREFIXES = ('http://', 'https://', 's3://')
 # Progress heartbeat interval (files) for the serial validation loop.
 _PROGRESS_EVERY = 50
 
+# Static variables larger than this are excluded from the
+# static-metadata fingerprint to keep the per-file probe cheap.
+# Stations-file static vars (x/y/lon/lat/h/sigma/names) are a few
+# hundred to a few thousand elements.
+_FINGERPRINT_MAX_ELEMENTS = 200_000
+
 
 def _is_remote(path: Any) -> bool:
     if not isinstance(path, str):
@@ -65,13 +72,49 @@ def _is_remote(path: Any) -> bool:
     return tail.startswith(_REMOTE_PREFIXES)
 
 
-def _check_file(path: str,
-                time_name: Optional[str]) -> tuple[Optional[str], dict]:
+def _static_fingerprint(nc: 'netCDF4.Dataset',
+                        time_name: Optional[str]) -> str:
+    """Hash the values of the file's small static (non-time) variables.
+
+    Multi-file concat with ``data_vars='minimal'`` requires static
+    variables (station x/y/lon/lat, names, sigma levels, ...) to be
+    IDENTICAL across every file in the batch; a model configuration
+    change mid-window (e.g. relocated stations after an outage) makes
+    xarray raise ``MergeError: conflicting values for variable 'x'``.
+    Hashing these values per file lets the batch-consistency step spot
+    the change and drop the minority deployment with a clear warning
+    instead of crashing the combine. Variables above the size cap are
+    skipped to keep the probe cheap.
+    """
+    md5 = hashlib.md5()
+    for name in sorted(nc.variables):
+        var = nc.variables[name]
+        if time_name and time_name in var.dimensions:
+            continue
+        if var.size > _FINGERPRINT_MAX_ELEMENTS:
+            continue
+        try:
+            var.set_auto_maskandscale(False)
+            payload = np.asarray(var[:]).tobytes()
+        except Exception:  # noqa: BLE001 - unreadable static var:
+            continue       # other checks decide the file's fate
+        md5.update(name.encode())
+        md5.update(payload)
+    return md5.hexdigest()
+
+
+def _check_file(
+    path: str,
+    time_name: Optional[str],
+    fingerprint: bool = False,
+) -> tuple[Optional[str], dict, Optional[str]]:
     """Validate one local file.
 
-    Returns ``(reason, dims)`` — ``reason`` is None when the file is
-    valid, otherwise a short description of why it was rejected;
-    ``dims`` is the file's dimension-size mapping (empty on failure).
+    Returns ``(reason, dims, static_fp)`` — ``reason`` is None when the
+    file is valid, otherwise a short description of why it was
+    rejected; ``dims`` is the file's dimension-size mapping (empty on
+    failure); ``static_fp`` is the static-variable fingerprint when
+    ``fingerprint`` is True (None otherwise or on failure).
 
     The probe uses ``netCDF4.Dataset`` directly rather than a full
     ``xr.open_dataset``: libnetCDF reads every on-disk format, and a
@@ -83,17 +126,17 @@ def _check_file(path: str,
         nc = netCDF4.Dataset(path, 'r')
     except Exception as ex:  # noqa: BLE001 - any open failure = bad file
         return (f'unreadable ({type(ex).__name__}: '
-                f'{str(ex)[:120]})'), {}
+                f'{str(ex)[:120]})'), {}, None
     try:
         dims = {name: len(dim) for name, dim in nc.dimensions.items()}
         if time_name:
             if time_name not in dims:
                 return (f"missing '{time_name}' dimension "
-                        '(incomplete file?)'), {}
+                        '(incomplete file?)'), {}, None
             if dims[time_name] < 1:
-                return f"empty '{time_name}' dimension", {}
+                return f"empty '{time_name}' dimension", {}, None
         if len(nc.variables) == 0:
-            return 'no variables (header-only file?)', {}
+            return 'no variables (header-only file?)', {}, None
         if time_name and time_name in nc.variables:
             try:
                 raw = nc.variables[time_name][:]
@@ -102,7 +145,7 @@ def _check_file(path: str,
                         np.asarray(raw, dtype='float64')), np.nan)
             except Exception as ex:  # noqa: BLE001
                 return (f'time coordinate unreadable — truncated file? '
-                        f'({type(ex).__name__}: {str(ex)[:120]})'), {}
+                        f'({type(ex).__name__}: {str(ex)[:120]})'), {}, None
             # Model time axes are strictly increasing within a file.
             # libnetCDF silently zero-fills NetCDF-3 reads past EOF, so
             # a truncated file reads back with a zeroed time tail —
@@ -114,8 +157,10 @@ def _check_file(path: str,
                     bad = int(np.argmin(diffs > 0)) + 1
                     return ('time axis not strictly increasing at step '
                             f'{bad} of {tvals.size} — zero-filled or '
-                            'truncated file?'), {}
-        return None, dims
+                            'truncated file?'), {}, None
+        static_fp = (_static_fingerprint(nc, time_name)
+                     if fingerprint else None)
+        return None, dims, static_fp
     finally:
         nc.close()
 
@@ -193,9 +238,13 @@ def validate_model_files(
     # ("NetCDF: Not a valid ID"). Serial is fine — the probe is a bare
     # header open plus one coordinate read, so per-file cost is
     # milliseconds locally and I/O-latency-bound on network storage.
+    # Static-metadata fingerprinting is only meaningful for stations
+    # files, where the batch is concatenated with data_vars='minimal'
+    # and static vars must agree exactly.
+    fingerprint = ofsfiletype == 'stations'
     checks = []
     for i, path in enumerate(local, 1):
-        checks.append(_check_file(path, time_name))
+        checks.append(_check_file(path, time_name, fingerprint))
         if i % _PROGRESS_EVERY == 0 and i < len(local):
             logger.info('Validated %d/%d model files (%.0f s elapsed)',
                         i, len(local), time.perf_counter() - start)
@@ -204,9 +253,12 @@ def validate_model_files(
 
     dropped: list[tuple[str, str]] = []
     surviving: dict[str, dict] = {}
-    for path, (reason, dims) in zip(local, checks):
+    fp_by_path: dict[str, str] = {}
+    for path, (reason, dims, static_fp) in zip(local, checks):
         if reason is None:
             surviving[path] = dims
+            if static_fp is not None:
+                fp_by_path[path] = static_fp
         else:
             dropped.append((path, reason))
 
@@ -228,6 +280,38 @@ def validate_model_files(
                 dropped.append(
                     (path, f'dimension mismatch with batch: {detail}'))
                 del surviving[path]
+                fp_by_path.pop(path, None)
+
+    # Static-metadata consistency: with identical dimensions, files can
+    # still disagree on static VALUES (station x/y/lon/lat, names, sigma
+    # levels) after a model configuration change mid-window — xarray's
+    # minimal-mode concat then dies with "MergeError: conflicting values
+    # for variable 'x'". Drop the minority deployment, but only when the
+    # batch has a clear majority and every file has the same station
+    # count (differing counts are the legitimate remove_extra_stations
+    # case, where coordinate arrays trivially differ).
+    station_sizes = {dims.get('station') for dims in surviving.values()}
+    if (fingerprint and len(fp_by_path) > 1
+            and len(station_sizes) == 1):
+        fp_counts = Counter(fp_by_path.values())
+        top_fp, top_n = fp_counts.most_common(1)[0]
+        if len(fp_counts) > 1 and top_n * 2 >= len(fp_by_path):
+            for path, fp in sorted(fp_by_path.items()):
+                if fp != top_fp:
+                    dropped.append((path, (
+                        'static station metadata (coordinates/names/'
+                        'sigma levels) differs from the batch majority '
+                        '— the model configuration likely changed '
+                        'mid-window; consider splitting the assessment '
+                        'window at the change date')))
+                    del surviving[path]
+        elif len(fp_counts) > 1:
+            logger.warning(
+                'Static station metadata varies across %d groups of '
+                'files with no clear majority — the multi-file combine '
+                'may fail with a MergeError. The assessment window '
+                'likely spans multiple model configurations.',
+                len(fp_counts))
 
     if not dropped:
         return list(file_list), [], dict(surviving)

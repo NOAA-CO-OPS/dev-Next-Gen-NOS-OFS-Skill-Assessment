@@ -206,6 +206,52 @@ def test_differing_time_lengths_are_fine(tmp_path):
     assert dropped == []
 
 
+def test_static_metadata_minority_dropped(tmp_path):
+    # Same dims everywhere, but one file carries different static
+    # values (e.g. relocated stations after a model update) — the
+    # exact case behind "MergeError: conflicting values for variable
+    # 'x'" on multi-month runs. The minority deployment is dropped.
+    files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(3)]
+    ds = _stations_ds()
+    ds['h'] = (('station',), np.linspace(6.0, 31.0, N_STATION))
+    moved = _write_nc3(tmp_path, 'moved.nc', ds=ds)
+    valid, dropped, _ = validate_model_files(
+        files + [moved], 'netcdf4', 'time', 'stations', LOG)
+    assert valid == files
+    assert dropped[0][0] == moved
+    assert 'static station metadata' in dropped[0][1]
+
+
+def test_static_metadata_no_majority_warns_but_keeps(tmp_path, caplog):
+    # Every file differs (no clear majority): don't guess — keep all
+    # files and warn that the combine may fail.
+    files = []
+    for i in range(3):
+        ds = _stations_ds()
+        ds['h'] = (('station',),
+                   np.linspace(5.0 + i, 30.0 + i, N_STATION))
+        files.append(_write_nc3(tmp_path, f'f{i}.nc', ds=ds))
+    with caplog.at_level(logging.WARNING):
+        valid, dropped, _ = validate_model_files(
+            files, 'netcdf4', 'time', 'stations', LOG)
+    assert valid == files
+    assert dropped == []
+    assert any('no clear majority' in r.message for r in caplog.records)
+
+
+def test_static_metadata_not_checked_for_fields(tmp_path):
+    # Fields batches are combined differently; the fingerprint check
+    # only applies to stations files.
+    files = [_write_nc3(tmp_path, f'f{i}.nc') for i in range(2)]
+    ds = _stations_ds()
+    ds['h'] = (('station',), np.linspace(6.0, 31.0, N_STATION))
+    moved = _write_nc3(tmp_path, 'moved.nc', ds=ds)
+    valid, dropped, _ = validate_model_files(
+        files + [moved], 'netcdf4', 'time', 'fields', LOG)
+    assert valid == files + [moved]
+    assert dropped == []
+
+
 # ---------------------------------------------------------------------
 # batch-level behavior
 # ---------------------------------------------------------------------
