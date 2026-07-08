@@ -79,8 +79,8 @@ def parse_ofs_ctlfile(filename: str) -> tuple[list[list[str]], list[int], list[i
     with open(filename, encoding='utf-8') as file:
         model_ctlfile = file.read()
 
-    # Split into lines and parse
-    raw_lines = model_ctlfile.split('\n')
+    # Split into lines and parse (ignore first header row)
+    raw_lines = model_ctlfile.split('\n')[1:]
     split_lines: list[list[str]] = [line.split(' ') for line in raw_lines]
     # Remove empty strings from each line
     split_lines = [list(filter(None, line)) for line in split_lines]

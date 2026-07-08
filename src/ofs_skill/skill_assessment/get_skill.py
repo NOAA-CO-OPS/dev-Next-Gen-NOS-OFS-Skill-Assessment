@@ -113,8 +113,8 @@ def ofs_ctlfile_extract(prop, name_var, logger, model_dataset=None):
         if os.path.getsize(ctl_path) > 0:
             with open(ctl_path, encoding='utf-8') as file:
                 read_ofs_ctl_file = file.read()
-
-                lines = read_ofs_ctl_file.split('\n')
+                # Split into lines, ignoring the first header row
+                lines = read_ofs_ctl_file.split('\n')[1:]
                 lines = [x for x in lines if x != '']
                 lines = [i.split(' ') for i in lines]
                 lines = [list(filter(None, i)) for i in lines]
@@ -162,6 +162,7 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
                 obs_df = pd.read_csv(obs_path,
                     sep=r'\s+',
                     header=None,
+                    skiprows=1, # Added to skip the new header line
                 )
             else:
                 logger.error(
@@ -191,6 +192,7 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
                 ofs_df = pd.read_csv(prd_path,
                     sep=r'\s+',
                     header=None,
+                    skiprows=1
                 )
             else:
                 logger.error(
@@ -232,6 +234,7 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
                 ofs_df = pd.read_csv(prd_path,
                     sep=r'\s+',
                     header=None,
+                    skiprows=1
                     )
             except EmptyDataError:
                 return None

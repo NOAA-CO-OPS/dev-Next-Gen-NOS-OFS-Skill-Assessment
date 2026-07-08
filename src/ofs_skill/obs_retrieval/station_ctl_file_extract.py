@@ -76,8 +76,8 @@ def station_ctl_file_extract(ctlfile_path: str) -> Optional[tuple[list[list[str]
     with open(ctlfile_path, encoding='utf-8') as f:
         ctlfile = f.read()
 
-    # Split into lines
-    lines = ctlfile.split('\n')
+    # Split into lines, ignoring the first two header rows
+    lines = ctlfile.split('\n')[2:]
 
     # Extract station info (even lines: 0, 2, 4, ...)
     raw_lines1 = lines[0::2]
