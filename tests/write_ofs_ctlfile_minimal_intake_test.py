@@ -139,11 +139,16 @@ def _write_obs_station_ctl(control_dir, ofs, name_var, stations):
     """Write a minimal obs station.ctl file the writer will read.
 
     Format (per station_ctl_file_extract):
+        <Header Line 1>
+        <Header Line 2>
         <ID> <ID>_<SRC> "<name>"
           <lat> <lon> <depth> <pad> <datum>
     """
     path = control_dir / f'{ofs}_{name_var}_station.ctl'
-    lines = []
+    lines = [
+        'Station ID, Station info, Name',
+        '  Latitude, Longitude, Target-to-station datum offset (m), Water depth (m), Station datum (if applicable; zero otherwise)'
+    ]
     for sid, lat, lon, depth in stations:
         lines.append(f'{sid} {sid}_COOPS "Station {sid}"')
         lines.append(f'  {lat} {lon} {depth} 0.0 MLLW')
@@ -202,6 +207,10 @@ def test_write_ofs_ctlfile_fvcom_stations_minimal_intake(
     written_lines = [
         ln for ln in out_path.read_text().splitlines() if ln.strip()
     ]
+
+    # The model .ctl file now contains a single header row; skip it
+    written_lines = written_lines[1:]
+
     assert len(written_lines) == len(chosen_nodes), (
         f'expected {len(chosen_nodes)} ctl rows, got {len(written_lines)}: '
         f'{written_lines!r}'
