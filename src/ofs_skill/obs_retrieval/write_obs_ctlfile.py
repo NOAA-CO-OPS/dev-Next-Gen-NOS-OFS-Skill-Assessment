@@ -983,7 +983,7 @@ def _process_variable(
             encoding='utf-8',
         ) as output:
             output.write('Station ID, Station info, Name\n')
-            output.write('Latitude, Longitude, Datum offset (m), Water depth (m), Station datum\n')
+            output.write('  Latitude, Longitude, Target-to-station datum offset (m), Water depth (m), Station datum (if applicable; zero otherwise)\n')
             for i in ctl_file:
                 output.write(str(i))
             logger.info(
