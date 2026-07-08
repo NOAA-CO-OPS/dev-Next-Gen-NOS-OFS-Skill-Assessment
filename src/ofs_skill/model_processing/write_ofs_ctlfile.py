@@ -745,6 +745,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        output.write('Node/station index, Depth layer index, Latitude, Longitude, Station ID, Water depth (m)\n')
                         for ctl_entry in model_ctl_file:
                             output.write(str(ctl_entry))
                 elif prop.ofsfiletype == 'stations':
@@ -754,6 +755,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        output.write('Node/station index, Depth layer index, Latitude, Longitude, Station ID, Water depth (m)\n')
                         for ctl_entry in model_ctl_file:
                             output.write(str(ctl_entry))
 

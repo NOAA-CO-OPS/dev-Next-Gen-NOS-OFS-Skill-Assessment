@@ -578,6 +578,17 @@ def _fetch_and_format_station(
                     str(station_id + '_' + ofs + '_' +
                         name_var + '_station.obs'))
                 with open(obs_path, 'w', encoding='utf-8') as output:
+                    if name_var == 'cu':
+                        output.write('Days elapsed since Jan. 1, Year, Month, Day, Hours, Minutes, Current speed (m/s), Current direction (0-359), u, v\n')
+                    else:
+                        obs_col = None
+                        if name_var == 'wl':
+                            obs_col = 'Water level (m)'
+                        elif name_var == 'temp':
+                            obs_col = 'Water temperature (C)'
+                        elif name_var == 'salt':
+                            obs_col = 'Salinity (PSU)'
+                        output.write(f'Days elapsed since Jan. 1, Year, Month, Day, Hours, Minutes, {obs_col}\n')
                     for line in formatted_series:
                         output.write(str(line) + '\n')
                     logger.info(
