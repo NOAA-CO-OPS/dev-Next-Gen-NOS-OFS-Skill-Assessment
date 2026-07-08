@@ -13,6 +13,7 @@ import pytest
 import xarray as xr
 
 from ofs_skill.model_processing.model_file_validation import (
+    scrub_cached_copies,
     validate_model_files,
 )
 
@@ -309,6 +310,51 @@ def test_dims_returned_for_surviving_local_files(tmp_path):
     assert dims[files[0]]['station'] == N_STATION
     assert dims[files[0]]['time'] == N_TIME
     assert url in valid and str(bad) not in valid
+
+
+# ---------------------------------------------------------------------
+# cache scrub (issues #176 / #193)
+# ---------------------------------------------------------------------
+
+BUCKET = 'https://noaa-nos-ofs-pds.s3.amazonaws.com/cbofs/netcdf'
+
+
+def test_scrub_removes_partial_cached_copy(tmp_path):
+    cache = tmp_path / 'cache'
+    cache.mkdir()
+    good = _write_nc3(cache, 'a.nc')
+    partial = _truncate(_write_nc3(cache, 'b.nc'), 0.4)
+    urls = [f'{BUCKET}/a.nc', f'{BUCKET}/b.nc', f'{BUCKET}/notcached.nc']
+    removed = scrub_cached_copies(urls, str(cache), 'time', LOG)
+    assert removed == 1
+    import os
+    assert os.path.isfile(good)          # healthy copy kept
+    assert not os.path.isfile(partial)   # partial copy deleted
+
+
+def test_scrub_handles_simplecache_prefix_and_local_entries(tmp_path):
+    cache = tmp_path / 'cache'
+    cache.mkdir()
+    partial = _truncate(_write_nc3(cache, 'c.nc'), 0.4)
+    local_file = _write_nc3(tmp_path, 'local.nc')
+    urls = [f'simplecache::{BUCKET}/c.nc', local_file]
+    removed = scrub_cached_copies(urls, str(cache), 'time', LOG)
+    assert removed == 1
+    import os
+    assert not os.path.isfile(partial)
+    # Local (non-remote) entries are never touched by the scrub.
+    assert os.path.isfile(local_file)
+
+
+def test_scrub_noop_when_cache_healthy(tmp_path):
+    cache = tmp_path / 'cache'
+    cache.mkdir()
+    good = _write_nc3(cache, 'a.nc')
+    removed = scrub_cached_copies(
+        [f'{BUCKET}/a.nc'], str(cache), 'time', LOG)
+    assert removed == 0
+    import os
+    assert os.path.isfile(good)
 
 
 # ---------------------------------------------------------------------

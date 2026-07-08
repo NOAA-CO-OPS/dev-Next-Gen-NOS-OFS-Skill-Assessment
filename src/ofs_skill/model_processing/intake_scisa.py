@@ -51,7 +51,10 @@ import numpy as np
 import xarray as xr
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours
-from ofs_skill.model_processing.model_file_validation import validate_model_files
+from ofs_skill.model_processing.model_file_validation import (
+    scrub_cached_copies,
+    validate_model_files,
+)
 from ofs_skill.model_processing.netcdf_engine import resolve_engine
 
 
@@ -333,6 +336,13 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                 # simplecache: cache whole files (stations files are small,
                 # typically 1-10 MB each)
                 try:
+                    # A run interrupted mid-download leaves a partial
+                    # file in the cache that fsspec trusts as-is on the
+                    # next run, crashing the open with misleading
+                    # errors (issues #176/#193). Probe existing cached
+                    # copies and delete bad ones so they re-download.
+                    scrub_cached_copies(
+                        urlpaths, cache_dir, time_name, logger)
                     cached_urlpaths = [
                         f'simplecache::{url}' for url in urlpaths
                     ]
@@ -370,6 +380,11 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                     'Mixed file list: downloading %d remote files to '
                     'local cache (%d already local)', remote_n, local_n,
                 )
+                # Delete any partial cached copies left by an
+                # interrupted run before trusting them (issues
+                # #176/#193), and download to a temp name so a kill
+                # mid-download can't leave a partial file behind.
+                scrub_cached_copies(urlpaths, cache_dir, time_name, logger)
                 resolved = []
                 for f in urlpaths:
                     if isinstance(f, str) and f.startswith('http'):
@@ -377,7 +392,9 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                             cache_dir, os.path.basename(f))
                         if not os.path.isfile(local_path):
                             try:
-                                urllib.request.urlretrieve(f, local_path)
+                                urllib.request.urlretrieve(
+                                    f, local_path + '.part')
+                                os.replace(local_path + '.part', local_path)
                             except Exception as dl_err:
                                 logger.warning(
                                     'Failed to cache %s: %s. '
@@ -485,6 +502,18 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
 
     try:
         ds = _open_dataset(engine)
+    except ValueError as ex:
+        if 'buffer size must be a multiple of element size' in str(ex):
+            # Signature of a partially downloaded file in the fsspec
+            # cache (issues #176/#193). The pre-open cache scrub should
+            # remove these; if one slips through, say what happened
+            # instead of leaving a bare numpy error.
+            logger.error(
+                'Model open failed with "%s" — this is the signature '
+                'of a partially cached model file (a previous run was '
+                'likely interrupted mid-download). Clear the model '
+                'file cache (default: ~/.ofs_cache/s3/) and rerun.', ex)
+        raise
     except xr.MergeError as ex:
         logger.error(
             'Model files could not be combined: %s. Static metadata '

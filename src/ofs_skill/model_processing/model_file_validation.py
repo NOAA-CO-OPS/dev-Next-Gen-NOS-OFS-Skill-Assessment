@@ -46,6 +46,7 @@ from __future__ import annotations
 from collections import Counter
 import hashlib
 from logging import Logger
+import os
 import time
 from typing import Any, Optional
 
@@ -175,6 +176,77 @@ def _majority_dims(per_file_dims: list[dict], exempt: set) -> dict:
             counts.setdefault(name, Counter())[size] += 1
     return {name: counter.most_common(1)[0][0]
             for name, counter in counts.items()}
+
+
+def scrub_cached_copies(
+    urlpaths: list,
+    cache_dir: str,
+    time_name: Optional[str],
+    logger: Logger,
+) -> int:
+    """
+    Delete partial or corrupt cached copies of remote model files.
+
+    A run killed during the model-loading phase can leave a partially
+    downloaded file in the fsspec cache (``~/.ofs_cache/s3/``). On the
+    next run the cache is trusted as-is and the partial file surfaces
+    as an unrelated-looking crash — ``ValueError: buffer size must be
+    a multiple of element size`` or ``MergeError: conflicting values
+    for variable 'x'`` (a truncated NetCDF-3 file zero-fills its
+    static coordinates; see issues #176 / #193).
+
+    For every remote URL whose cached copy already exists, run the same
+    integrity probe used for archive files and delete copies that fail
+    — unlike archive files, a cached file is safely re-downloadable, so
+    removal is the right remedy rather than dropping the file from the
+    run.
+
+    Parameters
+    ----------
+    urlpaths : list of str
+        Remote URLs (http(s)/s3) about to be opened through the cache.
+        Non-remote entries are ignored.
+    cache_dir : str
+        The fsspec ``same_names=True`` cache directory (cached filename
+        equals the URL basename).
+    time_name : str or None
+        Name of the time dimension, for the integrity probe.
+    logger : Logger
+        Logger instance.
+
+    Returns
+    -------
+    int
+        Number of bad cached copies removed.
+    """
+    removed = 0
+    for url in urlpaths:
+        if not (isinstance(url, str) and _is_remote(url)):
+            continue
+        basename = url.split('::')[-1].split('?')[0].rsplit('/', 1)[-1]
+        cached = os.path.join(cache_dir, basename)
+        if not os.path.isfile(cached):
+            continue
+        reason, _, _ = _check_file(cached, time_name)
+        if reason is None:
+            continue
+        try:
+            os.remove(cached)
+            removed += 1
+            logger.warning(
+                'Removed bad cached copy %s (%s) — it will be '
+                're-downloaded. A previous run was likely interrupted '
+                'while downloading it.', cached, reason)
+        except OSError as ex:
+            logger.warning(
+                'Cached copy %s failed validation (%s) but could not '
+                'be removed (%s) — the model open may fail; clear the '
+                'cache directory manually.', cached, reason, ex)
+    if removed:
+        logger.info(
+            'Cache scrub removed %d partial/corrupt cached file(s) '
+            'from %s', removed, cache_dir)
+    return removed
 
 
 def validate_model_files(
