@@ -77,7 +77,14 @@ def station_ctl_file_extract(ctlfile_path: str) -> Optional[tuple[list[list[str]
         ctlfile = f.read()
 
     # Split into lines, ignoring the first two header rows
-    lines = ctlfile.split('\n')[2:]
+    lines = ctlfile.split('\n')
+    # Check if the file has contents AND if the first line is header
+    if len(lines) > 0 and 'Station ID' in lines[0]:
+        # It has the 2 header rows, so skip them
+        lines = lines[2:]
+    else:
+        # No headers found, process normally
+        pass
 
     # Extract station info (even lines: 0, 2, 4, ...)
     raw_lines1 = lines[0::2]
