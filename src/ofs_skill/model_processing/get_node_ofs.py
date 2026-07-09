@@ -236,7 +236,14 @@ def ofs_ctlfile_extract(prop, name_var, model, logger):
                 filename, encoding='utf-8'
         ) as file:
             model_ctlfile = file.read()
-            lines = model_ctlfile.split('\n')[1:]
+            lines = model_ctlfile.split('\n')
+            # Check if the file has contents AND if the first line is header
+            if len(lines) > 0 and 'Station ID' in lines[0]:
+                # It has the 2 header rows, so skip them
+                lines = lines[2:]
+            else:
+                # No headers found, process normally
+                pass
             lines = [i.split(' ') for i in lines]
             lines = [list(filter(None, i)) for i in lines]
             nodes = np.array(lines[:-1])[:, 0]
@@ -1800,7 +1807,7 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         encoding='utf-8',
                     ) as output:
                         if name_conventions[0] == 'cu':
-                            output.write('Days elapsed since Jan. 1, Year, Month, Day, Hours, Minutes, Current speed (m/s), Current direction (0-359), u, v\n')
+                            output.write('Julian days, Year, Month, Day, Hours, Minutes, Current speed (m/s), Current direction (0-359), u, v\n')
                         else:
                             obs_col = None
                             if name_conventions[0] == 'wl':
@@ -1809,7 +1816,7 @@ def get_node_ofs(prop, logger, model_dataset=None):
                                 obs_col = 'Water temperature (C)'
                             elif name_conventions[0] == 'salt':
                                 obs_col = 'Salinity (PSU)'
-                            output.write(f'Days elapsed since Jan. 1, Year, Month, Day, Hours, Minutes, {obs_col}\n')
+                            output.write(f'Julian days, Year, Month, Day, Hours, Minutes, {obs_col}\n')
                         for line in formatted_series:
                             output.write(str(line) + '\n')
                         logger.info(
