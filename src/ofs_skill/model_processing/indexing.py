@@ -874,7 +874,7 @@ def index_nearest_station(
 
     Notes
     -----
-    Uses a maximum distance threshold of 2 km.
+    Uses a maximum distance threshold of 4 km.
     Stations beyond this threshold are marked as NaN.
     """
     max_dist = 4.0  # km - cutoff for distance matching
