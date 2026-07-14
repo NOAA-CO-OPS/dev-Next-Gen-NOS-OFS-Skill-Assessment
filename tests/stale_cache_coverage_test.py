@@ -18,6 +18,7 @@ Covers:
 """
 
 import importlib.util
+import logging
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,8 +39,9 @@ WINDOW_START = datetime(2026, 3, 28, 18, 0)
 WINDOW_END = datetime(2026, 3, 29, 18, 0)
 
 
-@pytest.fixture(scope='module')
-def create_1dplot_mod():
+@pytest.fixture(scope='module', name='create_1dplot_mod')
+def fixture_create_1dplot_mod():
+    """Import bin/visualization/create_1dplot.py as a module."""
     spec = importlib.util.spec_from_file_location(
         'create_1dplot_stale_cache_under_test', CREATE_1DPLOT_PATH)
     mod = importlib.util.module_from_spec(spec)
@@ -61,6 +63,21 @@ def _write_pair_file(path, start, hours, header=True):
     path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
 
 
+def _make_logger():
+    """Return a plain logger for functions that require one."""
+    return logging.getLogger('stale_cache_test')
+
+
+def _paired_df(start, hours):
+    """Build a paired-data-shaped DataFrame with hourly timestamps."""
+    stamps = [start + timedelta(hours=i) for i in range(hours)]
+    return pd.DataFrame({
+        'DateTime': stamps,
+        'OBS': [7.4] * hours,
+        'OFS': [5.3] * hours,
+    })
+
+
 class _WindowProp:
     """Minimum prop surface for the run-window helpers."""
 
@@ -68,28 +85,37 @@ class _WindowProp:
                  end='2026-03-29T18:00:00Z'):
         self.start_date_full = start
         self.end_date_full = end
+        self.whichcasts = []
 
 
 class TestTimeseriesCoverage:
+    """Unit tests for the timeseries_coverage helper module."""
 
     def test_parse_run_window_iso_format(self):
+        """ISO-format dates parse to the expected window."""
         window = parse_run_window(_WindowProp())
         assert window == (WINDOW_START, WINDOW_END)
 
     def test_parse_run_window_compact_format(self):
+        """Compact YYYYMMDD-HH:MM:SS dates parse identically."""
         window = parse_run_window(
             _WindowProp('20260328-18:00:00', '20260329-18:00:00'))
         assert window == (WINDOW_START, WINDOW_END)
 
     def test_parse_run_window_unparseable_returns_none(self):
+        """Unparseable date strings yield None, not an exception."""
         assert parse_run_window(_WindowProp('garbage', 'garbage')) is None
 
     def test_parse_run_window_missing_attributes_returns_none(self):
-        # Some callers (and test stubs) hand in prop objects without the
-        # date attributes; staleness checks must be skipped, not crash.
+        """Prop objects without the date attributes yield None.
+
+        Some callers (and test stubs) hand in prop objects without the
+        date attributes; staleness checks must be skipped, not crash.
+        """
         assert parse_run_window(object()) is None
 
     def test_read_first_last_skips_header(self, tmp_path):
+        """The header row is skipped when reading first/last stamps."""
         pair = tmp_path / 'pair.int'
         _write_pair_file(pair, WINDOW_START, hours=25)
         first, last = read_first_last_timestamps(pair)
@@ -97,30 +123,34 @@ class TestTimeseriesCoverage:
         assert last == WINDOW_START + timedelta(hours=24)
 
     def test_fresh_file_covers_window(self, tmp_path):
+        """A file spanning the full window passes the coverage check."""
         pair = tmp_path / 'pair.int'
         _write_pair_file(pair, WINDOW_START, hours=25)
         assert covers_run_window(pair, WINDOW_START, WINDOW_END)
 
     def test_adjacent_stale_file_fails(self, tmp_path):
-        # Yesterday's file: ends exactly at the new window's start -- the
-        # daily-operations signature that produced one-point plots.
+        """Yesterday's file, ending exactly at the new window's start,
+        fails the check -- the daily-operations signature that produced
+        one-point plots."""
         pair = tmp_path / 'pair.int'
         _write_pair_file(pair, WINDOW_START - timedelta(hours=24), hours=25)
         assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
 
     def test_disjoint_stale_file_fails(self, tmp_path):
+        """A file from a disjoint window fails the check."""
         pair = tmp_path / 'pair.int'
         _write_pair_file(pair, WINDOW_START - timedelta(days=5), hours=25)
         assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
 
     def test_partial_coverage_from_data_gap_is_tolerated(self, tmp_path):
-        # A file that covers most of the window (e.g. the last model cycle
-        # not yet available) must NOT trigger regeneration churn.
+        """A file covering most of the window (e.g. the last model cycle
+        not yet available) must NOT trigger regeneration churn."""
         pair = tmp_path / 'pair.int'
         _write_pair_file(pair, WINDOW_START, hours=19)
         assert covers_run_window(pair, WINDOW_START, WINDOW_END)
 
     def test_unparseable_file_fails_open(self, tmp_path):
+        """A file with no parseable data rows is treated as covering."""
         pair = tmp_path / 'pair.int'
         pair.write_text('not a data row\nstill not one\n', encoding='utf-8')
         assert covers_run_window(pair, WINDOW_START, WINDOW_END)
@@ -150,9 +180,12 @@ OFS_CTL = [None, [29], None, None, ['8571421']]
 
 
 class TestEnsurePairedDataStaleness:
+    """Stale-pair handling in _ensure_paired_data_exists."""
 
     def test_stale_pair_is_deleted_and_regenerated(
             self, create_1dplot_mod, tmp_path, monkeypatch):
+        """A pair file from the previous window is deleted and its cast
+        queued for regeneration through get_skill."""
         pair = tmp_path / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
         _write_pair_file(pair, WINDOW_START - timedelta(hours=24), hours=25)
 
@@ -168,6 +201,7 @@ class TestEnsurePairedDataStaleness:
 
     def test_fresh_pair_is_left_alone(
             self, create_1dplot_mod, tmp_path, monkeypatch):
+        """A pair file covering the current window is reused as-is."""
         pair = tmp_path / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
         _write_pair_file(pair, WINDOW_START, hours=25)
 
@@ -179,26 +213,14 @@ class TestEnsurePairedDataStaleness:
             OFS_CTL, prop, VAR_INFO, _make_logger())
 
         assert pair.exists()
-        assert calls == []
-
-
-def _make_logger():
-    import logging
-    return logging.getLogger('stale_cache_test')
-
-
-def _paired_df(start, hours):
-    stamps = [start + timedelta(hours=i) for i in range(hours)]
-    return pd.DataFrame({
-        'DateTime': stamps,
-        'OBS': [7.4] * hours,
-        'OFS': [5.3] * hours,
-    })
+        assert not calls
 
 
 class TestDropStaleCasts:
+    """Plot-time guard against stale paired series."""
 
     def test_stale_cast_dropped_fresh_cast_kept(self, create_1dplot_mod):
+        """Only the cast whose series intersects the window survives."""
         prop = _WindowProp()
         prop.whichcasts = ['nowcast', 'forecast_b']
         fresh = _paired_df(WINDOW_START, 25)
@@ -212,16 +234,17 @@ class TestDropStaleCasts:
         assert len(pairs) == 1 and pairs[0] is fresh
 
     def test_all_stale_returns_empty(self, create_1dplot_mod):
+        """When every cast is stale, nothing is left to plot."""
         prop = _WindowProp()
         prop.whichcasts = ['nowcast']
         stale = _paired_df(WINDOW_START - timedelta(days=3), 25)
         pairs, casts = create_1dplot_mod._drop_stale_casts(
             [stale], ['nowcast'], prop, '8571421', _make_logger())
-        assert pairs == [] and casts == []
+        assert not pairs and not casts
 
     def test_nowcast_forecast_a_combo_is_exempt(self, create_1dplot_mod):
-        # combine_obs_across_casts applies no crop for this combo, so the
-        # guard must not drop anything either.
+        """combine_obs_across_casts applies no crop for this combo, so
+        the guard must not drop anything either."""
         prop = _WindowProp()
         prop.whichcasts = ['nowcast', 'forecast_a']
         stale = _paired_df(WINDOW_START - timedelta(days=3), 25)
@@ -232,10 +255,11 @@ class TestDropStaleCasts:
         assert len(pairs) == 2
 
     def test_unparseable_window_keeps_everything(self, create_1dplot_mod):
+        """Without a parseable window the guard is skipped entirely."""
         prop = _WindowProp('garbage', 'garbage')
         prop.whichcasts = ['nowcast']
         stale = _paired_df(WINDOW_START - timedelta(days=3), 25)
-        pairs, casts = create_1dplot_mod._drop_stale_casts(
+        _, casts = create_1dplot_mod._drop_stale_casts(
             [stale], ['nowcast'], prop, '8571421', _make_logger())
         assert casts == ['nowcast']
 
@@ -255,6 +279,7 @@ STATION_CTL = [[['8571421', 'name_Solomons', 'CO-OPS']],
 
 
 class TestFilenameKeyLeftMerge:
+    """Integration through _process_station_plot."""
 
     def test_partial_key_does_not_drop_rows(
             self, create_1dplot_mod, tmp_path, monkeypatch):
@@ -264,8 +289,8 @@ class TestFilenameKeyLeftMerge:
         pair_dir = tmp_path / 'pair'
         node_dir = tmp_path / 'node'
         visual_dir = tmp_path / 'visual'
-        for d in (pair_dir, node_dir, visual_dir):
-            d.mkdir()
+        for directory in (pair_dir, node_dir, visual_dir):
+            directory.mkdir()
 
         pair = pair_dir / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
         _write_pair_file(pair, WINDOW_START, hours=25)
@@ -279,7 +304,7 @@ class TestFilenameKeyLeftMerge:
 
         captured = {}
 
-        def _capture_plot(now_fores_paired, *args, **kwargs):
+        def _capture_plot(now_fores_paired, *_args, **_kwargs):
             captured['pairs'] = now_fores_paired
 
         monkeypatch.setattr(
@@ -297,13 +322,13 @@ class TestFilenameKeyLeftMerge:
 
     def test_stale_pair_reaches_no_plot(
             self, create_1dplot_mod, tmp_path, monkeypatch):
-        """End-to-end through _process_station_plot: a stale pair file must
-        not produce a plot call at all."""
+        """End-to-end through _process_station_plot: a stale pair file
+        must not produce a plot call at all."""
         pair_dir = tmp_path / 'pair'
         node_dir = tmp_path / 'node'
         visual_dir = tmp_path / 'visual'
-        for d in (pair_dir, node_dir, visual_dir):
-            d.mkdir()
+        for directory in (pair_dir, node_dir, visual_dir):
+            directory.mkdir()
 
         pair = pair_dir / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
         _write_pair_file(pair, WINDOW_START - timedelta(hours=24), hours=25)
@@ -317,6 +342,6 @@ class TestFilenameKeyLeftMerge:
         create_1dplot_mod._process_station_plot(
             0, OFS_CTL, STATION_CTL, prop, VAR_INFO, _make_logger())
 
-        assert calls == [], (
+        assert not calls, (
             'a stale pair file must be dropped by the plot-time guard, '
             'not rendered as a one-point plot')
