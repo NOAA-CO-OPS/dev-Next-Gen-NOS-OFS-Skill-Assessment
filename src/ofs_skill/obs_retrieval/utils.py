@@ -415,6 +415,61 @@ def get_parallel_config(logger=None, config_file=None):
     return result
 
 
+def get_station_match_max_dist(logger=None, config_file=None):
+    """Read the station-matching distance cutoff (km) from ``[settings]``.
+
+    Returns the ``station_match_max_dist_km`` value from the ``[settings]``
+    section of the config, falling back to the package default when the key
+    is absent, blank, or unparseable. The same value drives both the exact
+    great-circle match cutoff and the (latitude-aware) candidate pre-filter
+    box in ``index_nearest_station``, so matching stays consistent.
+
+    Parameters
+    ----------
+    logger : logging.Logger or None
+        Logger instance. If None, a module-level logger is used.
+    config_file : str or Path or None
+        Optional path to an ofs_dps.conf-style file (typically
+        ``getattr(prop, 'config_file', None)``). When None, falls back to the
+        repo default config.
+
+    Returns
+    -------
+    float
+        The cutoff distance in kilometers (always > 0).
+    """
+    # Imported here (not at module top) to avoid a circular import:
+    # indexing -> station_distance is fine, but obs_retrieval.utils is
+    # imported very early and model_processing may not be initialised yet.
+    from ofs_skill.model_processing.indexing import STATION_MATCH_MAX_DIST_KM
+
+    default = STATION_MATCH_MAX_DIST_KM
+
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
+    raw = Utils(config_file=config_file).read_config_section(
+        'settings', logger)
+    val = (raw or {}).get('station_match_max_dist_km', '').strip()
+    if not val:
+        return default
+    try:
+        parsed = float(val)
+    except ValueError:
+        logger.warning(
+            'station_match_max_dist_km=%r is not a number; using default '
+            '%.1f km', val, default,
+        )
+        return default
+    if parsed <= 0:
+        logger.warning(
+            'station_match_max_dist_km=%.3f must be positive; using default '
+            '%.1f km', parsed, default,
+        )
+        return default
+    return parsed
+
+
 def parse_arguments_to_list(
     argument: Union[str, list[str]],
     logger: logging.Logger

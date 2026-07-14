@@ -380,6 +380,13 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
     _conf = getattr(prop, 'config_file', None)
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
 
+    # Station-matching distance cutoff (km), read once from [settings] so the
+    # same value drives both the great-circle match test and the pre-filter
+    # box inside index_nearest_station.
+    station_match_max_dist = utils.get_station_match_max_dist(
+        logger, config_file=_conf
+    )
+
     prop.model_path = os.path.join(
         dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
     )
@@ -466,7 +473,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         prop.model_source,
                         name_var,
                         logger,
-                        extract[0]
+                        extract[0],
+                        max_dist_km=station_match_max_dist,
                     )
 
                 # For side-looking ADCPs (``height_from_bottom`` recorded

@@ -6,11 +6,32 @@ time series and creates paired datasets for skill assessment.
 """
 
 from datetime import datetime, timedelta
+from enum import Enum
 from logging import Logger
-from typing import Optional
+from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
+
+
+class PairingStatus(str, Enum):
+    """Sentinel outcomes returned by the pairing functions.
+
+    These are ``str`` subclasses so that legacy ``== 'NoDataFound'`` style
+    comparisons elsewhere in the codebase keep working, while call sites that
+    want type safety can compare against the enum members and let a type
+    checker verify exhaustiveness.
+    """
+
+    #: Obs and/or model input was missing or empty; no series was built.
+    NO_DATA_FOUND = 'NoDataFound'
+    #: A series was built but obs and model never share a valid timestamp.
+    NO_TEMPORAL_OVERLAP = 'NoTemporalOverlap'
+
+
+# Return type shared by the pairing functions: either the paired result
+# tuple, or a PairingStatus sentinel explaining why no pairing was produced.
+PairedResult = Union[tuple[list[list], pd.DataFrame], PairingStatus]
 
 
 def paired_scalar(
@@ -20,7 +41,7 @@ def paired_scalar(
     end_date_full: str,
     logger: Logger,
     lookback_hours: int = 6,
-) -> Optional[tuple[list[list], pd.DataFrame]]:
+) -> Optional[PairedResult]:
     """
     Create paired time series for scalar variables.
 
@@ -154,7 +175,10 @@ def paired_scalar(
         logger.error('No valid paired OBS/OFS data after dropping NaN - returning None')
         logger.error('OBS range: %s to %s', paired['OBS'].min(), paired['OBS'].max())
         logger.error('OFS range: %s to %s', paired['OFS'].min(), paired['OFS'].max())
-        return None
+        # Distinct sentinel so the caller can attribute this drop to the
+        # specific "no overlapping valid timestamps" cause (keep + warn per
+        # issue #200) rather than lumping it in with missing-file failures.
+        return PairingStatus.NO_TEMPORAL_OVERLAP
 
     paired = paired.reset_index()
 

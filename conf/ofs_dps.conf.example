@@ -203,3 +203,12 @@ use_s3_fallback=True
 # If True, set 'filename_path' to the path to your text file, including the filename.
 use_custom_filenames=False
 filename_path=path/to/filename.txt
+
+# Maximum distance (km) between an observation station and its nearest model
+# output location for the two to be paired in the skill assessment. Stations
+# whose nearest model location is farther than this are not assessed.
+# The same value is used to size the candidate search box, so it is applied
+# consistently across both the pre-filter and the final match test.
+# Keep this tight: proximity matters for the validity of the comparison.
+# Default is 4 km if this key is omitted.
+station_match_max_dist_km=4.0
