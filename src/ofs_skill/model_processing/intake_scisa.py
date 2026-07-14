@@ -51,6 +51,11 @@ import numpy as np
 import xarray as xr
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours
+from ofs_skill.model_processing.model_file_validation import (
+    scrub_cached_copies,
+    validate_model_files,
+)
+from ofs_skill.model_processing.netcdf_engine import resolve_engine
 
 
 def _extract_filename_from_encoding(ds):
@@ -228,20 +233,28 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         ]
         time_name = 'time'
 
-    # Custom NECOFS free-run station files are NetCDF3 and need the scipy
-    # engine. They are identified by this filename marker; if other NetCDF3
-    # custom files are added, extend this list. The intake_model call below
-    # also falls back with a clear error if the wrong engine is selected.
-    _netcdf3_filename_markers = ('2017_free_run_station',)
-    if prop.ofs in ['stofs_2d_glo'] or any(
-            marker in f
-            for f in file_list
-            for marker in _netcdf3_filename_markers):
-        engine = 'scipy'
-    elif prop.ofs in ['necofs', 'loofs2', 'secofs']:
-        engine = 'netcdf4'
-    else:
-        engine = 'h5netcdf'
+    # Choose the engine by detecting the batch's on-disk format (magic
+    # bytes) rather than a hardcoded per-OFS list — formats differ per
+    # OFS, per file type (stofs_2d_glo stations are NetCDF-3 while its
+    # fields are HDF5), and per source archive. See netcdf_engine.py;
+    # the [settings] engine_strategy config key can force an engine.
+    engine = resolve_engine(file_list, prop, logger)
+
+    # Drop unreadable / incomplete / dimensionally inconsistent files
+    # up front (with warnings) instead of letting them crash the
+    # multi-file open — files left behind by an interrupted forecast
+    # were failing whole multi-month runs (issue #194).
+    file_list, dropped_files, file_dims = validate_model_files(
+        file_list, engine, time_name, prop.ofsfiletype, logger)
+    if dropped_files:
+        # Corrupt files sniff as 'unknown' and can pull the whole batch
+        # down to netcdf4; re-resolve now that they are gone (cached
+        # sniffs make this cheap).
+        engine = resolve_engine(file_list, prop, logger)
+
+    # Record the engine so downstream extraction (get_node_ofs) can relax
+    # the thread-serialization guard when the engine is thread-safe.
+    prop.netcdf_engine = engine
 
     urlpaths = file_list
     if len(urlpaths) == 0:
@@ -262,14 +275,31 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     dim_ref: Any = None
 
     if prop.ofsfiletype == 'stations':
-        try:
-            dim_compat, dim_ref = get_station_dim(
-                engine, urlpaths, drop_variables or [], logger)
-        except Exception as ex:
-            logger.warning('Could not check number of stations before '
-                           'combining netcdfs in intake! Error: %s. '
-                           'Continuing...',
-                           ex)
+        # The validation pass already probed every local file's
+        # dimensions — reuse them instead of re-opening all files
+        # (get_station_dim was a second multi-minute pass over slow
+        # archive storage). Fall back to get_station_dim whenever any
+        # file wasn't probed (remote URLs) or lacks a station dim.
+        station_dims = [
+            file_dims[f]['station'] for f in urlpaths
+            if f in file_dims and 'station' in file_dims[f]
+        ]
+        if len(station_dims) == len(urlpaths):
+            if np.nanmax(np.diff(station_dims)) != 0:
+                dim_compat = False
+                dim_ref = int(np.argmin(station_dims))
+            logger.info(
+                'Station dimension check reused validation probes for '
+                '%d files (compatible=%s)', len(urlpaths), dim_compat)
+        else:
+            try:
+                dim_compat, dim_ref = get_station_dim(
+                    engine, urlpaths, drop_variables or [], logger)
+            except Exception as ex:
+                logger.warning('Could not check number of stations before '
+                               'combining netcdfs in intake! Error: %s. '
+                               'Continuing...',
+                               ex)
     # Build storage_options for S3 streaming when remote files are present.
     # Only use S3-specific options (anon, block_size) when URLs use s3://
     # protocol. For https:// URLs, use simpler HTTP-compatible options.
@@ -306,6 +336,13 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                 # simplecache: cache whole files (stations files are small,
                 # typically 1-10 MB each)
                 try:
+                    # A run interrupted mid-download leaves a partial
+                    # file in the cache that fsspec trusts as-is on the
+                    # next run, crashing the open with misleading
+                    # errors (issues #176/#193). Probe existing cached
+                    # copies and delete bad ones so they re-download.
+                    scrub_cached_copies(
+                        urlpaths, cache_dir, time_name, logger)
                     cached_urlpaths = [
                         f'simplecache::{url}' for url in urlpaths
                     ]
@@ -343,6 +380,11 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                     'Mixed file list: downloading %d remote files to '
                     'local cache (%d already local)', remote_n, local_n,
                 )
+                # Delete any partial cached copies left by an
+                # interrupted run before trusting them (issues
+                # #176/#193), and download to a temp name so a kill
+                # mid-download can't leave a partial file behind.
+                scrub_cached_copies(urlpaths, cache_dir, time_name, logger)
                 resolved = []
                 for f in urlpaths:
                     if isinstance(f, str) and f.startswith('http'):
@@ -350,7 +392,9 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                             cache_dir, os.path.basename(f))
                         if not os.path.isfile(local_path):
                             try:
-                                urllib.request.urlretrieve(f, local_path)
+                                urllib.request.urlretrieve(
+                                    f, local_path + '.part')
+                                os.replace(local_path + '.part', local_path)
                             except Exception as dl_err:
                                 logger.warning(
                                     'Failed to cache %s: %s. '
@@ -378,83 +422,123 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     ]
     preprocess_fn = make_preprocess_with_filename(raw_paths)
 
-    if dim_compat:  # This will only be FALSE for stations files when
-        # station dimensions do not match! Always True for fields
-        # files
-        # If station dimensions are all the same/compatible, send in all file
-        # names (urlpaths) at one time and let xarray/intake automagically
-        # combine datasets
-        if prop.model_source == 'schism':
-            if  prop.ofsfiletype == 'fields':
-                source = intake.open_netcdf(
-                    urlpath=urlpaths,
-                    xarray_kwargs={
-                        'combine': 'by_coords',  # <-- align files by coordinates
-                        'engine': engine,
-                        'preprocess': preprocess_fn,
-                        'drop_variables': drop_variables,
-                        'chunks': {'time': 1},
-                    },
-                    **s3_storage_opts,
-                )
+    def _open_dataset(open_engine):
+        if dim_compat:  # This will only be FALSE for stations files when
+            # station dimensions do not match! Always True for fields
+            # files
+            # If station dimensions are all the same/compatible, send in
+            # all file names (urlpaths) at one time and let xarray/intake
+            # automagically combine datasets
+            if prop.model_source == 'schism':
+                if prop.ofsfiletype == 'fields':
+                    source = intake.open_netcdf(
+                        urlpath=urlpaths,
+                        xarray_kwargs={
+                            'combine': 'by_coords',  # <-- align files by coordinates
+                            'engine': open_engine,
+                            'preprocess': preprocess_fn,
+                            'drop_variables': drop_variables,
+                            'chunks': {'time': 1},
+                        },
+                        **s3_storage_opts,
+                    )
+                else:
+                    source = intake.open_netcdf(
+                        urlpath=urlpaths,
+                        xarray_kwargs={
+                            'combine': 'nested',
+                            'engine': open_engine,
+                            'preprocess': preprocess_fn,
+                            'concat_dim': time_name,
+                            'decode_times': True,
+                            'chunks': 'auto',  # Enables lazy loading with Dask
+                        },
+                        **s3_storage_opts,
+                    )
+
             else:
+                # For fields files, chunk by single time step to bound memory
+                # for monthly/yearly runs with hundreds of files. Stations
+                # files have small spatial dims, so auto-chunking is safe.
+                chunk_spec: Any
+                if prop.ofsfiletype == 'fields':
+                    chunk_spec = {time_name: 1}
+                else:
+                    chunk_spec = 'auto'
+                # ``data_vars='minimal'`` stops xarray from replicating static
+                # mesh vars (lon, lat, lonc, latc, h, siglay, ...) along the
+                # concat time dim during multi-file open. On long windows
+                # this saves the per-whichcast cost of materializing static
+                # coords across hundreds of backing files and frees the
+                # downstream resample helper from having to walk those vars.
+                # ``indexing.py`` was previously coupled to the legacy
+                # ``(time, station)`` replicated shape via ad-hoc ``[0]`` /
+                # ``[1]`` time slicing; the ``_static_coord_1d`` helper in
+                # indexing.py now normalises both shapes so the call sites
+                # are happy under either mode.
                 source = intake.open_netcdf(
                     urlpath=urlpaths,
                     xarray_kwargs={
                         'combine': 'nested',
-                        'engine': engine,
+                        'engine': open_engine,
                         'preprocess': preprocess_fn,
                         'concat_dim': time_name,
+                        'data_vars': 'minimal',
                         'decode_times': True,
-                        'chunks': 'auto',  # Enables lazy loading with Dask
+                        'drop_variables': drop_variables,
+                        'chunks': chunk_spec,
                     },
                     **s3_storage_opts,
                 )
-
-        else:
-            # For fields files, chunk by single time step to bound memory
-            # for monthly/yearly runs with hundreds of files. Stations
-            # files have small spatial dims, so auto-chunking is safe.
-            chunk_spec: Any
-            if prop.ofsfiletype == 'fields':
-                chunk_spec = {time_name: 1}
-            else:
-                chunk_spec = 'auto'
-            # ``data_vars='minimal'`` stops xarray from replicating static
-            # mesh vars (lon, lat, lonc, latc, h, siglay, ...) along the
-            # concat time dim during multi-file open. On long windows
-            # this saves the per-whichcast cost of materializing static
-            # coords across hundreds of backing files and frees the
-            # downstream resample helper from having to walk those vars.
-            # ``indexing.py`` was previously coupled to the legacy
-            # ``(time, station)`` replicated shape via ad-hoc ``[0]`` /
-            # ``[1]`` time slicing; the ``_static_coord_1d`` helper in
-            # indexing.py now normalises both shapes so the call sites
-            # are happy under either mode.
-            source = intake.open_netcdf(
-                urlpath=urlpaths,
-                xarray_kwargs={
-                    'combine': 'nested',
-                    'engine': engine,
-                    'preprocess': preprocess_fn,
-                    'concat_dim': time_name,
-                    'data_vars': 'minimal',
-                    'decode_times': True,
-                    'drop_variables': drop_variables,
-                    'chunks': chunk_spec,
-                },
-                **s3_storage_opts,
-            )
-        # Read the dataset lazily
-        logger.info('No dimension changes needed, lazy loading catalog ...')
-        ds = source.to_dask()
-    else:
+            # Read the dataset lazily
+            logger.info('No dimension changes needed, lazy loading catalog ...')
+            return source.to_dask()
         logger.info('Station dimensions are inconsistent! Slicing stations...')
-        ds = remove_extra_stations(
-            engine,
+        return remove_extra_stations(
+            open_engine,
             urlpaths, dim_ref, drop_variables or [],
             time_name or '', logger,
         )
+
+    try:
+        ds = _open_dataset(engine)
+    except ValueError as ex:
+        if 'buffer size must be a multiple of element size' in str(ex):
+            # Signature of a partially downloaded file in the fsspec
+            # cache (issues #176/#193). The pre-open cache scrub should
+            # remove these; if one slips through, say what happened
+            # instead of leaving a bare numpy error.
+            logger.error(
+                'Model open failed with "%s" — this is the signature '
+                'of a partially cached model file (a previous run was '
+                'likely interrupted mid-download). Clear the model '
+                'file cache (default: ~/.ofs_cache/s3/) and rerun.', ex)
+        raise
+    except xr.MergeError as ex:
+        logger.error(
+            'Model files could not be combined: %s. Static metadata '
+            '(station coordinates/names/sigma levels) differs between '
+            'files in the batch even though their dimensions match — '
+            'the assessment window likely spans a model configuration '
+            'change. Stations batches with a clear majority drop the '
+            'minority files automatically during validation; otherwise '
+            'split the assessment window at the configuration-change '
+            'date.', ex)
+        raise
+    except OSError as ex:
+        # h5netcdf refuses non-HDF5 files with "file signature not
+        # found". Formats are detected before opening, but a sampled
+        # batch can hide a stray NetCDF-3 file — degrade to the
+        # netcdf4-family engine, which reads every format.
+        if engine == 'h5netcdf' and 'signature not found' in str(ex):
+            engine = 'netcdf4'
+            prop.netcdf_engine = engine
+            logger.warning(
+                'h5netcdf could not open the batch (%s); retrying with '
+                "engine='netcdf4'", ex)
+            ds = _open_dataset(engine)
+        else:
+            raise
 
     # If ADCIRC, we need to subset times to the appropriate whichcast.
     # Note that this needs to be done before removal of duplicate times.
