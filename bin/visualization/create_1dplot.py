@@ -90,6 +90,7 @@ from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment.get_skill import get_skill
+from ofs_skill.utils.timeseries_coverage import covers_run_window, parse_run_window
 from ofs_skill.visualization import create_gui, plotting_scalar, plotting_vector, summary_barplots
 
 warnings.filterwarnings('ignore')
@@ -269,6 +270,49 @@ def ofs_ctlfile_read(prop, name_var, logger):
     {name_var} from {prop.control_files_path}')
     return None
 
+def _drop_stale_casts(now_fores_paired, paired_casts, prop, station_id_val,
+                      logger):
+    """Drop casts whose paired series barely intersects the run window.
+
+    ``combine_obs_across_casts`` crops every trace to
+    ``[prop.start_date_full, prop.end_date_full]`` at plot time, so a pair
+    file left over from an earlier run window renders as a one-point plot
+    (adjacent windows share a boundary timestamp) or a blank plot
+    (disjoint windows). Rather than publish a misleading plot, drop any
+    cast with fewer than 2 points inside the window and log an ERROR.
+
+    Mirrors the crop condition in ``combine_obs_across_casts``: when both
+    nowcast and forecast_a are requested, no crop is applied, so no guard
+    is needed either.
+
+    Returns the filtered ``(now_fores_paired, paired_casts)`` lists.
+    """
+    casts_lower = [c.lower() for c in prop.whichcasts]
+    if 'nowcast' in casts_lower and 'forecast_a' in casts_lower:
+        return now_fores_paired, paired_casts
+    run_window = parse_run_window(prop)
+    if run_window is None:
+        return now_fores_paired, paired_casts
+    kept_pairs = []
+    kept_casts = []
+    for paired_data, cast in zip(now_fores_paired, paired_casts):
+        points_in_window = int(
+            ((paired_data['DateTime'] >= run_window[0])
+             & (paired_data['DateTime'] <= run_window[1])).sum())
+        if points_in_window < 2:
+            logger.error(
+                'Paired dataset for station %s cast %s has only %d data '
+                'point(s) inside the run window %s to %s -- the pair file '
+                'is likely stale (left over from an earlier run window). '
+                'Skipping this cast instead of plotting it.',
+                station_id_val, cast, points_in_window,
+                run_window[0], run_window[1])
+        else:
+            kept_pairs.append(paired_data)
+            kept_casts.append(cast)
+    return kept_pairs, kept_casts
+
+
 def _process_station_plot(
         i, read_ofs_ctl_file, read_station_ctl_file, prop, var_info, logger):
     """
@@ -292,6 +336,7 @@ def _process_station_plot(
         return None
 
     now_fores_paired = []
+    paired_casts = []
     deltat = 0
     for cast in station_prop.whichcasts:
         paired_data = None
@@ -331,11 +376,15 @@ def _process_station_plot(
                 serieskey = pd.read_csv(filepath)
                 serieskey['DateTime'] = pd.to_datetime(
                     serieskey['DateTime'])
+                # Left merge: the key only supplies hover-text filenames,
+                # so a stale or partial key must not drop data rows.
                 paired_data = pd.merge(
-                    paired_data, serieskey, on='DateTime', how='inner')
-                if len(paired_data) != len(serieskey):
-                    logger.warning('Filename key and time series have different '
-                                   'lengths!')
+                    paired_data, serieskey, on='DateTime', how='left')
+                if paired_data['filename'].isna().any():
+                    logger.warning(
+                        'Model filename key does not cover all paired '
+                        'timestamps; hover-text model cycles may be '
+                        'incomplete.')
             except FileNotFoundError:
                 logger.error(
                     'No model series filename key found! Skipping')
@@ -361,6 +410,14 @@ def _process_station_plot(
                         ['year', 'month', 'day', 'hour'],
                         observed=True)['minute'].idxmin()]
             now_fores_paired.append(paired_data)
+            paired_casts.append(cast)
+
+    now_fores_paired, paired_casts = _drop_stale_casts(
+        now_fores_paired, paired_casts, station_prop, station_id_val, logger)
+    # Keep cast labels aligned with the series that will be plotted --
+    # the plotting functions index prop.whichcasts positionally against
+    # now_fores_paired.
+    station_prop.whichcasts = paired_casts
 
     if len(now_fores_paired) > 0:
         try:
@@ -483,6 +540,7 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
     (prop.whichcast) and creates control files.
     """
     casts_needing_skill = set()
+    run_window = parse_run_window(prop, logger)
     for i in range(len(read_ofs_ctl_file[1])):
         for cast in prop.whichcasts:
             current_cast = cast.lower()
@@ -492,6 +550,19 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
                 f'{read_ofs_ctl_file[1][i]}_{current_cast}_'
                 f'{prop.ofsfiletype}_pair.int'
             )
+            # Pair filenames do not encode the run window, so a file left
+            # over from an earlier run would be cropped to 0-1 points at
+            # plot time. Delete it and regenerate instead.
+            if (os.path.isfile(pair_file) and run_window is not None
+                    and not covers_run_window(
+                        pair_file, run_window[0], run_window[1],
+                        logger=logger)):
+                logger.warning(
+                    'Paired dataset %s does not cover the run window '
+                    '%s to %s and is likely left over from an earlier '
+                    'run. Deleting it so it is regenerated.',
+                    pair_file, run_window[0], run_window[1])
+                os.remove(pair_file)
             if not os.path.isfile(pair_file):
                 if (prop.ofsfiletype == 'fields'
                         or read_ofs_ctl_file[1][i] >= 0):
