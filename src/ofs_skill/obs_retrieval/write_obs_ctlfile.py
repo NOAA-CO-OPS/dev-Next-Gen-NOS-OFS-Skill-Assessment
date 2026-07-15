@@ -740,16 +740,33 @@ def _process_chs_station(
                 else:
                     ldatum = _normalize_vdatum_name(datum).lower()
                     dummyval = 10
-                    _, _, z = vdatum_resilient.convert(
-                        station_datum.lower(),
-                        ldatum,
-                        y_value,
-                        x_value,
-                        dummyval,
-                        epoch=None,
-                        station_id=str(id_number),
-                        logger=logger,
-                    )
+                    try:
+                        _, _, z = vdatum_resilient.convert(
+                            station_datum.lower(),
+                            ldatum,
+                            y_value,
+                            x_value,
+                            dummyval,
+                            epoch=None,
+                            station_id=str(id_number),
+                            logger=logger,
+                        )
+                    except ValueError as exc:
+                        # CHS observed water level is referenced to chart
+                        # datum (labeled 'IGLD' here). For non-Great-Lakes
+                        # OFS there is no datum-conversion path from that
+                        # datum to a tidal datum such as MLLW, so the
+                        # station cannot be aligned to the model. Skip it
+                        # cleanly rather than crashing or mislabeling the
+                        # failure as missing data.
+                        logger.warning(
+                            'CHS station %s skipped: no datum conversion '
+                            'path from %s to %s. CHS water level is in chart '
+                            'datum and cannot be aligned to the requested '
+                            'datum (%s) for this OFS. %s',
+                            str(id_number), station_datum.lower(), ldatum,
+                            datum, exc)
+                        return []
                     zdiff = 'RANGE' if math.isinf(z) else round(z - dummyval, 2)
 
             return [
@@ -872,6 +889,7 @@ def _process_variable(
                         control_files_path=control_files_path,
                     )
                 )
+
             for future in futures:
                 result = future.result()
                 if result:
@@ -1116,6 +1134,7 @@ def write_obs_ctlfile(
                     config_file,
                 )
             )
+
         for future in futures:
             future.result()
 

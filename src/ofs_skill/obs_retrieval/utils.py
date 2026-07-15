@@ -347,6 +347,7 @@ def get_parallel_config(logger=None, config_file=None):
         'parallel_forecast_cycles': False,
         'parallel_obs_variables': False,
         'parallel_2d_interp': False,
+        'parallel_extract_slots': 2,
     }
 
     if logger is None:
@@ -407,10 +408,23 @@ def get_parallel_config(logger=None, config_file=None):
             except ValueError:
                 pass
 
+    # Parse parallel_extract_slots — max concurrent dask.compute calls
+    # across variable threads during model extraction. Only takes effect
+    # under the thread-safe h5netcdf engine (thread-unsafe engines are
+    # always fully serialized); bounds peak memory, since each slot holds
+    # one variable's time-window materialization.
+    val = raw.get('parallel_extract_slots', '').strip().lower()
+    if val:
+        try:
+            result['parallel_extract_slots'] = min(max(1, int(val)), 8)
+        except ValueError:
+            pass
+
     # If parallelization is globally disabled, force all workers to 1
     if not result['parallel_enabled']:
         for key in int_keys + ['ha_workers']:
             result[key] = 1
+        result['parallel_extract_slots'] = 1
 
     return result
 
