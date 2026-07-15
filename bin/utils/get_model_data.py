@@ -338,7 +338,17 @@ def make_file_list(prop, dates, dir_list, logger):
                                 file_list.append(file_name)
 
         elif prop.ofsfiletype == 'stations':
-            if prop.ofs in ('stofs_2d_glo'):
+            if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
+                for i, datei in enumerate(dates):
+                    for cycle in fcstcycles:
+                        # STOFS-3D writes one points (station) file per cycle
+                        # containing both the nowcast and forecast periods.
+                        file_name = f'{prop.ofs}.t{cycle}z.' \
+                            'points.cwl.temp.salt.vel.nc'
+                        file_list.append(
+                            os.path.join(dir_list[i], file_name).replace('\\', '/')
+                        )
+            elif prop.ofs in ('stofs_2d_glo'):
                 for i, datei in enumerate(dates):
                     for cycle in fcstcycles:
                         # For now we're just doing the combined water level ("cwl").
@@ -419,7 +429,17 @@ def make_file_list(prop, dates, dir_list, logger):
                                 file_list.append(file_name)
 
         elif prop.ofsfiletype == 'stations':
-            if prop.ofs in ('stofs_2d_glo'):
+            if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
+                for i, datei in enumerate(dates):
+                    for cycle in fcstcycles:
+                        # STOFS-3D writes one points (station) file per cycle
+                        # containing both the nowcast and forecast periods.
+                        file_name = f'{prop.ofs}.t{cycle}z.' \
+                            'points.cwl.temp.salt.vel.nc'
+                        file_list.append(
+                            os.path.join(dir_list[i], file_name).replace('\\', '/')
+                        )
+            elif prop.ofs in ('stofs_2d_glo'):
                 for i, datei in enumerate(dates):
                     for cycle in fcstcycles:
                         # For now we're just doing the combined water level ("cwl").
@@ -459,6 +479,32 @@ def make_file_list(prop, dates, dir_list, logger):
     return file_list
 
 
+def get_nodd_prefix_map(prop, logger):
+    """
+    Return (local_prefix, bucket_prefix) for translating file paths between
+    the local directory layout ({ofs}/{netcdf_dir}/) and the layout of the
+    NODD S3 bucket for the OFS.
+
+    The STOFS buckets have no netcdf subdirectory: STOFS-3D buckets use
+    capitalized top-level prefixes (STOFS-3D-Atl/, STOFS-3D-Pac/), and the
+    STOFS-2D-Global bucket stores date directories at the bucket root. For
+    all other OFS the bucket layout matches the local layout, so both
+    prefixes are identical and translation is a no-op.
+    """
+    _conf = getattr(prop, 'config_file', None)
+    dir_params = utils.Utils(_conf).read_config_section('directories', logger)
+    local_prefix = Path(
+        os.path.join(prop.ofs, dir_params['netcdf_dir'])
+    ).as_posix() + '/'
+    bucket_prefixes = {
+        'stofs_3d_atl': 'STOFS-3D-Atl/',
+        'stofs_3d_pac': 'STOFS-3D-Pac/',
+        'stofs_2d_glo': '',
+    }
+    bucket_prefix = bucket_prefixes.get(prop.ofs, local_prefix)
+    return local_prefix, bucket_prefix
+
+
 def list_of_urls(file_list, prop, logger):
     """
     This function take a file list and builds the URLs for all downloads.
@@ -467,6 +513,7 @@ def list_of_urls(file_list, prop, logger):
     # Retrieve urls from config file
     _conf = getattr(prop, 'config_file', None)
     url_params = utils.Utils(_conf).read_config_section('urls', logger)
+    local_prefix, bucket_prefix = get_nodd_prefix_map(prop, logger)
     if prop.ofs not in ('stofs_3d_atl', 'stofs_3d_pac', 'stofs_2d_glo'):
         url_root = url_params['nodd_s3']
         url_list = []
@@ -482,7 +529,7 @@ def list_of_urls(file_list, prop, logger):
         for file in file_list:
             url = (
                 f'{url_root}'
-                f"{file.replace('stofs_3d_atl/', 'STOFS-3D-Atl/')}"
+                f'{file.replace(local_prefix, bucket_prefix)}'
             )
             url_list.append(url)
     elif prop.ofs == 'stofs_2d_glo':
@@ -491,7 +538,7 @@ def list_of_urls(file_list, prop, logger):
         for file in file_list:
             url = (
                 f'{url_root}'
-                f"{file.replace('stofs_2d_glo/', '')}"
+                f'{file.replace(local_prefix, bucket_prefix)}'
             )
             url_list.append(url)
     logger.info(f'Starting URL building for {url_root}...')
@@ -500,7 +547,8 @@ def list_of_urls(file_list, prop, logger):
     return url_list
 
 
-def _download_single_file(mod_dat, savepath, ofs, logger):
+def _download_single_file(mod_dat, savepath, ofs, logger,
+                          bucket_prefix='', local_prefix=''):
     """
     Download a single model output file from the NODD.
 
@@ -518,6 +566,11 @@ def _download_single_file(mod_dat, savepath, ofs, logger):
         OFS name (e.g. 'cbofs', 'stofs_3d_atl').
     logger : logging.Logger
         Logger instance.
+    bucket_prefix : str
+        S3 bucket path prefix for the OFS (e.g. 'STOFS-3D-Atl/'), swapped
+        for local_prefix when building the local file path.
+    local_prefix : str
+        Local directory layout prefix (e.g. 'stofs_3d_atl/netcdf/').
 
     Returns
     -------
@@ -529,18 +582,15 @@ def _download_single_file(mod_dat, savepath, ofs, logger):
 
     try:
         # Build the local file path based on OFS type
-        if ofs not in ('stofs_3d_atl', 'stofs_3d_pac', 'stofs_2d_global'):
-            local_path = (
-                savepath + mod_dat.split('.com')[-1]
-            ).replace('//', '/')
-        elif ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
+        if ofs in ('stofs_3d_atl', 'stofs_3d_pac') and bucket_prefix:
             local_path = (
                 savepath + mod_dat.split('.com')[-1]
             ).replace('//', '/').replace(
-                'STOFS-3D-Atl/', 'stofs_3d_atl/',
+                bucket_prefix, local_prefix,
             )
         else:
-            # stofs_2d_global or other future stofs variants
+            # Non-stofs OFS (bucket layout matches the local layout) and
+            # stofs_2d_glo (savepath already carries the local prefix).
             local_path = (
                 savepath + mod_dat.split('.com')[-1]
             ).replace('//', '/')
@@ -581,36 +631,35 @@ def download_data(prop, list_of_urls1, dir_list, logger):
     """
     # Set up save path
     savepath = dir_list[0][:].split(prop.ofs)[0]
-    # Need to add a "stofs_2d_glo" to the savepath for stofs_2d_glo files
+    # Prefixes for translating bucket paths back to the local layout
+    local_prefix, bucket_prefix = get_nodd_prefix_map(prop, logger)
+    # Need to add the local prefix to the savepath for stofs_2d_glo files
     # because the NODD S3 bucket doesn't contain it (unlike other models).
     if prop.ofs == 'stofs_2d_glo':
-        savepath = savepath + 'stofs_2d_glo/'
+        savepath = savepath + local_prefix
     # First try the NODD and see if it's responding
     try:
         logger.info('Try NODD S3 download...')
-        if prop.ofs not in ('stofs_3d_atl', 'stofs_3d_pac', 'stofs_2d_glo'):
+        if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
+            urllib.request.urlretrieve(
+                list_of_urls1[0].replace('\\', '/'), (
+                    savepath +
+                    list_of_urls1[0].split('.com')[-1]
+                ).replace('//', '/').replace(bucket_prefix, local_prefix),
+            )
+        else:
             urllib.request.urlretrieve(
                 list_of_urls1[0].replace('\\', '/'), (
                     savepath +
                     list_of_urls1[0].split('.com')[-1]
                 ).replace('//', '/'),
             )
-        elif prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
-            urllib.request.urlretrieve(
-                list_of_urls1[0].replace('\\', '/'), (
-                    savepath +
-                    list_of_urls1[0].split('.com')[-1]
-                ).replace('//', '/').replace('STOFS-3D-Atl/', 'stofs_3d_atl/'),
-            )
-        elif prop.ofs in ('stofs_2d_glo'):
-            urllib.request.urlretrieve(
-                list_of_urls1[0].replace('\\', '/'),
-                (savepath + list_of_urls1[0].split('.com')[-1]).replace('//', '/'),
-            )
         logger.info('NODD is responding! Keep going -->')
         list_of_urls_main = list_of_urls1
     except (ValueError, HTTPError, Exception) as e_x:
         logger.info("NODD S3 is not responding! I'm out.")
+        logger.error('First download failed for URL: %s',
+                     list_of_urls1[0].replace('\\', '/'))
         logger.error(f'Exception: {e_x}')
         sys.exit(-1)
         # list_of_urls = list_of_urls2
@@ -623,6 +672,7 @@ def download_data(prop, list_of_urls1, dir_list, logger):
         futures = {
             executor.submit(
                 _download_single_file, mod_dat, savepath, prop.ofs, logger,
+                bucket_prefix, local_prefix,
             ): mod_dat
             for mod_dat in list_of_urls_main
         }

@@ -95,6 +95,7 @@ def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str
         if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
             # STOFS uses different path structure - no 'netcdf' subdirectory
             # Bucket structure: STOFS-3D-Atl/stofs_3d_atl.YYYYMMDD/filename.nc
+            ofs_relative_path = ofs_relative_path.replace(f'{prop.ofs}/netcdf/', f'{prop.ofs}/')
             ofs_relative_path = ofs_relative_path.replace('stofs_3d_atl/', 'STOFS-3D-Atl/')
             ofs_relative_path = ofs_relative_path.replace('stofs_3d_pac/', 'STOFS-3D-Pac/')
         elif prop.ofs == 'stofs_2d_glo':
@@ -102,6 +103,7 @@ def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str
             # STOFS-2D-Global uses different path structure - no 'netcdf' subdirectory
             # Bucket structure: stofs_2d_glo.YYYYMMDD/<filename>.nc
             # Note no <ofs> subdirectory in bucket, so we need to remove 'stofs_2d_glo/' from the path
+            ofs_relative_path = ofs_relative_path.replace(f'{prop.ofs}/netcdf/', f'{prop.ofs}/')
             ofs_relative_path = ofs_relative_path.replace('stofs_2d_glo/', '')
         else:
             url_root = url_params['nodd_s3']
