@@ -64,6 +64,12 @@ class MockProps:  # pylint: disable=too-few-public-methods
         self.end_date_full = '20250702-00:00:00'
 
 
+def _fake_urlretrieve(_url, dst):
+    """Stand-in for urlretrieve: writes bytes to the destination path."""
+    with open(dst, 'wb') as fil:
+        fil.write(b'data')
+
+
 def write_conf(tmp_path, netcdf_dir):
     """Write a minimal config with the given netcdf_dir and return its path."""
     conf = configparser.ConfigParser()
@@ -161,7 +167,8 @@ def test_download_single_file_local_path_restores_netcdf_dir(tmp_path):
     savepath = f'{tmp_path.as_posix()}/'
     target_dir = tmp_path / 'stofs_3d_atl' / 'netcdf' / 'stofs_3d_atl.20250701'
     target_dir.mkdir(parents=True)
-    with patch('bin.utils.get_model_data.urllib.request.urlretrieve') as mock_get:
+    with patch('bin.utils.get_model_data.urllib.request.urlretrieve',
+               side_effect=_fake_urlretrieve) as mock_get:
         # pylint: disable-next=protected-access
         local_path = get_model_data._download_single_file(
             url, savepath, logger,
@@ -171,7 +178,8 @@ def test_download_single_file_local_path_restores_netcdf_dir(tmp_path):
         f'{tmp_path.as_posix()}/stofs_3d_atl/netcdf/stofs_3d_atl.20250701/'
         'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc'
     )
-    mock_get.assert_called_once_with(url, local_path)
+    # Downloads go to a temporary .part name and are promoted on success
+    mock_get.assert_called_once_with(url, f'{local_path}.part')
 
 
 def test_download_single_file_savepath_with_bucket_prefix(tmp_path):
@@ -183,7 +191,8 @@ def test_download_single_file_savepath_with_bucket_prefix(tmp_path):
     savepath = f'{base.as_posix()}/'
     target_dir = base / 'stofs_3d_atl' / 'netcdf' / 'stofs_3d_atl.20250701'
     target_dir.mkdir(parents=True)
-    with patch('bin.utils.get_model_data.urllib.request.urlretrieve') as mock_get:
+    with patch('bin.utils.get_model_data.urllib.request.urlretrieve',
+               side_effect=_fake_urlretrieve) as mock_get:
         # pylint: disable-next=protected-access
         local_path = get_model_data._download_single_file(
             url, savepath, logger,
@@ -193,7 +202,8 @@ def test_download_single_file_savepath_with_bucket_prefix(tmp_path):
         f'{base.as_posix()}/stofs_3d_atl/netcdf/stofs_3d_atl.20250701/'
         'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc'
     )
-    mock_get.assert_called_once_with(url, local_path)
+    # Downloads go to a temporary .part name and are promoted on success
+    mock_get.assert_called_once_with(url, f'{local_path}.part')
 
 
 # ---------------------------------------------------------------------------
