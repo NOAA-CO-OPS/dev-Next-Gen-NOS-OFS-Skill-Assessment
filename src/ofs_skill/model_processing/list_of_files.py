@@ -834,7 +834,8 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                     hr_cyc_day.append(checkstr)
                                     files.append(af_name)
                             elif prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):  # add stofs filename format
-                                if 'n0' in af_name and 'fields' in af_name:  # skiping filed2d post process
+                                if ('n0' in af_name and 'fields' in af_name
+                                        and prop.ofsfiletype == 'fields'):  # skiping filed2d post process
                                     # Split the string based on underscores and periods
                                     spltstr = af_name.split('_')
                                     # Extract the values
@@ -845,17 +846,17 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                         ):
                                         files.append(af_name)
                                         hr_cyc_day.append(checkstr1)
-                                elif prop.ofsfiletype == 'stations':
-                                    # Split the string based on underscores and periods
-                                    spltstr = af_name.split('_')
-                                    # Extract the values
-                                    checkstr1 = spltstr[-2][-2:]
-                                    checkstr2 = spltstr[-1].split('.')[0][1:3]
-                                    if ((int(checkstr2) - 1 >= int(prop.startdate[-2:]))
-                                        and (int(checkstr1) - 1 <= int(prop.enddate[-2:]))
-                                        ):
-                                        files.append(af_name)
-                                        hr_cyc_day.append(checkstr1)
+                                elif (prop.ofsfiletype == 'stations'
+                                      and 'points' in af_name
+                                      and af_name.endswith('.nc')):
+                                    # STOFS-3D points files carry the full
+                                    # timeseries for the directory's date
+                                    # (e.g. stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc),
+                                    # so key the sort string off the model
+                                    # cycle, same as the stofs_2d_glo branch.
+                                    files.append(af_name)
+                                    hr_cyc_day.append(
+                                        '000' + af_name.split('.')[1][1:3] + '00')
                             elif prop.ofs in ('stofs_2d_glo'):
                                 # STOFS-2D-Global files each contain the full timeseries,
                                 # so we filter only on:
@@ -1048,7 +1049,8 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                     hr_cyc_day.append(checkstr)
                                     files.append(af_name)
                             elif prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):   # add stofs filename format
-                                if 'f0' in af_name and 'fields' in af_name:  # skiping filed2d post process
+                                if ('f0' in af_name and 'fields' in af_name
+                                        and prop.ofsfiletype == 'fields'):  # skiping filed2d post process
                                     # Split the string based on underscores and periods
                                     spltstr = af_name.split('_')
                                     # Extract the values
@@ -1059,16 +1061,17 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                         files.append(af_name)
                                         hr_cyc_day.append(checkstr1)
 
-                                elif prop.ofsfiletype == 'stations':
-                                    # Split the string based on underscores and periods
-                                    spltstr = af_name.split('_')
-                                    # Extract the values
-                                    checkstr1 = spltstr[-2][-2:]
-                                    checkstr2 = spltstr[-1].split('.')[0][1:3]
-
-                                    if (int(checkstr2) - 1 >= int(a_start[-2:])):
-                                        files.append(af_name)
-                                        hr_cyc_day.append(checkstr1)
+                                elif (prop.ofsfiletype == 'stations'
+                                      and 'points' in af_name
+                                      and af_name.endswith('.nc')
+                                      and cycle_z in af_name):
+                                    # STOFS-3D points files carry the full
+                                    # timeseries for the directory's date
+                                    # (e.g. stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc),
+                                    # so filter on the requested cycle only,
+                                    # same as the stofs_2d_glo branch.
+                                    files.append(af_name)
+                                    hr_cyc_day.append('0000000')
                             elif prop.ofs in ('stofs_2d_glo'):
                                 # STOFS-2D-Global files each contain the full timeseries,
                                 # so we filter on:
@@ -1217,7 +1220,8 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                     hr_cyc_day.append(checkstr)
                                     files.append(af_name)
                             elif prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):    # add stofs filename format
-                                if 'f0' in af_name and 'fields' in af_name:  # skiping filed2d post process:
+                                if ('f0' in af_name and 'fields' in af_name
+                                        and prop.ofsfiletype == 'fields'):  # skiping filed2d post process:
                                     # Split the string based on underscores and periods
                                     spltstr = af_name.split('_')
                                     # Extract the values
@@ -1229,18 +1233,17 @@ def list_of_files(prop: Any, dir_list: list[str], logger: Logger) -> list[str]:
                                         ):
                                         files.append(af_name)
                                         hr_cyc_day.append(checkstr1)
-                                elif prop.ofsfiletype == 'stations':
-                                    # Split the string based on underscores and periods
-                                    spltstr = af_name.split('_')
-                                    # Extract the values
-                                    checkstr1 = spltstr[-2][-2:]
-                                    checkstr2 = spltstr[-1].split('.')[0][1:3]
-
-                                    if ((int(checkstr2) - 1 >= int(prop.startdate[-2:]))
-                                        and (int(checkstr1) - 1 <= int(prop.enddate[-2:]))
-                                        ):
-                                        files.append(af_name)
-                                        hr_cyc_day.append(checkstr1)
+                                elif (prop.ofsfiletype == 'stations'
+                                      and 'points' in af_name
+                                      and af_name.endswith('.nc')):
+                                    # STOFS-3D points files carry the full
+                                    # timeseries for the directory's date
+                                    # (e.g. stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc),
+                                    # so key the sort string off the model
+                                    # cycle, same as the stofs_2d_glo branch.
+                                    files.append(af_name)
+                                    hr_cyc_day.append(
+                                        '000' + af_name.split('.')[1][1:3] + '00')
                             elif prop.ofs in ['stofs_2d_glo']:
                                 # STOFS-2D-Global files each contain the full timeseries,
                                 # so we filter only on:
