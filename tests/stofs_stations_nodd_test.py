@@ -23,7 +23,10 @@ from unittest.mock import patch
 import pytest
 
 from bin.utils import get_model_data
-from ofs_skill.model_processing.list_of_files import construct_s3_url
+from ofs_skill.model_processing.list_of_files import (
+    construct_s3_url,
+    get_nodd_prefix_map,
+)
 
 
 class MockLogger:
@@ -110,20 +113,23 @@ def test_make_file_list_stofs3d_stations_points_name(tmp_path, whichcast):
 # list_of_urls: no netcdf/ level on STOFS buckets, bucket prefix swapped
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize('netcdf_dir', ['netcdf', ''])
+@pytest.mark.parametrize('netcdf_dir', ['netcdf', '', 'model_output'])
 def test_list_of_urls_stofs3d_bucket_layout(tmp_path, netcdf_dir):
     """STOFS-3D URLs use the STOFS-3D-Atl/ prefix with no netcdf/ level."""
     urls = build_urls(tmp_path, 'stofs_3d_atl', 'nowcast', netcdf_dir)
     for url in urls:
-        assert url.startswith(
+        assert url.startswith((
             'https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
-            'stofs_3d_atl.202507') or url.startswith(
+            'stofs_3d_atl.202507',
             'https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
-            'stofs_3d_atl.202506')
+            'stofs_3d_atl.202506',
+        ))
         assert '/netcdf/' not in url
+        if netcdf_dir:
+            assert f'/{netcdf_dir}/' not in url
 
 
-@pytest.mark.parametrize('netcdf_dir', ['netcdf', ''])
+@pytest.mark.parametrize('netcdf_dir', ['netcdf', '', 'model_output'])
 def test_list_of_urls_stofs2d_bucket_layout(tmp_path, netcdf_dir):
     """STOFS-2D-Global URLs have date directories at the bucket root."""
     urls = build_urls(tmp_path, 'stofs_2d_glo', 'nowcast', netcdf_dir)
@@ -131,6 +137,8 @@ def test_list_of_urls_stofs2d_bucket_layout(tmp_path, netcdf_dir):
         assert url.startswith(
             'https://noaa-gestofs-pds.s3.amazonaws.com/stofs_2d_glo.202')
         assert '/netcdf/' not in url
+        if netcdf_dir:
+            assert f'/{netcdf_dir}/' not in url
 
 
 def test_list_of_urls_non_stofs_unchanged(tmp_path):
@@ -156,15 +164,70 @@ def test_download_single_file_local_path_restores_netcdf_dir(tmp_path):
     with patch('bin.utils.get_model_data.urllib.request.urlretrieve') as mock_get:
         # pylint: disable-next=protected-access
         local_path = get_model_data._download_single_file(
-            url, savepath, 'stofs_3d_atl', logger,
-            bucket_prefix='STOFS-3D-Atl/',
-            local_prefix='stofs_3d_atl/netcdf/',
+            url, savepath, logger,
+            prefix_map=('stofs_3d_atl/netcdf/', 'STOFS-3D-Atl/'),
         )
     assert local_path == (
         f'{tmp_path.as_posix()}/stofs_3d_atl/netcdf/stofs_3d_atl.20250701/'
         'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc'
     )
     mock_get.assert_called_once_with(url, local_path)
+
+
+def test_download_single_file_savepath_with_bucket_prefix(tmp_path):
+    """A savepath that itself contains 'STOFS-3D-Atl/' is never rewritten."""
+    logger = MockLogger()
+    url = ('https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
+           'stofs_3d_atl.20250701/stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc')
+    base = tmp_path / 'STOFS-3D-Atl' / 'data'
+    savepath = f'{base.as_posix()}/'
+    target_dir = base / 'stofs_3d_atl' / 'netcdf' / 'stofs_3d_atl.20250701'
+    target_dir.mkdir(parents=True)
+    with patch('bin.utils.get_model_data.urllib.request.urlretrieve') as mock_get:
+        # pylint: disable-next=protected-access
+        local_path = get_model_data._download_single_file(
+            url, savepath, logger,
+            prefix_map=('stofs_3d_atl/netcdf/', 'STOFS-3D-Atl/'),
+        )
+    assert local_path == (
+        f'{base.as_posix()}/stofs_3d_atl/netcdf/stofs_3d_atl.20250701/'
+        'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc'
+    )
+    mock_get.assert_called_once_with(url, local_path)
+
+
+# ---------------------------------------------------------------------------
+# get_nodd_prefix_map: prefix pairs and netcdf_dir validation
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize('ofs,netcdf_dir,expected', [
+    ('stofs_3d_atl', 'netcdf', ('stofs_3d_atl/netcdf/', 'STOFS-3D-Atl/')),
+    ('stofs_3d_atl', '', ('stofs_3d_atl/', 'STOFS-3D-Atl/')),
+    ('stofs_3d_pac', 'netcdf', ('stofs_3d_pac/netcdf/', 'STOFS-3D-Pac/')),
+    ('stofs_2d_glo', 'netcdf', ('stofs_2d_glo/netcdf/', '')),
+    ('cbofs', 'netcdf', ('cbofs/netcdf/', 'cbofs/netcdf/')),
+])
+def test_get_nodd_prefix_map_pairs(tmp_path, ofs, netcdf_dir, expected):
+    """Prefix pairs reflect the configured netcdf_dir and the OFS bucket."""
+    logger = MockLogger()
+    prop = MockProps(ofs=ofs, config_file=write_conf(tmp_path, netcdf_dir))
+    assert get_nodd_prefix_map(prop, logger) == expected
+
+
+@pytest.mark.parametrize('bad_dir', [
+    '/absolute/path',
+    '..',
+    '../up',
+    'a/../b',
+    '..\\up',
+    'C:/absolute',
+])
+def test_get_nodd_prefix_map_rejects_unsafe_netcdf_dir(tmp_path, bad_dir):
+    """Absolute or parent-traversing netcdf_dir values raise ValueError."""
+    logger = MockLogger()
+    prop = MockProps(config_file=write_conf(tmp_path, bad_dir))
+    with pytest.raises(ValueError, match='netcdf_dir'):
+        get_nodd_prefix_map(prop, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -202,3 +265,23 @@ def test_construct_s3_url_bucket_paths(tmp_path, ofs, local, expected):
                return_value=True):
         url = construct_s3_url(local, prop, logger)
     assert url == expected
+
+
+@pytest.mark.parametrize('netcdf_dir,subdir', [
+    ('model_output', 'model_output/'),
+    ('', ''),
+])
+def test_construct_s3_url_custom_netcdf_dir(tmp_path, netcdf_dir, subdir):
+    """A non-default (or blank) netcdf_dir is stripped from STOFS paths."""
+    logger = MockLogger()
+    prop = MockProps(ofs='stofs_3d_atl',
+                     config_file=write_conf(tmp_path, netcdf_dir))
+    local = (f'./example_data/stofs_3d_atl/{subdir}stofs_3d_atl.20250701/'
+             'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc')
+    with patch('ofs_skill.model_processing.list_of_files.check_s3_for_file',
+               return_value=True):
+        url = construct_s3_url(local, prop, logger)
+    assert url == (
+        'https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
+        'stofs_3d_atl.20250701/stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc'
+    )
