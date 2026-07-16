@@ -544,6 +544,12 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     # Note that this needs to be done before removal of duplicate times.
     if prop.model_source == 'adcirc':
         ds = fix_adcirc_dataset(prop, ds, urlpaths, logger)
+    # STOFS-3D (SCHISM) points files have the same per-cycle
+    # nowcast+forecast concatenated layout as ADCIRC and need the same
+    # per-cast subsetting; without it, the duplicate-time removal below
+    # silently substitutes other casts for the requested one.
+    elif needs_schism_points_cast_subsetting(prop):
+        ds = fix_schism_points_dataset(prop, ds, logger)
 
     # Round all times to nearest minute
     try:
@@ -1017,6 +1023,283 @@ def fix_adcirc_dataset(
                        'This may cause issues with downstream processing. Continuing...')
     #
     return data_set
+
+
+def needs_schism_points_cast_subsetting(prop: Any) -> bool:
+    """
+    Decide whether a dataset needs SCHISM points-file cast subsetting.
+
+    Only the STOFS-3D points (stations) products bundle the nowcast and
+    forecast periods in a single per-cycle file; the other SCHISM-based
+    OFS (loofs2, secofs) publish separate per-cast stations files, and
+    SCHISM fields files are per-cast too. Those must not be touched.
+
+    Parameters
+    ----------
+    prop : ModelProperties
+        ModelProperties object containing model_source, ofs, and
+        ofsfiletype.
+
+    Returns
+    -------
+    bool
+        True if fix_schism_points_dataset should run on the dataset.
+    """
+    return (getattr(prop, 'model_source', None) == 'schism'
+            and getattr(prop, 'ofsfiletype', None) == 'stations'
+            and getattr(prop, 'ofs', None) in ('stofs_3d_atl',
+                                               'stofs_3d_pac'))
+
+
+def fix_schism_points_dataset(
+    prop: Any,
+    data_set: xr.Dataset,
+    logger: Logger
+) -> xr.Dataset:
+    """
+    Subset concatenated SCHISM points files to the requested whichcast.
+
+    STOFS-3D points (stations) files have the same structure as the
+    ADCIRC / STOFS-2D-Global ones handled by ``fix_adcirc_dataset``:
+    each per-cycle file contains the nowcast and forecast periods
+    concatenated on a single time axis. Verified against operational
+    NODD output (STOFS-3D-Atl ``stofs_3d_atl.t12z.points.*.nc``): 1200
+    timesteps at 6-minute spacing spanning ``cycle - 24 h + dt``
+    through ``cycle + 96 h``; the first 240 steps (times <= cycle
+    time) are the nowcast segment and the remaining 960 (times > cycle
+    time) are the forecast segment.
+
+    Without this subsetting the only whichcast discrimination applied
+    to SCHISM points files is the downstream duplicate-time removal,
+    which silently substitutes later cycles' nowcast output for the
+    requested forecast (forecast_b) or an older initialization for the
+    requested one (forecast_a), biasing the reported forecast skill.
+
+    Parameters
+    ----------
+    prop : ModelProperties
+        ModelProperties object containing:
+        - ofs : str
+            OFS model name ('stofs_3d_atl' or 'stofs_3d_pac')
+        - ofsfiletype : str
+            Must be 'stations'
+        - whichcast : str
+            'nowcast', 'forecast_a', 'forecast_b'
+        - startdate : str
+            'YYYYMMDDHH' assessment start (forecast_a only)
+        - forecast_hr : str
+            Requested forecast cycle, e.g. '12z' (forecast_a only)
+    data_set : xr.Dataset
+        SCHISM points dataset (one or more concatenated cycles)
+    logger : Logger
+        Logger instance for logging messages
+
+    Returns
+    -------
+    xr.Dataset
+        Dataset with timesteps only for the appropriate whichcast.
+
+    Notes
+    -----
+    Unlike ``fix_adcirc_dataset`` this works from the actual time
+    coordinate instead of hard-coded timestep counts: file blocks are
+    the maximal runs of uniformly spaced times, and each block's cycle
+    time is its first time minus one timestep plus the nowcast length
+    (24 h / cycles-per-day from ``get_fcst_hours``). Selection per
+    whichcast:
+
+    - nowcast: keep each block's times <= its cycle time. Blocks never
+      overlap there, and the later dedup (keep='last') is a no-op.
+    - forecast_b: keep each block's times > its cycle time. Consecutive
+      cycles' forecasts overlap; the later dedup (keep='last') then
+      stitches them preferring the most recent cycle, mirroring what
+      forecast_b means for every other OFS.
+    - forecast_a: keep times > cycle time for the single requested
+      initialization (prop.startdate at prop.forecast_hr) only.
+    """
+    if prop.model_source != 'schism' or prop.ofsfiletype != 'stations':
+        raise ValueError('Function fix_schism_points_dataset should only '
+                         'be used with SCHISM points (stations) data!')
+
+    time_vals = data_set['time'].values
+    if time_vals.size < 2:
+        logger.warning('SCHISM points temporal subsetting: dataset has '
+                       f'{time_vals.size} timesteps; nothing to subset.')
+        return data_set
+
+    keep_t_s = _schism_points_keep_mask(prop, time_vals, logger)
+    if keep_t_s is None:
+        logger.warning('SCHISM points temporal subsetting: time axis has '
+                       'no increasing spacing; skipping subsetting.')
+        return data_set
+
+    if not keep_t_s.any():
+        raise ValueError(
+            'SCHISM points temporal subsetting: no timesteps matched '
+            f'whichcast {prop.whichcast}. The requested cycle file may '
+            'be missing from the run.')
+
+    logger.info('SCHISM points temporal subsetting: keeping '
+                f'{int(keep_t_s.sum())} of {time_vals.size} timesteps '
+                f'for whichcast {prop.whichcast}.')
+
+    # Positional selection: the concatenated axis has repeated labels,
+    # so label-based selection is not safe here.
+    return data_set.isel(time=keep_t_s)
+
+
+def _split_uniform_time_blocks(time_vals: np.ndarray) -> Any:
+    """
+    Partition a concatenated time axis into per-file blocks.
+
+    File blocks are maximal runs of uniformly spaced times: the
+    timestep is inferred as the most common positive spacing (6
+    minutes in operational STOFS-3D points files), and any other
+    spacing is the seam between two files (each new cycle rewinds the
+    axis to its own nowcast start).
+
+    Parameters
+    ----------
+    time_vals : np.ndarray
+        datetime64 time coordinate of the concatenated dataset.
+
+    Returns
+    -------
+    tuple of (list of (int, int), np.timedelta64) or None
+        Half-open (start, end) index spans, one per file block, and
+        the inferred timestep. None if the axis never increases.
+    """
+    diffs = np.diff(time_vals)
+    positive = diffs[diffs > np.timedelta64(0)]
+    if positive.size == 0:
+        return None
+    spacings, counts = np.unique(positive, return_counts=True)
+    delta_t = spacings[np.argmax(counts)]
+    seams = np.flatnonzero(diffs != delta_t) + 1
+    starts = np.concatenate(([0], seams))
+    ends = np.concatenate((seams, [time_vals.size]))
+    return list(zip(starts, ends)), delta_t
+
+
+def _forecast_a_requested_cycle(prop: Any) -> np.datetime64:
+    """
+    Resolve the single model cycle a forecast_a run assesses.
+
+    The forecast_a file list holds the requested cycle plus the
+    previous day's cycle (dates_range looks one day behind for STOFS
+    forecasts), so the requested initialization must be identified
+    from prop.startdate ('YYYYMMDDHH', hour stripped upstream) and
+    prop.forecast_hr (e.g. '12z').
+
+    Returns
+    -------
+    np.datetime64
+        The requested cycle time.
+
+    Raises
+    ------
+    ValueError
+        If startdate/forecast_hr are missing or unparseable.
+    """
+    try:
+        cycle_hour = int(str(prop.forecast_hr).lower().rstrip('z'))
+        start_str = str(prop.startdate)[:8]
+        return (np.datetime64(
+                    f'{start_str[:4]}-{start_str[4:6]}-{start_str[6:8]}')
+                + np.timedelta64(cycle_hour, 'h'))
+    except (AttributeError, TypeError, ValueError) as ex:
+        raise ValueError(
+            'SCHISM points temporal subsetting: forecast_a requires '
+            'prop.startdate (YYYYMMDDHH) and prop.forecast_hr (e.g. '
+            f"'12z') to identify the requested cycle; got "
+            f'startdate={getattr(prop, "startdate", None)!r}, '
+            f'forecast_hr={getattr(prop, "forecast_hr", None)!r}'
+        ) from ex
+
+
+def _warn_on_odd_block(n_block: int, expected_len: int,
+                       cycle_time: np.datetime64, fcstcycles: Any,
+                       logger: Logger) -> None:
+    """Warn when a file block deviates from the expected layout."""
+    if n_block != expected_len:
+        logger.warning('SCHISM points temporal subsetting: file block '
+                       f'has {n_block} timesteps, expected '
+                       f'{expected_len}. Continuing with the time-based '
+                       'boundary...')
+    cycle_hour = int((cycle_time - cycle_time.astype('datetime64[D]'))
+                     / np.timedelta64(1, 'h'))
+    if cycle_hour not in fcstcycles:
+        logger.warning('SCHISM points temporal subsetting: inferred '
+                       f'cycle time {cycle_time} is not on a known '
+                       f'forecast cycle hour ({list(fcstcycles)}Z). '
+                       'The file may be truncated at the start. '
+                       'Continuing...')
+
+
+def _block_cast_mask(block: np.ndarray, cycle_time: np.datetime64,
+                     whichcast: str, requested_cycle: Any,
+                     logger: Logger) -> np.ndarray:
+    """
+    Boolean keep-mask for one file block and one whichcast.
+
+    Times at or before the block's cycle time are its nowcast segment;
+    times after it are its forecast segment. forecast_a keeps the
+    forecast segment of the requested initialization only.
+    """
+    if whichcast == 'nowcast':
+        return block <= cycle_time
+    if whichcast == 'forecast_b':
+        return block > cycle_time
+    if whichcast == 'forecast_a':
+        if cycle_time == requested_cycle:
+            return block > cycle_time
+        logger.info('SCHISM points temporal subsetting: dropping '
+                    f'cycle {cycle_time} (forecast_a requested '
+                    f'{requested_cycle}).')
+        return np.zeros(block.size, dtype=bool)
+    raise ValueError(f'whichcast {whichcast} not recognized.')
+
+
+def _schism_points_keep_mask(prop: Any, time_vals: np.ndarray,
+                             logger: Logger) -> Any:
+    """
+    Build the whichcast keep-mask for a concatenated points time axis.
+
+    Splits the axis into per-file blocks, infers each block's cycle
+    time from its first timestep (first time = cycle - nowcast length
+    + one timestep), and masks each block per the requested whichcast.
+
+    Returns
+    -------
+    np.ndarray or None
+        Boolean mask over time_vals, or None if the axis is degenerate
+        (never increases) and subsetting should be skipped.
+    """
+    blocks = _split_uniform_time_blocks(time_vals)
+    if blocks is None:
+        return None
+    block_spans, delta_t = blocks
+
+    fcst_len_hours, fcstcycles = get_fcst_hours(prop.ofs)
+    nowcast_td = np.timedelta64(int(24 / len(fcstcycles) * 3600), 's')
+    expected_len = round(
+        (nowcast_td + np.timedelta64(int(fcst_len_hours * 3600), 's'))
+        / delta_t)
+
+    requested_cycle = None
+    if prop.whichcast == 'forecast_a':
+        requested_cycle = _forecast_a_requested_cycle(prop)
+
+    keep_t_s = np.zeros(time_vals.size, dtype=bool)
+    for start, end in block_spans:
+        # First block time is cycle - nowcast length + delta_t, so:
+        cycle_time = time_vals[start] - delta_t + nowcast_td
+        _warn_on_odd_block(end - start, expected_len, cycle_time,
+                           fcstcycles, logger)
+        keep_t_s[start:end] = _block_cast_mask(
+            time_vals[start:end], cycle_time, prop.whichcast,
+            requested_cycle, logger)
+    return keep_t_s
 
 
 def get_station_dim(engine: str, urlpaths: list[str],
