@@ -61,6 +61,7 @@ from ofs_skill.model_processing import (
     intake_model,
     list_of_dir,
     list_of_files,
+    local_model_dir,
     model_properties,
 )
 from ofs_skill.obs_retrieval import utils
@@ -181,8 +182,8 @@ def validate_and_initialize_parameters(prop):
         os.makedirs(directory, exist_ok=True)
 
     # Additional formatting for model path and date fields
-    prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
+    prop.model_path = local_model_dir(
+        dir_params['model_historical_dir'], prop.ofs, logger
     )
     prop.model_path = Path(prop.model_path).as_posix()
 

@@ -23,6 +23,7 @@ from netCDF4 import Dataset, date2num
 from pyproj import Transformer
 
 from ofs_skill.model_processing import model_properties
+from ofs_skill.model_processing.list_of_files import local_model_dir
 from ofs_skill.model_processing.model_source import get_model_source
 from ofs_skill.obs_retrieval import utils
 
@@ -390,8 +391,8 @@ def process_schism_stations(prop, logger):
     parameter_validation(prop, dir_params, logger)
 
     # Path for saving netcdfs
-    prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
+    prop.model_path = local_model_dir(
+        dir_params['model_historical_dir'], prop.ofs, logger
     )
     prop.model_path = Path(prop.model_path).as_posix()
 

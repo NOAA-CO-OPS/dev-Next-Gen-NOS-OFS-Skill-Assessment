@@ -15,13 +15,14 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import ContentTooShortError, HTTPError, URLError
 from urllib.parse import urlparse
 
 import numpy as np
 
 from ofs_skill.model_processing import get_fcst_cycle, model_properties
 from ofs_skill.model_processing.list_of_files import (
+    NETCDF_SUBDIR,
     get_nodd_prefix_map,
     swap_path_prefix,
 )
@@ -641,10 +642,47 @@ def _download_single_file(mod_dat, savepath, logger, prefix_map=('', '')):
                 else:
                     raise
 
-    except Exception as ex:
-        logger.error('Error: %s. Download failed %s!', ex, mod_dat)
+    except Exception as ex:  # pylint: disable=broad-exception-caught
+        _log_download_failure(mod_dat, ex, logger)
     # Reached only on failure (the retry loop either returns or raises)
     return None
+
+
+def _log_download_failure(url, exc, logger):
+    """
+    Log a failed NODD download with an accurate cause classification.
+
+    The old catch-all message ("NODD S3 is not responding!") presented
+    every failure as an outage, which sent users chasing AWS status
+    pages when the real problem was a bad URL (issue #213: HTTP 404s
+    from a wrong path layout). An HTTP error status means the NODD *is*
+    responding, so say what it said; reserve the unreachable wording
+    for actual connection failures.
+    """
+    if isinstance(exc, HTTPError):
+        if exc.code == 404:
+            logger.error(
+                'HTTP 404 Not Found for %s -- the NODD is reachable, but '
+                'no file exists at this URL. This is not a NODD outage. '
+                'Likely causes: the requested dates are not available on '
+                'the bucket, or the file name/path layout is wrong for '
+                'this OFS.', url)
+        else:
+            logger.error(
+                'The NODD responded with HTTP %s (%s) for %s.',
+                exc.code, exc.reason, url)
+    elif isinstance(exc, ContentTooShortError):
+        logger.error(
+            'Download of %s was interrupted before it completed (%s) -- '
+            'connection dropped mid-transfer; the partial file was '
+            'discarded.', url, exc.reason)
+    elif isinstance(exc, (URLError, TimeoutError, ConnectionError)):
+        reason = getattr(exc, 'reason', exc)
+        logger.error(
+            'Could not reach the NODD S3 endpoint for %s (%s) -- '
+            'network problem or NODD outage.', url, reason)
+    else:
+        logger.error('Download failed for %s: %s', url, exc)
 
 
 def _derive_savepath(dir_list, local_prefix):
@@ -709,13 +747,13 @@ def download_data(prop, list_of_urls1, dir_list, logger):
         )
         logger.info('NODD is responding! Keep going -->')
         list_of_urls_main = list_of_urls1
-    except (ValueError, HTTPError, Exception) as e_x:
-        logger.info("NODD S3 is not responding! I'm out.")
-        logger.error('First download failed for URL: %s',
-                     list_of_urls1[0].replace('\\', '/'))
-        logger.error(f'Exception: {e_x}')
+    except Exception as e_x:  # pylint: disable=broad-exception-caught
+        logger.error(
+            'Could not download the first model file from the NODD; '
+            'stopping before trying the rest.')
+        _log_download_failure(
+            list_of_urls1[0].replace('\\', '/'), e_x, logger)
         sys.exit(-1)
-        # list_of_urls = list_of_urls2
 
     # Download remaining files in parallel
     parallel_config = get_parallel_config(logger)
@@ -792,14 +830,11 @@ def get_model_data(prop, logger):
     # Directory & path set-up -->
     # Root path for saving files
     prop.model_save_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir'],
+        dir_params['model_historical_dir'], prop.ofs, NETCDF_SUBDIR,
     )
     prop.model_save_path = Path(prop.model_save_path).as_posix()
     # Path to files on the NODD
-    prop.model_nodd_path = os.path.join(
-        prop.ofs, dir_params['netcdf_dir'],
-    )
-    prop.model_nodd_path = Path(prop.model_nodd_path).as_posix()
+    prop.model_nodd_path = f'{prop.ofs}/{NETCDF_SUBDIR}'
     logger.info('Successfully set up paths.')
 
     # Directories, file lists, and URLs -- oh my

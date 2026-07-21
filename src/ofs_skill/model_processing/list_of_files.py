@@ -28,7 +28,7 @@ import os
 from datetime import datetime, timedelta
 from logging import Logger
 from os import listdir
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path
 from typing import Any, Optional
 
 import boto3
@@ -41,41 +41,70 @@ from ofs_skill.obs_retrieval import utils
 from ofs_skill.model_processing import get_fcst_cycle
 
 
+# Fixed name of the model-file subdirectory in the local data layout
+# ({model_historical_dir}/{ofs}/netcdf/...). This mirrors the layout of
+# the regular NODD bucket and is not configurable: the retired
+# 'netcdf_dir' config setting existed only as a workaround for STOFS
+# bucket URLs, which are now translated explicitly (see
+# get_nodd_prefix_map), and a configurable value only created ways to
+# build URLs and local trees that nothing else could find (issue #213).
+NETCDF_SUBDIR = 'netcdf'
+
+# One-time flag for the retired-setting notice in get_nodd_prefix_map.
+_NETCDF_DIR_NOTICE_DONE = False
+
+
+def _notice_retired_netcdf_dir(config_file: Any, logger: Logger) -> None:
+    """
+    Log a one-time notice if the retired netcdf_dir setting is present.
+
+    The [directories] netcdf_dir config setting is no longer read: the
+    local layout always uses NETCDF_SUBDIR. Configs that still carry the
+    setting keep working, but users who had customized it (typically the
+    old blank-value STOFS workaround) should know it no longer has any
+    effect.
+    """
+    global _NETCDF_DIR_NOTICE_DONE  # pylint: disable=global-statement
+    if _NETCDF_DIR_NOTICE_DONE:
+        return
+    _NETCDF_DIR_NOTICE_DONE = True
+    try:
+        dir_params = utils.Utils(config_file).read_config_section(
+            'directories', logger)
+        legacy_value = dir_params.get('netcdf_dir')
+    except Exception:  # pylint: disable=broad-exception-caught
+        return
+    if legacy_value is None:
+        return
+    if legacy_value == NETCDF_SUBDIR:
+        logger.info(
+            "The [directories] netcdf_dir config setting is deprecated "
+            'and no longer read; the line can be removed from the config '
+            'file.')
+    else:
+        logger.warning(
+            "The [directories] netcdf_dir config setting is deprecated "
+            f"and no longer read: the value '{legacy_value}' is ignored "
+            f"and model files always use the '{NETCDF_SUBDIR}' "
+            'subdirectory. The setting existed as a workaround for STOFS '
+            'NODD paths, which are now handled automatically; the line '
+            'can be removed from the config file.')
+
+
 def get_nodd_prefix_map(prop: Any, logger: Logger) -> tuple[str, str]:
     """
     Return (local_prefix, bucket_prefix) for translating file paths between
-    the local directory layout ({ofs}/{netcdf_dir}/) and the layout of the
-    NODD S3 bucket for the OFS.
+    the local directory layout ({ofs}/netcdf/) and the layout of the NODD
+    S3 bucket for the OFS.
 
     The STOFS buckets have no netcdf subdirectory: STOFS-3D buckets use
     capitalized top-level prefixes (STOFS-3D-Atl/, STOFS-3D-Pac/), and the
     STOFS-2D-Global bucket stores date directories at the bucket root. For
     all other OFS the bucket layout matches the local layout, so both
     prefixes are identical and translation is a no-op.
-
-    Raises
-    ------
-    ValueError
-        If the configured netcdf_dir is an absolute path or contains a
-        '..' component, either of which would relocate downloads outside
-        the data directory tree.
     """
-    _conf = getattr(prop, 'config_file', None)
-    dir_params = utils.Utils(_conf).read_config_section('directories', logger)
-    netcdf_dir = dir_params['netcdf_dir']
-    posix_dir = PurePosixPath(netcdf_dir)
-    windows_dir = PureWindowsPath(netcdf_dir)
-    if (posix_dir.is_absolute() or windows_dir.is_absolute()
-            or windows_dir.drive
-            or '..' in posix_dir.parts or '..' in windows_dir.parts):
-        raise ValueError(
-            f"Invalid netcdf_dir '{netcdf_dir}' in the [directories] config "
-            "section: it must be a relative subdirectory with no '..' "
-            'components.'
-        )
-    local_prefix = Path(
-        os.path.join(prop.ofs, netcdf_dir)
-    ).as_posix() + '/'
+    _notice_retired_netcdf_dir(getattr(prop, 'config_file', None), logger)
+    local_prefix = f'{prop.ofs}/{NETCDF_SUBDIR}/'
     bucket_prefixes = {
         'stofs_3d_atl': 'STOFS-3D-Atl/',
         'stofs_3d_pac': 'STOFS-3D-Pac/',
@@ -83,6 +112,40 @@ def get_nodd_prefix_map(prop: Any, logger: Logger) -> tuple[str, str]:
     }
     bucket_prefix = bucket_prefixes.get(prop.ofs, local_prefix)
     return local_prefix, bucket_prefix
+
+
+def local_model_dir(model_historical_dir: str, ofs: str,
+                    logger: Logger) -> str:
+    """
+    Return the local directory that holds model files for an OFS.
+
+    The canonical layout is {model_historical_dir}/{ofs}/netcdf/. Before
+    the netcdf_dir config setting was retired (issue #213), a blank value
+    (the old STOFS workaround) placed files directly under
+    {model_historical_dir}/{ofs}/ instead. So that existing archives keep
+    working without a re-download, this falls back to the legacy layout
+    when the canonical directory does not exist but the legacy one does
+    and is non-empty.
+
+    Downloads always write the canonical layout (get_model_data joins
+    NETCDF_SUBDIR directly), so a fresh tree resolves to canonical.
+    """
+    canonical = os.path.join(model_historical_dir, ofs, NETCDF_SUBDIR)
+    if os.path.isdir(canonical):
+        return canonical
+    legacy = os.path.join(model_historical_dir, ofs)
+    try:
+        legacy_entries = [e for e in os.listdir(legacy)
+                          if e != NETCDF_SUBDIR]
+    except OSError:
+        legacy_entries = []
+    if legacy_entries:
+        logger.info(
+            f'Model files for {ofs} found in the legacy layout {legacy} '
+            f'(no {NETCDF_SUBDIR}/ subdirectory); using it. New downloads '
+            f'are stored under {canonical}.')
+        return legacy
+    return canonical
 
 
 def swap_path_prefix(path: str, old_prefix: str, new_prefix: str) -> str:
@@ -129,35 +192,32 @@ def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str
         _conf = getattr(prop, 'config_file', None)
         url_params = utils.Utils(_conf).read_config_section('urls', logger)
 
-        # Prefix pair for translating the local {ofs}/{netcdf_dir}/ layout
-        # to the bucket layout (the two are identical for non-STOFS OFS).
+        # Prefix pair for translating the local {ofs}/netcdf/ layout to
+        # the bucket layout (the two are identical for non-STOFS OFS).
         local_prefix, bucket_prefix = get_nodd_prefix_map(prop, logger)
-        netcdf_dir = local_prefix[len(prop.ofs):].strip('/')
 
         # Normalize path separators
         local_path = Path(local_path).as_posix()
 
         # Extract the OFS-relative path (everything after the OFS name)
-        # Format: {base_path}/{ofs}/{netcdf_dir}/{rest_of_path}
+        # Format: {base_path}/{ofs}/netcdf/{rest_of_path}
         path_parts = local_path.split('/')
-
-        # Find where the configured netcdf subdirectory appears in the path
-        if netcdf_dir and netcdf_dir in path_parts:
-            netcdf_idx = path_parts.index(netcdf_dir)
-            # Reconstruct from OFS name onwards
-            ofs_relative_path = '/'.join(
-                [prop.ofs, netcdf_dir] + path_parts[netcdf_idx + 1:])
-        elif prop.ofs in path_parts:
-            # Fallback: find the OFS name in the path
-            ofs_relative_path = '/'.join(
-                path_parts[path_parts.index(prop.ofs):])
-        else:
+        if prop.ofs not in path_parts:
             logger.error(f'Cannot determine OFS-relative path from: {local_path}')
             return None
+        ofs_relative_path = '/'.join(
+            path_parts[path_parts.index(prop.ofs):])
+
+        # Normalize legacy-layout paths ({ofs}/ directly containing date
+        # directories, from the retired blank-netcdf_dir workaround; see
+        # local_model_dir) to the canonical local layout first.
+        if not ofs_relative_path.startswith(local_prefix):
+            ofs_relative_path = swap_path_prefix(
+                ofs_relative_path, f'{prop.ofs}/', local_prefix)
 
         # Select appropriate S3 bucket URL based on OFS
         url_root = url_params[get_s3_bucket(prop.ofs)]
-        # Swap the local {ofs}/{netcdf_dir}/ prefix for the bucket prefix.
+        # Swap the local {ofs}/netcdf/ prefix for the bucket prefix.
         # The STOFS buckets have no netcdf subdirectory (STOFS-3D buckets
         # use STOFS-3D-Atl/ or STOFS-3D-Pac/, STOFS-2D-Global stores date
         # directories at the bucket root); for all other OFS the bucket
@@ -619,9 +679,8 @@ def list_of_dir(prop: Any, logger: Logger) -> list[str]:
             logger.info('Trying backup dir...')
             dir_params = utils.Utils(_conf).read_config_section(
                 'directories', logger)
-            backup_model_path = os.path.join(
-                dir_params['model_historical_dir_backup'],
-                prop.ofs, dir_params['netcdf_dir'])
+            backup_model_path = local_model_dir(
+                dir_params['model_historical_dir_backup'], prop.ofs, logger)
 
             # Construct backup directory path based on OFS type and date
             if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac', 'stofs_2d_glo'):

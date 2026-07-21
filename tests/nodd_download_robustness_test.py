@@ -112,7 +112,7 @@ def test_truncated_download_never_promoted(tmp_path):
     assert local_path is None
     assert not final.exists(), 'truncated file must not reach the final path'
     assert not part.exists(), 'failed .part file must be cleaned up'
-    assert any(lvl == 'error' and 'Download failed' in msg
+    assert any(lvl == 'error' and 'interrupted' in msg
                for lvl, msg in logged)
 
 

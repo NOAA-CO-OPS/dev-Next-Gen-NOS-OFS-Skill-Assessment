@@ -22,11 +22,18 @@ from unittest.mock import patch
 
 import pytest
 
+import importlib
+
 from bin.utils import get_model_data
 from ofs_skill.model_processing.list_of_files import (
     construct_s3_url,
     get_nodd_prefix_map,
 )
+
+# The package __init__ re-exports a function named list_of_files that
+# shadows the submodule attribute, so resolve the module via importlib.
+list_of_files_module = importlib.import_module(
+    'ofs_skill.model_processing.list_of_files')
 
 
 class MockLogger:
@@ -90,11 +97,15 @@ def write_conf(tmp_path, netcdf_dir):
 
 
 def build_urls(tmp_path, ofs, whichcast, netcdf_dir):
-    """Run the list_of_dir -> make_file_list -> list_of_urls chain."""
+    """Run the list_of_dir -> make_file_list -> list_of_urls chain.
+
+    netcdf_dir only lands in the config file: the setting is retired,
+    so the layout (and every URL) must come out identical regardless.
+    """
     logger = MockLogger()
     prop = MockProps(ofs=ofs, whichcast=whichcast,
                      config_file=write_conf(tmp_path, netcdf_dir))
-    nodd_path = ofs if not netcdf_dir else f'{ofs}/{netcdf_dir}'
+    nodd_path = f'{ofs}/netcdf'
     dir_list, dates = get_model_data.list_of_dir(prop, nodd_path, logger)
     file_list = get_model_data.make_file_list(prop, dates, dir_list, logger)
     return get_model_data.list_of_urls(file_list, prop, logger)
@@ -121,7 +132,8 @@ def test_make_file_list_stofs3d_stations_points_name(tmp_path, whichcast):
 
 @pytest.mark.parametrize('netcdf_dir', ['netcdf', '', 'model_output'])
 def test_list_of_urls_stofs3d_bucket_layout(tmp_path, netcdf_dir):
-    """STOFS-3D URLs use the STOFS-3D-Atl/ prefix with no netcdf/ level."""
+    """STOFS-3D URLs use the STOFS-3D-Atl/ prefix with no netcdf/ level,
+    whatever value the retired netcdf_dir setting holds in the config."""
     urls = build_urls(tmp_path, 'stofs_3d_atl', 'nowcast', netcdf_dir)
     for url in urls:
         assert url.startswith((
@@ -137,7 +149,8 @@ def test_list_of_urls_stofs3d_bucket_layout(tmp_path, netcdf_dir):
 
 @pytest.mark.parametrize('netcdf_dir', ['netcdf', '', 'model_output'])
 def test_list_of_urls_stofs2d_bucket_layout(tmp_path, netcdf_dir):
-    """STOFS-2D-Global URLs have date directories at the bucket root."""
+    """STOFS-2D-Global URLs have date directories at the bucket root,
+    whatever value the retired netcdf_dir setting holds in the config."""
     urls = build_urls(tmp_path, 'stofs_2d_glo', 'nowcast', netcdf_dir)
     for url in urls:
         assert url.startswith(
@@ -207,37 +220,46 @@ def test_download_single_file_savepath_with_bucket_prefix(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# get_nodd_prefix_map: prefix pairs and netcdf_dir validation
+# get_nodd_prefix_map: fixed prefix pairs; netcdf_dir setting is retired
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize('ofs,netcdf_dir,expected', [
     ('stofs_3d_atl', 'netcdf', ('stofs_3d_atl/netcdf/', 'STOFS-3D-Atl/')),
-    ('stofs_3d_atl', '', ('stofs_3d_atl/', 'STOFS-3D-Atl/')),
+    ('stofs_3d_atl', '', ('stofs_3d_atl/netcdf/', 'STOFS-3D-Atl/')),
     ('stofs_3d_pac', 'netcdf', ('stofs_3d_pac/netcdf/', 'STOFS-3D-Pac/')),
     ('stofs_2d_glo', 'netcdf', ('stofs_2d_glo/netcdf/', '')),
     ('cbofs', 'netcdf', ('cbofs/netcdf/', 'cbofs/netcdf/')),
+    ('cbofs', '', ('cbofs/netcdf/', 'cbofs/netcdf/')),
+    ('cbofs', 'model_output', ('cbofs/netcdf/', 'cbofs/netcdf/')),
 ])
 def test_get_nodd_prefix_map_pairs(tmp_path, ofs, netcdf_dir, expected):
-    """Prefix pairs reflect the configured netcdf_dir and the OFS bucket."""
+    """Prefix pairs are fixed per OFS; the config value never matters."""
     logger = MockLogger()
     prop = MockProps(ofs=ofs, config_file=write_conf(tmp_path, netcdf_dir))
     assert get_nodd_prefix_map(prop, logger) == expected
 
 
-@pytest.mark.parametrize('bad_dir', [
-    '/absolute/path',
-    '..',
-    '../up',
-    'a/../b',
-    '..\\up',
-    'C:/absolute',
+@pytest.mark.parametrize('legacy_value,expect_level', [
+    ('netcdf', 'info'),
+    ('', 'warning'),
+    ('model_output', 'warning'),
+    ('/absolute/path', 'warning'),
 ])
-def test_get_nodd_prefix_map_rejects_unsafe_netcdf_dir(tmp_path, bad_dir):
-    """Absolute or parent-traversing netcdf_dir values raise ValueError."""
+def test_retired_netcdf_dir_notice(tmp_path, monkeypatch,
+                                   legacy_value, expect_level):
+    """A config that still carries netcdf_dir gets a one-time notice."""
+    monkeypatch.setattr(list_of_files_module, '_NETCDF_DIR_NOTICE_DONE',
+                        False)
     logger = MockLogger()
-    prop = MockProps(config_file=write_conf(tmp_path, bad_dir))
-    with pytest.raises(ValueError, match='netcdf_dir'):
-        get_nodd_prefix_map(prop, logger)
+    prop = MockProps(config_file=write_conf(tmp_path, legacy_value))
+    get_nodd_prefix_map(prop, logger)
+    logged = logger.warnings if expect_level == 'warning' else logger.infos
+    assert any('netcdf_dir' in msg and 'deprecated' in msg
+               for msg in logged)
+    # One-time only: a second call must not repeat the notice
+    count = len(logged)
+    get_nodd_prefix_map(prop, logger)
+    assert len(logged) == count
 
 
 # ---------------------------------------------------------------------------
@@ -277,21 +299,29 @@ def test_construct_s3_url_bucket_paths(tmp_path, ofs, local, expected):
     assert url == expected
 
 
-@pytest.mark.parametrize('netcdf_dir,subdir', [
-    ('model_output', 'model_output/'),
-    ('', ''),
+@pytest.mark.parametrize('ofs,local,expected', [
+    (
+        # Legacy layout (retired blank netcdf_dir): no netcdf/ level on disk
+        'stofs_3d_atl',
+        './example_data/stofs_3d_atl/stofs_3d_atl.20250701/'
+        'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc',
+        'https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
+        'stofs_3d_atl.20250701/stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc',
+    ),
+    (
+        # Non-STOFS legacy layout must gain the bucket's netcdf/ level
+        'cbofs',
+        './example_data/cbofs/2025/07/01/'
+        'cbofs.t00z.20250701.stations.nowcast.nc',
+        'https://noaa-nos-ofs-pds.s3.amazonaws.com/cbofs/netcdf/2025/07/01/'
+        'cbofs.t00z.20250701.stations.nowcast.nc',
+    ),
 ])
-def test_construct_s3_url_custom_netcdf_dir(tmp_path, netcdf_dir, subdir):
-    """A non-default (or blank) netcdf_dir is stripped from STOFS paths."""
+def test_construct_s3_url_legacy_local_layout(tmp_path, ofs, local, expected):
+    """Legacy-layout local paths (no netcdf/ level) map to correct URLs."""
     logger = MockLogger()
-    prop = MockProps(ofs='stofs_3d_atl',
-                     config_file=write_conf(tmp_path, netcdf_dir))
-    local = (f'./example_data/stofs_3d_atl/{subdir}stofs_3d_atl.20250701/'
-             'stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc')
+    prop = MockProps(ofs=ofs, config_file=write_conf(tmp_path, ''))
     with patch('ofs_skill.model_processing.list_of_files.check_s3_for_file',
                return_value=True):
         url = construct_s3_url(local, prop, logger)
-    assert url == (
-        'https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
-        'stofs_3d_atl.20250701/stofs_3d_atl.t12z.points.cwl.temp.salt.vel.nc'
-    )
+    assert url == expected

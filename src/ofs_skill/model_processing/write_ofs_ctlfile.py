@@ -35,6 +35,7 @@ from typing import Any
 import numpy as np
 
 import ofs_skill.model_processing.indexing as indexing
+from ofs_skill.model_processing.list_of_files import local_model_dir
 from ofs_skill.obs_retrieval import utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 
@@ -380,8 +381,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
     _conf = getattr(prop, 'config_file', None)
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
 
-    prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
+    prop.model_path = local_model_dir(
+        dir_params['model_historical_dir'], prop.ofs, logger
     )
     prop.model_path = Path(prop.model_path).as_posix()
 
