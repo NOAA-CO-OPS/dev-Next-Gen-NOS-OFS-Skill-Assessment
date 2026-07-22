@@ -1100,10 +1100,26 @@ def get_skill(prop, logger):
                     f'station_ledger_{p.ofs}_{name_var}_'
                     f'{p.whichcast}_{p.ofsfiletype}.csv',
                 )
-                written = ledger.to_csv(csv_path)
-                if written:
-                    logger.info('Station accounting ledger written to %s',
-                                written)
+                # A pass that ran fresh node matching is authoritative and
+                # always (re)writes the CSV. A pass that reused cached ctl
+                # files (node matching never ran) only writes when it has
+                # drops of its own to report or no CSV exists yet —
+                # otherwise it would overwrite a richer ledger from the
+                # matching pass with a header-only file.
+                if (
+                    ledger.has_stage('node_match')
+                    or ledger.has_drops
+                    or not os.path.isfile(csv_path)
+                ):
+                    written = ledger.to_csv(csv_path)
+                    if written:
+                        logger.info('Station accounting ledger written to %s',
+                                    written)
+                else:
+                    logger.debug(
+                        'Station ledger CSV at %s left in place: this pass '
+                        'reused cached station matching and recorded no '
+                        'drops', csv_path)
             except (OSError, ValueError):  # pragma: no cover - defensive only
                 logger.debug('Failed to write station ledger CSV',
                              exc_info=True)

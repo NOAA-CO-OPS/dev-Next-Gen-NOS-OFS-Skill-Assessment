@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from ofs_skill.visualization import make_static_plots
 from ofs_skill.visualization import plotting_functions as pf
 
 LOGGER = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ class TestTitleFragment:
         _write_model_ctl(
             tmp_path / 'cbofs_wl_model_station.ctl',
             [('8637689', 45, 37.229, -76.478)])
-        frag = pf._build_node_dist_fragment(
+        frag = pf.build_node_dist_fragment(
             _prop(tmp_path), ['8637689', 'Name', 'CO-OPS'], 'wl', LOGGER)
         assert frag == '&nbsp;(0.3&nbsp;km&nbsp;from&nbsp;station)'
 
@@ -151,12 +152,12 @@ class TestTitleFragment:
         _write_model_ctl(
             tmp_path / 'cbofs_wl_model_station.ctl',
             [('8637689', 45, 37.229, -76.478)])
-        frag = pf._build_node_dist_fragment(
+        frag = pf.build_node_dist_fragment(
             _prop(tmp_path), ['8637689', 'Name', 'CO-OPS'], 'wl', LOGGER)
         assert frag == '&nbsp;(&lt;0.1&nbsp;km&nbsp;from&nbsp;station)'
 
     def test_unresolvable_yields_empty(self, tmp_path):
-        frag = pf._build_node_dist_fragment(
+        frag = pf.build_node_dist_fragment(
             _prop(tmp_path), ['8637689', 'Name', 'CO-OPS'], 'wl', LOGGER)
         assert frag == ''
 
@@ -181,7 +182,6 @@ class TestTitleFragment:
             in title
 
     def test_get_title_static_carries_distance(self, tmp_path):
-        from ofs_skill.visualization import make_static_plots
         _write_obs_ctl(
             tmp_path / 'cbofs_temp_station.ctl',
             [('44042', 38.0, -76.4)])
@@ -197,3 +197,75 @@ class TestTitleFragment:
         title = make_static_plots.get_title_static(
             prop, '12', ('44042', 'Buoy', 'NDBC'), 'temp', LOGGER)
         assert 'Node ID: 12 (1.1 km from station)' in title
+
+
+class TestFiletypeAwareLookup:
+    def _both_ctls(self, tmp_path):
+        # Same station, deliberately different model coordinates in the
+        # stations-run ctl (~0.22 km away) vs the fields-run ctl
+        # (~2.22 km away), so the resolved distance reveals which file
+        # was consulted.
+        _write_obs_ctl(
+            tmp_path / 'cbofs_wl_station.ctl',
+            [('8637689', 37.000, -76.000)])
+        _write_model_ctl(
+            tmp_path / 'cbofs_wl_model_station.ctl',
+            [('8637689', 45, 37.002, -76.000)])
+        _write_model_ctl(
+            tmp_path / 'cbofs_wl_model.ctl',
+            [('8637689', 45, 37.020, -76.000)])
+
+    def test_stations_run_prefers_model_station_ctl(self, tmp_path):
+        self._both_ctls(tmp_path)
+        prop = SimpleNamespace(
+            ofs='cbofs', control_files_path=str(tmp_path),
+            ofsfiletype='stations')
+        dist = pf.get_station_node_distance_km(prop, '8637689', 'wl')
+        assert dist == pytest.approx(0.22, abs=0.02)
+
+    def test_fields_run_prefers_model_ctl(self, tmp_path):
+        # A fields run in a directory where a stations run also left its
+        # ctl file must resolve against the fields ctl, not the stale
+        # stations one.
+        self._both_ctls(tmp_path)
+        prop = SimpleNamespace(
+            ofs='cbofs', control_files_path=str(tmp_path),
+            ofsfiletype='fields')
+        dist = pf.get_station_node_distance_km(prop, '8637689', 'wl')
+        assert dist == pytest.approx(2.22, abs=0.02)
+
+
+class TestCoordCacheLifecycle:
+    def test_invalidation_hook_refreshes_obs_coords(self, tmp_path):
+        # The obs station.ctl can be rewritten mid-pipeline (side-looking
+        # ADCP depth back-patch); the invalidation hook must refresh the
+        # coordinate cache along with the depth cache.
+        obs_path = tmp_path / 'cbofs_wl_station.ctl'
+        _write_obs_ctl(obs_path, [('8637689', 37.000, -76.000)])
+        _write_model_ctl(
+            tmp_path / 'cbofs_wl_model_station.ctl',
+            [('8637689', 45, 37.000, -76.000)])
+        prop = _prop(tmp_path)
+
+        assert pf.get_station_node_distance_km(
+            prop, '8637689', 'wl') == pytest.approx(0.0, abs=1e-6)
+
+        _write_obs_ctl(obs_path, [('8637689', 37.010, -76.000)])
+        pf._invalidate_obs_station_depths(str(obs_path))
+        assert pf.get_station_node_distance_km(
+            prop, '8637689', 'wl') == pytest.approx(1.11, abs=0.02)
+
+    def test_missing_file_is_not_cached(self, tmp_path):
+        # A parse attempted before the ctl file exists must not pin an
+        # empty result: once the file appears, the distance resolves.
+        prop = _prop(tmp_path)
+        assert pf.get_station_node_distance_km(prop, '8637689', 'wl') is None
+
+        _write_obs_ctl(
+            tmp_path / 'cbofs_wl_station.ctl',
+            [('8637689', 37.000, -76.000)])
+        _write_model_ctl(
+            tmp_path / 'cbofs_wl_model_station.ctl',
+            [('8637689', 45, 37.000, -76.000)])
+        assert pf.get_station_node_distance_km(
+            prop, '8637689', 'wl') == pytest.approx(0.0, abs=1e-6)

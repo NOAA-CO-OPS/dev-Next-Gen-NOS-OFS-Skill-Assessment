@@ -23,7 +23,10 @@ arrays.
 
 from __future__ import annotations
 
+import copy
 import logging
+import math
+import pickle
 from types import SimpleNamespace
 
 import numpy as np
@@ -187,9 +190,6 @@ def test_triple_collision_reported_as_single_group():
 def test_stofs_name_mismatch_records_ledger_drop():
     # STOFS matches by station-name substring, not distance. An obs ID that
     # no model station name contains must be dropped and recorded.
-    class _Arr(np.ndarray):
-        pass
-
     station_names = np.array(['8531680_sta', '8510560_sta'], dtype=object)
     model = {'station_name': station_names}
     ctl = [['0.0', '0.0'], ['0.0', '0.0']]
@@ -252,9 +252,6 @@ def test_ledger_drop_is_best_effort_and_never_raises():
 
 
 def test_ledger_is_deepcopy_and_pickle_safe():
-    import copy
-    import pickle
-
     ledger = StationLedger(ofs='necofs', variable='water_level')
     ledger.note_stage('node_match', count_in=45, count_out=40)
     ledger.drop('8531680', stage='node_match', reason='far')
@@ -329,8 +326,6 @@ def test_prefilter_box_is_latitude_aware_superset_of_cutoff():
         lat_half, lon_half = indexing._prefilter_halfwidths_deg(lat, max_dist)
         # Convert the E-W half-width back to km at this latitude and confirm
         # it still covers the cutoff (with the safety factor).
-        import math
-
         km_ew = lon_half * indexing._KM_PER_DEG_LAT * math.cos(math.radians(lat))
         assert km_ew >= max_dist, (
             f'box E-W reach {km_ew:.2f} km < cutoff {max_dist} km at {lat} N'
@@ -354,6 +349,25 @@ def test_high_latitude_station_within_cutoff_still_matches():
         prop, ctl, model, 'fvcom', 'wl', logger, ids, max_dist_km=4.0
     )
     assert out[0] == 0, 'within-cutoff high-latitude station must match'
+
+
+def test_ledger_has_stage_and_has_drops():
+    # get_skill uses these to decide whether a pass may (re)write the
+    # ledger CSV: a pass that never ran node matching and recorded no
+    # drops must not clobber the authoritative CSV from the matching pass.
+    ledger = StationLedger(ofs='cbofs', variable='water_level')
+    assert not ledger.has_stage('node_match')
+    assert not ledger.has_drops
+
+    ledger.note_stage('obs_ctl', count_in=18)
+    assert not ledger.has_stage('node_match')
+
+    ledger.note_stage('node_match', count_in=18, count_out=15)
+    assert ledger.has_stage('node_match')
+
+    assert not ledger.has_drops
+    ledger.drop('8551762', stage='node_match', reason='too far')
+    assert ledger.has_drops
 
 
 if __name__ == '__main__':

@@ -6,6 +6,8 @@ Calculates spatial distances and finds nearest neighbors for different model typ
 (FVCOM, ROMS, SCHISM, ADCIRC).
 """
 
+from __future__ import annotations
+
 import logging
 import math
 from typing import Any

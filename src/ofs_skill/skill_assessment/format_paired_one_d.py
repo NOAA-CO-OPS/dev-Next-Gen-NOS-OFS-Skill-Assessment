@@ -17,14 +17,12 @@ import pandas as pd
 class PairingStatus(str, Enum):
     """Sentinel outcomes returned by the pairing functions.
 
-    These are ``str`` subclasses so that legacy ``== 'NoDataFound'`` style
-    comparisons elsewhere in the codebase keep working, while call sites that
-    want type safety can compare against the enum members and let a type
-    checker verify exhaustiveness.
+    Members are ``str`` subclasses so that plain string comparisons and
+    string-typed handling elsewhere in the codebase keep working, while
+    call sites that want type safety can compare against the enum members
+    and let a type checker verify exhaustiveness.
     """
 
-    #: Obs and/or model input was missing or empty; no series was built.
-    NO_DATA_FOUND = 'NoDataFound'
     #: A series was built but obs and model never share a valid timestamp.
     NO_TEMPORAL_OVERLAP = 'NoTemporalOverlap'
 
@@ -71,11 +69,14 @@ def paired_scalar(
 
     Returns
     -------
-    Optional[Tuple[List[List], pd.DataFrame]]
-        Tuple containing:
+    Optional[PairedResult]
+        On success, a tuple containing:
         - formatted_series: List of lists with paired data
         - paired: DataFrame with paired observations and model data
-        Returns None if no valid paired data is found
+        Returns ``PairingStatus.NO_TEMPORAL_OVERLAP`` when both series
+        exist but share no valid timestamp in the requested window, and
+        ``None`` for the remaining no-valid-paired-data cases (e.g. the
+        obs or model series is entirely NaN).
     """
     try:
         datetime.strptime(start_date_full, '%Y%m%d-%H:%M:%S')

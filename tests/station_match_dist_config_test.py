@@ -66,3 +66,30 @@ def test_non_positive_value_falls_back_to_default(tmp_path):
         get_station_match_max_dist(logger, config_file=cfg)
         == STATION_MATCH_MAX_DIST_KM
     )
+
+
+def test_nan_value_falls_back_to_default(tmp_path):
+    # float('nan') passes a plain "<= 0" guard (all NaN comparisons are
+    # False) and would silently drop every station downstream — it must
+    # fall back to the default like any other invalid value.
+    cfg = _write_conf(
+        tmp_path,
+        '[settings]\nstation_match_max_dist_km=nan\n',
+    )
+    assert (
+        get_station_match_max_dist(logger, config_file=cfg)
+        == STATION_MATCH_MAX_DIST_KM
+    )
+
+
+def test_infinite_value_falls_back_to_default(tmp_path):
+    # inf parses as a valid positive float but makes the cutoff (and the
+    # candidate box) unbounded, defeating the proximity requirement.
+    cfg = _write_conf(
+        tmp_path,
+        '[settings]\nstation_match_max_dist_km=inf\n',
+    )
+    assert (
+        get_station_match_max_dist(logger, config_file=cfg)
+        == STATION_MATCH_MAX_DIST_KM
+    )

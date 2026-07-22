@@ -136,7 +136,7 @@ def get_title_static(prop, node, station_id, name_var, logger):
 
     # Station-to-node distance, shown inline after the node ID; strip
     # the HTML tokens for matplotlib rendering.
-    node_dist = plotting_functions._build_node_dist_fragment(
+    node_dist = plotting_functions.build_node_dist_fragment(
         prop, station_id, name_var, logger,
     ).replace('&nbsp;', ' ').replace('&lt;', '<')
     # Currents plots get the same obs/model depth + ADCP-type annotation

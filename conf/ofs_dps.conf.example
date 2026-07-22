@@ -220,6 +220,9 @@ filename_path=path/to/filename.txt
 # consistently across both the pre-filter and the final match test.
 # Keep this tight: proximity matters for the validity of the comparison.
 # Default is 4 km if this key is omitted.
+# Scope: applies to stations-filetype runs (-t stations) only. Fields runs
+# match each station to the nearest wet grid node with no distance cutoff,
+# and STOFS stations files are matched by station name, not distance.
 station_match_max_dist_km=4.0
 
 # NetCDF engine selection for reading model files. Three modes:

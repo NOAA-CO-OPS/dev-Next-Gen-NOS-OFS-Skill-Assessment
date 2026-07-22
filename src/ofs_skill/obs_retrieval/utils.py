@@ -6,6 +6,7 @@ Utility class for configuration management and helper functions.
 
 import configparser
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -450,12 +451,14 @@ def get_station_match_max_dist(logger=None, config_file=None):
     Returns
     -------
     float
-        The cutoff distance in kilometers (always > 0).
+        The cutoff distance in kilometers (always finite and > 0).
     """
-    # Imported here (not at module top) to avoid a circular import:
-    # indexing -> station_distance is fine, but obs_retrieval.utils is
-    # imported very early and model_processing may not be initialised yet.
-    from ofs_skill.model_processing.indexing import STATION_MATCH_MAX_DIST_KM
+    # Imported here (not at module top) so that importing obs_retrieval.utils
+    # never pulls in the heavier model_processing package at module-import
+    # time (utils is imported very early, including by CLI --help paths).
+    from ofs_skill.model_processing.indexing import (  # pylint: disable=import-outside-toplevel
+        STATION_MATCH_MAX_DIST_KM,
+    )
 
     default = STATION_MATCH_MAX_DIST_KM
 
@@ -475,10 +478,10 @@ def get_station_match_max_dist(logger=None, config_file=None):
             '%.1f km', val, default,
         )
         return default
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         logger.warning(
-            'station_match_max_dist_km=%.3f must be positive; using default '
-            '%.1f km', parsed, default,
+            'station_match_max_dist_km=%r must be a finite positive number; '
+            'using default %.1f km', parsed, default,
         )
         return default
     return parsed

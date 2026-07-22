@@ -152,6 +152,22 @@ class StationLedger:
 
     # -- reporting ---------------------------------------------------------
 
+    def has_stage(self, stage: str) -> bool:
+        """Return True when ``stage`` was recorded via ``note_stage``.
+
+        Lets callers distinguish a ledger that witnessed a pipeline stage
+        (e.g. fresh node matching) from one attached to a pass that reused
+        cached artifacts and never ran that stage.
+        """
+        with self._lock:
+            return any(s.stage == stage for s in self.stages)
+
+    @property
+    def has_drops(self) -> bool:
+        """Return True when at least one station drop was recorded."""
+        with self._lock:
+            return bool(self.drops)
+
     def drops_by_stage(self) -> dict[str, list[DropRecord]]:
         """Group drop records by the stage that dropped them."""
         grouped: dict[str, list[DropRecord]] = {}
@@ -215,7 +231,9 @@ class StationLedger:
                 # One representative reason per stage keeps the log compact
                 # while still explaining the mechanism to the user.
                 logger.info('      e.g. %s: %s', recs[0].station_id, recs[0].reason)
-        except Exception:  # pragma: no cover - defensive only
+        # Reporting-only code: any failure is swallowed (logged at debug)
+        # because a summary formatting bug must never abort a skill run.
+        except Exception:  # pylint: disable=broad-exception-caught  # pragma: no cover
             logger.debug('StationLedger.log_summary failed', exc_info=True)
 
     def to_csv(self, path: str) -> str | None:
@@ -232,7 +250,8 @@ class StationLedger:
         injection in the human-facing artifact.
         """
         try:
-            import pandas as pd
+            # Imported lazily so importing this module stays cheap.
+            import pandas as pd  # pylint: disable=import-outside-toplevel
 
             def _neutralize(value: str) -> str:
                 text = str(value)
@@ -267,4 +286,7 @@ class StationLedger:
             ).to_csv(path, index=False)
             return path
         except (OSError, ImportError, ValueError):  # pragma: no cover
+            logging.getLogger(__name__).debug(
+                'StationLedger.to_csv failed for %s', path, exc_info=True,
+            )
             return None
