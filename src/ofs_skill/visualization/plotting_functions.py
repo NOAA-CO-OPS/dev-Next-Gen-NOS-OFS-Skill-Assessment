@@ -39,6 +39,7 @@ from ofs_skill.obs_retrieval.currents_bins_override import (
     split_virtual_currents_id,
 )
 from ofs_skill.obs_retrieval.retrieve_t_and_c_station import get_station_depth
+from ofs_skill.obs_retrieval.utils import resolve_asset_path
 from ofs_skill.skill_assessment import nos_metrics
 
 if TYPE_CHECKING:
@@ -529,9 +530,10 @@ def get_error_range(
 
     Notes:
         - Creates error_ranges.csv in conf/ if missing
-        - File location: {prop.path}/conf/error_ranges.csv
+        - File location: {prop.path}/conf/error_ranges.csv if present,
+          otherwise conf/error_ranges.csv in the installation directory
     """
-    config_path = os.path.join(prop.path, 'conf', 'error_ranges.csv')
+    config_path = resolve_asset_path(prop.path, 'conf', 'error_ranges.csv')
 
     # Delegate to the canonical implementation
     X1, X2 = nos_metrics.get_error_threshold(name_var, config_path)
