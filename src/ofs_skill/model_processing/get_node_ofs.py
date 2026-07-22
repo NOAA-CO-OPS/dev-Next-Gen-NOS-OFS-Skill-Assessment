@@ -1436,7 +1436,7 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
         try:
             with open(path, encoding='utf-8') as fh:
                 row_count = sum(1 for _ in fh)
-        except OSError as ex:
+        except (OSError, UnicodeDecodeError) as ex:
             logger.warning(
                 'Could not read %s for row-count check (%s); treating '
                 'as incomplete and re-extracting.', path, ex)
@@ -1456,7 +1456,7 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
     # by an earlier run of the same window length (daily operational runs
     # produce identical row counts every day). Check that the files
     # actually cover the requested run window before reusing them.
-    run_window = parse_run_window(prop_local)
+    run_window = parse_run_window(prop_local, logger)
     if run_window is not None:
         for i in range(n_stations):
             path = _prd_path(i)

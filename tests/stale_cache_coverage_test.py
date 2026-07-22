@@ -9,10 +9,21 @@ earlier run. The plotting step crops every series to the current window
 one-point plot when the two windows are adjacent (daily operational runs
 share a boundary timestamp) or a blank plot when they are disjoint.
 
+Staleness is judged against the window ends, not an overlap fraction: a
+file is stale when its data starts too long after the window start or
+stops too long before ``min(end, now)``. That catches rolling-window
+reuse (yesterday's 7-day file overlaps 86% of today's window but misses
+the newest day) while never penalizing forecast windows that extend into
+the future or files with mid-window gaps.
+
 Covers:
 - ``ofs_skill.utils.timeseries_coverage`` helpers,
+- the guarded deletion path ``remove_stale_artifact``,
 - stale-pair detection/regeneration in ``_ensure_paired_data_exists``,
-- the plot-time guard ``_drop_stale_casts``,
+- the plot-time guard ``_drop_stale_casts`` (exemption evaluated on the
+  cast list the crop will actually see),
+- removal of previously published plots whose cast naming this run no
+  longer writes,
 - the left merge with the model filename key (a stale/partial key must
   not drop data rows).
 """
@@ -30,6 +41,7 @@ from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
     parse_run_window,
     read_first_last_timestamps,
+    remove_stale_artifact,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -102,6 +114,14 @@ class TestTimeseriesCoverage:
             _WindowProp('20260328-18:00:00', '20260329-18:00:00'))
         assert window == (WINDOW_START, WINDOW_END)
 
+    def test_parse_run_window_mixed_formats(self):
+        """One ISO date and one compact date still yield a window --
+        the pipeline rewrites start/end to the compact format mid-run,
+        and a mixed state must not silently disable the checks."""
+        window = parse_run_window(
+            _WindowProp('2026-03-28T18:00:00Z', '20260329-18:00:00'))
+        assert window == (WINDOW_START, WINDOW_END)
+
     def test_parse_run_window_unparseable_returns_none(self):
         """Unparseable date strings yield None, not an exception."""
         assert parse_run_window(_WindowProp('garbage', 'garbage')) is None
@@ -154,6 +174,109 @@ class TestTimeseriesCoverage:
         pair = tmp_path / 'pair.int'
         pair.write_text('not a data row\nstill not one\n', encoding='utf-8')
         assert covers_run_window(pair, WINDOW_START, WINDOW_END)
+
+    def test_undecodable_binary_file_fails_open(self, tmp_path):
+        """A binary/corrupt cached file must fail open, not raise
+        UnicodeDecodeError out of the check on every run."""
+        pair = tmp_path / 'pair.int'
+        pair.write_bytes(b'\x00\xff\xfe\x93 not utf-8 \x81\x82')
+        assert covers_run_window(pair, WINDOW_START, WINDOW_END)
+
+    def test_overflowing_date_field_fails_open(self, tmp_path):
+        """A corrupt row whose date field parses to inf must be skipped,
+        not raise OverflowError."""
+        pair = tmp_path / 'pair.int'
+        pair.write_text('2461127.25 1e999 3 28 18 0 7.4 5.3 -2.1\n',
+                        encoding='utf-8')
+        assert covers_run_window(pair, WINDOW_START, WINDOW_END)
+
+    def test_rolling_window_stale_file_fails(self, tmp_path):
+        """Yesterday's 7-day file overlaps ~86% of today's 7-day window
+        but is missing the newest day -- it must be flagged stale (the
+        old overlap-fraction test reused it forever)."""
+        start = WINDOW_START
+        end = start + timedelta(days=7)
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, start - timedelta(days=1), hours=7 * 24 + 1)
+        assert not covers_run_window(
+            pair, start, end, now=end + timedelta(days=1))
+
+    def test_two_day_window_advanced_one_day_fails(self, tmp_path):
+        """A 2-day window advanced by one day leaves exactly 50% overlap;
+        the stale file must still be regenerated."""
+        start = WINDOW_START
+        end = start + timedelta(days=2)
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, start - timedelta(days=1), hours=2 * 24 + 1)
+        assert not covers_run_window(
+            pair, start, end, now=end + timedelta(days=1))
+
+    def test_future_window_fresh_file_passes(self, tmp_path):
+        """forecast windows extend past *now*; a fresh file reaching now
+        must not be regenerated (no per-run churn, no CO-OPS hammering)."""
+        start = WINDOW_START
+        end = start + timedelta(hours=48)
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, start, hours=20)
+        assert covers_run_window(
+            pair, start, end, now=start + timedelta(hours=20))
+
+    def test_future_window_stale_file_fails(self, tmp_path):
+        """A leftover file ending at the forecast window's start is stale
+        even though the window extends into the future."""
+        start = WINDOW_START
+        end = start + timedelta(hours=48)
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, start - timedelta(hours=24), hours=25)
+        assert not covers_run_window(
+            pair, start, end, now=start + timedelta(hours=30))
+
+    def test_window_entirely_in_future_fails_open(self, tmp_path):
+        """When no data can exist yet for the window, the check cannot
+        judge staleness and must fail open."""
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START - timedelta(days=2), hours=25)
+        assert covers_run_window(
+            pair, WINDOW_START, WINDOW_END,
+            now=WINDOW_START - timedelta(hours=1))
+
+    def test_late_starting_file_fails(self, tmp_path):
+        """A file whose data begins well after the window start (e.g. a
+        cache from a newer, later window) must be regenerated."""
+        start = WINDOW_START
+        end = start + timedelta(days=1)
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, start + timedelta(hours=18), hours=25)
+        assert not covers_run_window(
+            pair, start, end, now=end + timedelta(days=1))
+
+
+class TestRemoveStaleArtifact:
+    """Guarded deletion of cached artifacts."""
+
+    def test_removes_file_inside_directory(self, tmp_path):
+        """A normal artifact inside the cache directory is deleted."""
+        target = tmp_path / 'cbofs_temp_x_pair.int'
+        target.write_text('x', encoding='utf-8')
+        assert remove_stale_artifact(str(target), str(tmp_path))
+        assert not target.exists()
+
+    def test_refuses_path_outside_directory(self, tmp_path):
+        """A path that resolves outside the artifact directory (e.g. via
+        a hostile station ID) is never deleted."""
+        outside = tmp_path / 'outside.txt'
+        outside.write_text('x', encoding='utf-8')
+        base = tmp_path / 'cache'
+        base.mkdir()
+        target = base / '..' / 'outside.txt'
+        assert not remove_stale_artifact(
+            str(target), str(base), _make_logger())
+        assert outside.exists()
+
+    def test_already_deleted_file_is_not_an_error(self, tmp_path):
+        """A concurrent run deleting the file first must not raise."""
+        assert remove_stale_artifact(
+            str(tmp_path / 'gone_pair.int'), str(tmp_path))
 
 
 class _PairCheckProp:
@@ -254,6 +377,31 @@ class TestDropStaleCasts:
         assert casts == ['nowcast', 'forecast_a']
         assert len(pairs) == 2
 
+    def test_exemption_requires_paired_forecast_a(self, create_1dplot_mod):
+        """nowcast+forecast_a was requested but the forecast_a pair is
+        missing: the crop in combine_obs_across_casts acts on the
+        realigned cast list and WILL fire, so the guard must fire too --
+        otherwise the one-point plot renders anyway."""
+        prop = _WindowProp()
+        prop.whichcasts = ['nowcast', 'forecast_a']
+        stale = _paired_df(WINDOW_START - timedelta(hours=24), 25)
+        pairs, casts = create_1dplot_mod._drop_stale_casts(
+            [stale], ['nowcast'], prop, '8571421', _make_logger())
+        assert not casts and not pairs
+
+    def test_exemption_is_case_sensitive_like_the_crop(
+            self, create_1dplot_mod):
+        """combine_obs_across_casts matches cast names case-sensitively;
+        the guard's exemption must agree, or a differently-cased combo
+        would be exempted while the crop still fires."""
+        prop = _WindowProp()
+        prop.whichcasts = ['Nowcast', 'Forecast_A']
+        stale = _paired_df(WINDOW_START - timedelta(hours=24), 25)
+        _, casts = create_1dplot_mod._drop_stale_casts(
+            [stale, stale], ['Nowcast', 'Forecast_A'], prop, '8571421',
+            _make_logger())
+        assert casts == []
+
     def test_unparseable_window_keeps_everything(self, create_1dplot_mod):
         """Without a parseable window the guard is skipped entirely."""
         prop = _WindowProp('garbage', 'garbage')
@@ -345,3 +493,33 @@ class TestFilenameKeyLeftMerge:
         assert not calls, (
             'a stale pair file must be dropped by the plot-time guard, '
             'not rendered as a one-point plot')
+
+    def test_superseded_plot_is_removed(
+            self, create_1dplot_mod, tmp_path, monkeypatch):
+        """When every cast is dropped, the previous run's plot under the
+        full-cast filename must be deleted -- otherwise the front end
+        keeps serving the stale plot that this run refused to rewrite."""
+        pair_dir = tmp_path / 'pair'
+        node_dir = tmp_path / 'node'
+        visual_dir = tmp_path / 'visual'
+        for directory in (pair_dir, node_dir, visual_dir):
+            directory.mkdir()
+
+        pair = pair_dir / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
+        _write_pair_file(pair, WINDOW_START - timedelta(hours=24), hours=25)
+        old_plot = visual_dir / (
+            'cbofs_8571421_water_temperature_timeseries_'
+            'nowcast_stations.html')
+        old_plot.write_text('<html>stale</html>', encoding='utf-8')
+
+        monkeypatch.setattr(
+            create_1dplot_mod.plotting_scalar, 'oned_scalar_plot',
+            lambda *a, **k: None)
+
+        prop = _PlotProp(pair_dir, node_dir, visual_dir)
+        create_1dplot_mod._process_station_plot(
+            0, OFS_CTL, STATION_CTL, prop, VAR_INFO, _make_logger())
+
+        assert not old_plot.exists(), (
+            'the previously published full-cast plot must be retired '
+            'when its cast is dropped for this run window')

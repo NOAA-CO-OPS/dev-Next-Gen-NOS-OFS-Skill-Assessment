@@ -29,7 +29,11 @@ from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment import format_paired_one_d, metrics_paired_one_d
 from ofs_skill.skill_assessment.make_skill_maps import make_skill_maps
 from ofs_skill.tidal_analysis.extremes import extract_water_level_extrema
-from ofs_skill.utils.timeseries_coverage import covers_run_window, parse_run_window
+from ofs_skill.utils.timeseries_coverage import (
+    covers_run_window,
+    parse_run_window,
+    remove_stale_artifact,
+)
 
 
 def _cache_key(prop):
@@ -744,8 +748,11 @@ def get_skill(prop, logger):
                             'run. Deleting it and re-fetching '
                             'observations.',
                             obs_path, run_window[0], run_window[1])
-                        os.remove(obs_path)
-                        needs_fetch = True
+                        if remove_stale_artifact(
+                                obs_path,
+                                p.data_observations_1d_station_path,
+                                logger_):
+                            needs_fetch = True
                     else:
                         logger_.info('%s found', obs_path)
                 else:
@@ -794,8 +801,9 @@ def get_skill(prop, logger):
                         'is likely left over from an earlier run. '
                         'Deleting it and re-extracting model data.',
                         prd_path, run_window[0], run_window[1])
-                    os.remove(prd_path)
-                    needs_model = True
+                    if remove_stale_artifact(
+                            prd_path, p.data_model_1d_node_path, logger_):
+                        needs_model = True
             else:
                 logger_.info('%s is missing', prd_path)
                 needs_model = True
