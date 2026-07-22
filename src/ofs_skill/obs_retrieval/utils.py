@@ -173,6 +173,15 @@ class Utils:
                     )
                     params[option] = ''
 
+            if section == 'directories':
+                # Directory settings may be relative (subdir of the working
+                # directory) or absolute (used as-is, e.g. an external disk).
+                # Expand ~ so users can write home-relative paths.
+                params = {
+                    key: os.path.expanduser(value)
+                    for key, value in params.items()
+                }
+
         except configparser.NoSectionError as nse:
             logger.error(
                 f"No section '{section}' found reading {self.config_file}: {nse}",
@@ -216,6 +225,79 @@ class Utils:
         except Exception as e:
             logger.error(f'Error reading configuration file: {e}', exc_info=True)
             return False
+
+
+def get_project_root() -> Path:
+    """
+    Return the absolute path to the installation (repository) root.
+
+    This is the directory that contains the packaged input assets shipped
+    with the skill assessment: ``ofs_extents/``, ``conf/``, and
+    ``src/wcofs_msl.nc``.
+    """
+    return Path(__file__).resolve().parent.parent.parent.parent
+
+
+def resolve_asset_path(base_path, *parts) -> str:
+    """
+    Resolve the path to a packaged input asset.
+
+    Input assets (``ofs_extents/`` shapefiles, ``conf/logging.conf``,
+    ``conf/error_ranges.csv``, ``src/wcofs_msl.nc``) ship with the
+    installation, while the working directory (``-p`` / ``home=``) may be
+    anywhere — including an external disk. Looks under *base_path* first so
+    a user can still override an asset by placing a copy in their working
+    directory, then falls back to the installation root.
+
+    Parameters
+    ----------
+    base_path : str or Path or None
+        The working directory (usually ``prop.path``). May be None.
+    *parts : str
+        Path components of the asset relative to either root,
+        e.g. ``('conf', 'error_ranges.csv')``.
+
+    Returns
+    -------
+    str
+        The working-directory candidate if it exists, otherwise the
+        installation-root candidate. The returned path is not guaranteed
+        to exist — callers that require the asset should check.
+    """
+    relative = os.path.join(*parts)
+    if base_path is not None:
+        candidate = os.path.join(str(base_path), relative)
+        if os.path.exists(candidate):
+            return candidate
+    return str(get_project_root() / relative)
+
+
+def get_s3_cache_dir(config_file=None, logger=None) -> str:
+    """
+    Return the directory used for the fsspec cache of streamed model files.
+
+    Reads ``s3_cache_dir`` from the ``[directories]`` config section. When
+    the key is missing or blank, defaults to ``~/.ofs_cache/s3``. Point
+    this at a large disk if your home directory has a size quota — streamed
+    NODD model files can accumulate several GB here.
+
+    Parameters
+    ----------
+    config_file : str or Path or None
+        Optional path to an ofs_dps.conf-style file. Pass
+        ``getattr(prop, 'config_file', None)`` from callers so ``-c``
+        selects the file the cache setting is read from.
+    logger : logging.Logger or None
+        Logger instance. If None, a module-level logger is used.
+    """
+    default = os.path.join(os.path.expanduser('~'), '.ofs_cache', 's3')
+    if logger is None:
+        logger = logging.getLogger(__name__)
+    dir_params = Utils(config_file).read_config_section('directories', logger)
+    configured = (dir_params.get('s3_cache_dir') or '').strip()
+    if not configured:
+        return default
+    return configured
 
 
 def load_api_keys(config_filename='conf/api_keys.conf'):

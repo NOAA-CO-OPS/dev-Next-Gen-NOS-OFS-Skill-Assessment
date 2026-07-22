@@ -549,14 +549,18 @@ def get_skill(prop, logger):
 
     if logger is None:
         config_file = utils.Utils().get_config_file()
-        log_config_file = 'conf/logging.conf'
-        log_config_file = os.path.join(Path(prop.path), log_config_file)
+        log_config_file = utils.resolve_asset_path(
+            prop.path, 'conf', 'logging.conf')
 
         # Check if log file exists
         if not os.path.isfile(log_config_file):
+            print(f'Logging config not found: {log_config_file}. Abort!',
+                  file=sys.stderr)
             sys.exit(-1)
         # Check if config file exists
         if not os.path.isfile(config_file):
+            print(f'Configuration file not found: {config_file}. Abort!',
+                  file=sys.stderr)
             sys.exit(-1)
 
         # Creater logger
@@ -627,7 +631,7 @@ def get_skill(prop, logger):
         prop.path = Path(dir_params['home'])
 
     # prop.path validation
-    ofs_extents_path = os.path.join(prop.path, dir_params['ofs_extents_dir'])
+    ofs_extents_path = utils.resolve_asset_path(prop.path, dir_params['ofs_extents_dir'])
     if not os.path.exists(ofs_extents_path):
         error_message = (
             f'ofs_extents/ folder is not found. '

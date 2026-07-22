@@ -16,6 +16,7 @@ import pandas as pd
 from scipy.stats import ConstantInputWarning
 
 from ofs_skill.obs_retrieval.get_station_tidal_data import get_station_tidal_data
+from ofs_skill.obs_retrieval.utils import resolve_asset_path
 from ofs_skill.skill_assessment import nos_metrics
 
 warnings.simplefilter('ignore', ConstantInputWarning)
@@ -137,7 +138,7 @@ def skill_scalar(
     """
     # Get target error range
     X1, X2 = nos_metrics.get_error_threshold(
-        name_var, os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+        name_var, resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
 
     # Preserve NaN-containing series for gap-sensitive duration metrics.
     # MDPO/MDNO need real gaps to break streaks; dropna hides them.
@@ -324,7 +325,7 @@ def skill_vector(
     """
     # Get target error range
     X1, X2 = nos_metrics.get_error_threshold(
-        name_var, os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+        name_var, resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
 
     # Preserve NaN-containing series for gap-sensitive duration metrics.
     df_paired_full = df_paired.copy()
@@ -483,7 +484,7 @@ def skill_vector_dir(
     """
     # Get target error range (degrees)
     X1, X2 = nos_metrics.get_error_threshold(
-        'cu_dir', os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+        'cu_dir', resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
 
     # Preserve NaN-containing series for gap-sensitive duration metrics.
     df_paired_full = df_paired.copy()
@@ -624,7 +625,7 @@ def skill_extrema(
         TCF pass/fail; ``stdev`` slot (17) carries TCF (%); slot 18 is X1.
     """
     # X1 is the amplitude threshold (m), T1 is timing threshold (hours)
-    X1, _ = nos_metrics.get_error_threshold(name_var, os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+    X1, _ = nos_metrics.get_error_threshold(name_var, resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
     T1 = 0.5
 
     obs = df_paired['OBS']

@@ -56,6 +56,7 @@ from ofs_skill.model_processing.model_file_validation import (
     validate_model_files,
 )
 from ofs_skill.model_processing.netcdf_engine import resolve_engine
+from ofs_skill.obs_retrieval.utils import get_s3_cache_dir
 
 
 def _extract_filename_from_encoding(ds):
@@ -322,7 +323,8 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         # Apply fsspec caching for remote URLs to avoid re-downloading
         if has_remote and not has_s3_proto:
             # For https:// URLs (NODD S3 via HTTPS)
-            cache_dir = os.path.join(os.path.expanduser('~'), '.ofs_cache', 's3')
+            cache_dir = get_s3_cache_dir(
+                getattr(prop, 'config_file', None), logger)
             os.makedirs(cache_dir, exist_ok=True)
 
             # Check if all files are remote — simplecache cannot handle
@@ -512,7 +514,8 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                 'Model open failed with "%s" — this is the signature '
                 'of a partially cached model file (a previous run was '
                 'likely interrupted mid-download). Clear the model '
-                'file cache (default: ~/.ofs_cache/s3/) and rerun.', ex)
+                'file cache (s3_cache_dir in ofs_dps.conf, default: '
+                '~/.ofs_cache/s3/) and rerun.', ex)
         raise
     except xr.MergeError as ex:
         logger.error(

@@ -525,8 +525,10 @@ def create_gui(parser):
     directory_path_var = tk.StringVar()
     _label(general_frame, 'Home directory',
            help_text='Root working directory for the skill assessment. '
-                     'Output files and the ofs_extents/ folder live '
-                     'under this path.').grid(
+                     'Output files are written under this path; it can '
+                     'be anywhere, including an external disk. Input '
+                     'assets (ofs_extents/, conf/) are found in the '
+                     'installation directory automatically.').grid(
         row=0, column=0, sticky='w', padx=padx, pady=pady)
     ttk.Button(general_frame, text='Browse...', command=browse_directory,
                style='TButton').grid(row=0, column=1, sticky='w',
