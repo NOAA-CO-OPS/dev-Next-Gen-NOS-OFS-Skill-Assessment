@@ -35,7 +35,8 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 
 from bin.utils import get_model_data
-from ofs_skill.model_processing.list_of_files import list_of_dir, list_of_files
+from ofs_skill.model_processing.list_of_files import (
+    NETCDF_SUBDIR, list_of_dir, list_of_files, local_model_dir)
 from ofs_skill.obs_retrieval import utils
 
 
@@ -231,7 +232,7 @@ def check_model_files(prop: Any, logger: Logger) -> None:
         _conf = getattr(prop, 'config_file', None)
         dir_params = utils.Utils(_conf).read_config_section('directories', logger)
         prop.model_save_path = os.path.join(dir_params['model_historical_dir'],
-                                            prop.ofs, dir_params['netcdf_dir'])
+                                            prop.ofs, NETCDF_SUBDIR)
 
         # First make list of what files SHOULD be in the directories
         try:
@@ -273,8 +274,8 @@ def check_model_files(prop: Any, logger: Logger) -> None:
             logger.error('Unable to check if model files are present.')
             return
 
-        prop.model_path = os.path.join(dir_params['model_historical_dir'],
-                                       prop.ofs, dir_params['netcdf_dir'])
+        prop.model_path = local_model_dir(dir_params['model_historical_dir'],
+                                          prop.ofs, logger)
         prop.model_path = Path(prop.model_path).as_posix()
         dir_list = list_of_dir(prop, logger)
         try:

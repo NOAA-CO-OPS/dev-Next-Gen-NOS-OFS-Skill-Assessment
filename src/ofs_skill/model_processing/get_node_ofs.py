@@ -29,7 +29,7 @@ from ofs_skill.model_processing import do_horizon_skill_utils
 from ofs_skill.model_processing.get_datum_offset import get_datum_offset as get_datum_offset_func
 from ofs_skill.model_processing.get_datum_offset import report_datums
 from ofs_skill.model_processing.intake_scisa import intake_model
-from ofs_skill.model_processing.list_of_files import list_of_dir
+from ofs_skill.model_processing.list_of_files import list_of_dir, local_model_dir
 from ofs_skill.model_processing.list_of_files import list_of_files as list_of_files_func
 from ofs_skill.model_processing.model_format_properties import ModelFormatProperties
 from ofs_skill.model_processing.model_source import get_model_source
@@ -1526,8 +1526,8 @@ def get_node_ofs(prop, logger, model_dataset=None):
     # Parameter validation
     parameter_validation(prop, dir_params, logger)
 
-    prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
+    prop.model_path = local_model_dir(
+        dir_params['model_historical_dir'], prop.ofs, logger
     )
     prop.model_path = Path(prop.model_path).as_posix()
 

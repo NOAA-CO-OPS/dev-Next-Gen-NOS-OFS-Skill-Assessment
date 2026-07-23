@@ -93,6 +93,7 @@ from bin.model_processing import get_icecover_model
 from bin.obs_retrieval import get_icecover_observations
 from bin.visualization import create_1dplot_ice
 from ofs_skill.model_processing import (
+    local_model_dir,
     model_properties,
     model_source,
 )
@@ -455,8 +456,8 @@ def do_iceskill(prop, logger):
     )
     os.makedirs(prop.data_model_ice_path, exist_ok=True)
     # Example (local) ice data
-    prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir'],
+    prop.model_path = local_model_dir(
+        dir_params['model_historical_dir'], prop.ofs, logger,
     )
 
     # Parse whichcasts argument

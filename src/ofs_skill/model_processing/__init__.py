@@ -51,11 +51,13 @@ from ofs_skill.model_processing.intake_scisa import (
 
 # File listing and discovery
 from ofs_skill.model_processing.list_of_files import (
+    NETCDF_SUBDIR,
     construct_expected_files,
     construct_s3_url,
     dates_range,
     list_of_dir,
     list_of_files,
+    local_model_dir,
 )
 from ofs_skill.model_processing.model_format_properties import ModelFormatProperties
 from ofs_skill.model_processing.model_properties import ModelProperties
@@ -101,6 +103,8 @@ __all__ = [
     'construct_expected_files',
     'list_of_dir',
     'list_of_files',
+    'local_model_dir',
+    'NETCDF_SUBDIR',
     'get_s3_bucket',
     # File validation
     'check_model_files',

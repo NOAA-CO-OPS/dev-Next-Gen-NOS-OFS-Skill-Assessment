@@ -884,8 +884,8 @@ if __name__ == '__main__':
 
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
 
-    prop1.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop1.ofs, dir_params['netcdf_dir'],
+    prop1.model_path = list_of_files.local_model_dir(
+        dir_params['model_historical_dir'], prop1.ofs, logger,
     )
     prop1.model_path = Path(prop1.model_path).as_posix()
 
