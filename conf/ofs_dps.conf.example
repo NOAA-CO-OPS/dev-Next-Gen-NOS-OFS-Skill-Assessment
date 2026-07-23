@@ -213,6 +213,18 @@ use_s3_fallback=True
 use_custom_filenames=False
 filename_path=path/to/filename.txt
 
+# Maximum distance (km) between an observation station and its nearest model
+# output location for the two to be paired in the skill assessment. Stations
+# whose nearest model location is farther than this are not assessed.
+# The same value is used to size the candidate search box, so it is applied
+# consistently across both the pre-filter and the final match test.
+# Keep this tight: proximity matters for the validity of the comparison.
+# Default is 4 km if this key is omitted.
+# Scope: applies to stations-filetype runs (-t stations) only. Fields runs
+# match each station to the nearest wet grid node with no distance cutoff,
+# and STOFS stations files are matched by station name, not distance.
+station_match_max_dist_km=4.0
+
 # NetCDF engine selection for reading model files. Three modes:
 #   auto     = detect each batch's on-disk format from its magic bytes
 #              (recommended default). NetCDF-4/HDF5 files are read with

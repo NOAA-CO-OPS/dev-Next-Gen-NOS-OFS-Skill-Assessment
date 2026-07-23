@@ -14,6 +14,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,7 @@ from pandas.errors import EmptyDataError
 from ofs_skill.model_processing import do_horizon_skill
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_dates
 from ofs_skill.model_processing.get_node_ofs import get_node_ofs
+from ofs_skill.model_processing.station_ledger import StationLedger
 from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.get_station_observations import get_station_observations
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
@@ -273,6 +275,18 @@ def _station_metadata(read_station_ctl_file, read_ofs_ctl_file, obs_idx, ofs_idx
     }
 
 
+def _ledger_drop(prop: Any, station_id: str, stage: str, reason: str) -> None:
+    """Record a station drop on ``prop.station_ledger`` if one is attached.
+
+    Best-effort and thread-safe; a missing ledger is a no-op so the skill
+    workflow runs identically whether or not accounting is enabled.
+    """
+    ledger = getattr(prop, 'station_ledger', None)
+    if ledger is None:
+        return
+    ledger.drop(station_id, stage=stage, reason=reason)
+
+
 def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                           station_id_to_idx, prop, name_var, logger):
     """
@@ -289,6 +303,10 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                 f'Could not match station ID {ofs_station_id} between '
                 f'control file in get_node_ofs!'
             )
+            _ledger_drop(
+                prop, ofs_station_id, 'id_mismatch',
+                'model ctl station ID has no matching obs ctl entry',
+            )
             return None
 
         obs_row = station_id_to_idx[ofs_station_id]
@@ -299,11 +317,39 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
             name_var, i, obs_row, logger
         )
 
-        if not (
-            formatted_series
-            and formatted_series != 'NoDataFound'
-            and len(formatted_series[0]) > 1
+        # Distinguish "no overlapping valid timestamps" (a data-coverage
+        # condition worth surfacing prominently, per issue #200) from the
+        # generic missing-file / empty-series failures.
+        if formatted_series is format_paired_one_d.PairingStatus.NO_TEMPORAL_OVERLAP:
+            _ledger_drop(
+                prop, station_id, 'temporal_overlap',
+                'obs and model series have no overlapping valid timestamps '
+                'in the requested window',
+            )
+            logger.warning(
+                'Station %s (%s): obs and model data do not overlap in time '
+                'within the requested window; no skill row produced. '
+                'Check that observations exist for this period.',
+                station_id, name_var,
+            )
+            return None
+
+        # Any remaining sentinel/None/degenerate result means no usable
+        # paired series. ``formatted_series`` here is either the string
+        # 'NoDataFound', a PairingStatus, None, or the success tuple.
+        if (
+            not formatted_series
+            or isinstance(
+                formatted_series,
+                (str, format_paired_one_d.PairingStatus),
+            )
+            or len(formatted_series[0]) <= 1
         ):
+            _ledger_drop(
+                prop, station_id, 'pairing',
+                'no valid paired OBS/OFS series (missing/empty obs or model '
+                'data, or no overlapping valid timestamps)',
+            )
             logger.error(
                 f'{prop.ofs}_{name_var}_{station_id}_{read_ofs_ctl_file[1][i]}_'
                 f'{prop.whichcast}_{prop.ofsfiletype}_pair.int is not created successfully'
@@ -482,6 +528,19 @@ def skill(read_station_ctl_file, read_ofs_ctl_file, prop, name_var, logger):
 
     data_length = min(len(read_station_ctl_file[0]), len(read_ofs_ctl_file[-1]))
 
+    ledger = getattr(prop, 'station_ledger', None)
+    if ledger is not None:
+        ledger.note_stage(
+            'obs_ctl',
+            count_in=len(read_station_ctl_file[0]),
+            note='stations with retrievable obs data (obs station ctl file)',
+        )
+        ledger.note_stage(
+            'model_ctl',
+            count_out=len(read_ofs_ctl_file[-1]),
+            note='obs stations matched to a model location (model ctl file)',
+        )
+
     # O(1) station ID -> obs-row lookup, computed once and shared with workers
     station_id_to_idx = {
         row[0]: idx for idx, row in enumerate(read_station_ctl_file[0])
@@ -519,6 +578,12 @@ def skill(read_station_ctl_file, read_ofs_ctl_file, prop, name_var, logger):
                 _append_entry(output_lw, result['lw'])
 
     # Construct final output payload
+    if ledger is not None:
+        ledger.note_stage(
+            'skill_csv',
+            count_out=len(output['station_id']),
+            note='stations written to the per-variable skill CSV',
+        )
     if name_var == 'cu' and len(output_dir['station_id']) > 0:
         return [output, output_dir]
     if name_var == 'wl' and len(output_hw['station_id']) > 0:
@@ -823,6 +888,20 @@ def get_skill(prop, logger):
         """Process skill assessment for a single variable."""
         name_var = name_convent(variable)
 
+        # Attach a fresh station-drop ledger for this variable so every
+        # stage (matching, pairing, temporal overlap) can record why a
+        # station did or did not survive to the final CSV. Best-effort:
+        # the workflow runs identically if ledger construction fails.
+        try:
+            p.station_ledger = StationLedger(
+                ofs=getattr(p, 'ofs', ''),
+                variable=variable,
+                whichcast=getattr(p, 'whichcast', ''),
+                filetype=getattr(p, 'ofsfiletype', ''),
+            )
+        except (TypeError, ValueError):  # pragma: no cover - defensive only
+            p.station_ledger = None
+
         # =================================================================
         # This will try to read the station ctl file for the given ofs and
         # for all
@@ -1012,6 +1091,42 @@ def get_skill(prop, logger):
                 p.ofs,
                 variable,
             )
+
+        # Emit the station accounting ledger for this variable so the
+        # obs->matched->paired->CSV reductions are explained in one place
+        # rather than scattered across per-station INFO/ERROR lines.
+        ledger = getattr(p, 'station_ledger', None)
+        if ledger is not None:
+            ledger.log_summary(logger)
+            try:
+                csv_path = os.path.join(
+                    p.control_files_path,
+                    f'station_ledger_{p.ofs}_{name_var}_'
+                    f'{p.whichcast}_{p.ofsfiletype}.csv',
+                )
+                # A pass that ran fresh node matching is authoritative and
+                # always (re)writes the CSV. A pass that reused cached ctl
+                # files (node matching never ran) only writes when it has
+                # drops of its own to report or no CSV exists yet —
+                # otherwise it would overwrite a richer ledger from the
+                # matching pass with a header-only file.
+                if (
+                    ledger.has_stage('node_match')
+                    or ledger.has_drops
+                    or not os.path.isfile(csv_path)
+                ):
+                    written = ledger.to_csv(csv_path)
+                    if written:
+                        logger.info('Station accounting ledger written to %s',
+                                    written)
+                else:
+                    logger.debug(
+                        'Station ledger CSV at %s left in place: this pass '
+                        'reused cached station matching and recorded no '
+                        'drops', csv_path)
+            except (OSError, ValueError):  # pragma: no cover - defensive only
+                logger.debug('Failed to write station ledger CSV',
+                             exc_info=True)
 
     # Variable processing runs sequentially here. Variable parallelism
     # is handled inside get_node_ofs (which loads the model once and
