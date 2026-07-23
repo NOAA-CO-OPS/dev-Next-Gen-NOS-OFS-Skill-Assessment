@@ -42,8 +42,8 @@ from ofs_skill.model_processing import get_fcst_cycle
 
 
 def get_nodd_prefix_map(prop: Any, logger: Logger) -> tuple[str, str]:
-    """
-    Return (local_prefix, bucket_prefix) for translating file paths between
+    """Return (local_prefix, bucket_prefix) for translating file paths between
+
     the local directory layout ({ofs}/{netcdf_dir}/) and the layout of the
     NODD S3 bucket for the OFS.
 
@@ -60,34 +60,40 @@ def get_nodd_prefix_map(prop: Any, logger: Logger) -> tuple[str, str]:
         '..' component, either of which would relocate downloads outside
         the data directory tree.
     """
-    _conf = getattr(prop, 'config_file', None)
-    dir_params = utils.Utils(_conf).read_config_section('directories', logger)
-    netcdf_dir = dir_params['netcdf_dir']
+    _conf = getattr(prop, "config_file", None)
+    dir_params = utils.Utils(_conf).read_config_section("directories", logger)
+    netcdf_dir = dir_params["netcdf_dir"]
     posix_dir = PurePosixPath(netcdf_dir)
     windows_dir = PureWindowsPath(netcdf_dir)
-    if (posix_dir.is_absolute() or windows_dir.is_absolute()
-            or windows_dir.drive
-            or '..' in posix_dir.parts or '..' in windows_dir.parts):
+    if (
+        posix_dir.is_absolute()
+        or windows_dir.is_absolute()
+        or windows_dir.drive
+        or ".." in posix_dir.parts
+        or ".." in windows_dir.parts
+    ):
         raise ValueError(
             f"Invalid netcdf_dir '{netcdf_dir}' in the [directories] config "
             "section: it must be a relative subdirectory with no '..' "
-            'components.'
+            "components."
         )
-    local_prefix = Path(
-        os.path.join(prop.ofs, netcdf_dir)
-    ).as_posix() + '/'
+    local_prefix = Path(os.path.join(prop.ofs, netcdf_dir)).as_posix() + "/"
+
+    # Include custom netcdf_dir in the bucket prefix for STOFS models if provided
+    clean_netcdf = netcdf_dir.strip("/")
+    sub_path = f"{clean_netcdf}/" if clean_netcdf else ""
+
     bucket_prefixes = {
-        'stofs_3d_atl': 'STOFS-3D-Atl/',
-        'stofs_3d_pac': 'STOFS-3D-Pac/',
-        'stofs_2d_glo': '',
+        "stofs_3d_atl": f"STOFS-3D-Atl/{sub_path}",
+        "stofs_3d_pac": f"STOFS-3D-Pac/{sub_path}",
+        "stofs_2d_glo": f"{sub_path}",
     }
     bucket_prefix = bucket_prefixes.get(prop.ofs, local_prefix)
     return local_prefix, bucket_prefix
 
 
 def swap_path_prefix(path: str, old_prefix: str, new_prefix: str) -> str:
-    """
-    Swap old_prefix for new_prefix at the start of path.
+    """Swap old_prefix for new_prefix at the start of path.
 
     Unlike whole-string str.replace, this rewrites only an anchored prefix
     match, so path components that happen to repeat the prefix deeper in
@@ -95,13 +101,14 @@ def swap_path_prefix(path: str, old_prefix: str, new_prefix: str) -> str:
     does not start with old_prefix, or if old_prefix is empty.
     """
     if old_prefix and path.startswith(old_prefix):
-        return new_prefix + path[len(old_prefix):]
+        return new_prefix + path[len(old_prefix) :]
     return path
 
 
-def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str]:
-    """
-    Convert a local file path to an S3 URL for the NODD bucket.
+def construct_s3_url(
+    local_path: str, prop: Any, logger: Logger
+) -> Optional[str]:
+    """Convert a local file path to an S3 URL for the NODD bucket.
 
     Parameters
     ----------
@@ -115,44 +122,51 @@ def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str
     Returns
     -------
     str or None
-        S3 URL string (e.g., 'https://noaa-nos-ofs-pds.s3.amazonaws.com/cbofs/netcdf/202411/file.nc')
+        S3 URL string (e.g.,
+        'https://noaa-nos-ofs-pds.s3.amazonaws.com/cbofs/netcdf/202411/file.nc')
         Returns None if URL construction fails
 
     Examples
     --------
-    >>> s3_url = construct_s3_url('../example_data/cbofs/netcdf/202411/file.nc', prop, logger)
+    >>> s3_url = construct_s3_url(
+    ...     '../example_data/cbofs/netcdf/202411/file.nc', prop, logger
+    ... )
     >>> print(s3_url)
     'https://noaa-nos-ofs-pds.s3.amazonaws.com/cbofs/netcdf/202411/file.nc'
     """
     try:
         # Get URL configuration
-        _conf = getattr(prop, 'config_file', None)
-        url_params = utils.Utils(_conf).read_config_section('urls', logger)
+        _conf = getattr(prop, "config_file", None)
+        url_params = utils.Utils(_conf).read_config_section("urls", logger)
 
         # Prefix pair for translating the local {ofs}/{netcdf_dir}/ layout
         # to the bucket layout (the two are identical for non-STOFS OFS).
         local_prefix, bucket_prefix = get_nodd_prefix_map(prop, logger)
-        netcdf_dir = local_prefix[len(prop.ofs):].strip('/')
+        netcdf_dir = local_prefix[len(prop.ofs) :].strip("/")
 
         # Normalize path separators
         local_path = Path(local_path).as_posix()
 
         # Extract the OFS-relative path (everything after the OFS name)
         # Format: {base_path}/{ofs}/{netcdf_dir}/{rest_of_path}
-        path_parts = local_path.split('/')
+        path_parts = local_path.split("/")
 
         # Find where the configured netcdf subdirectory appears in the path
         if netcdf_dir and netcdf_dir in path_parts:
             netcdf_idx = path_parts.index(netcdf_dir)
             # Reconstruct from OFS name onwards
-            ofs_relative_path = '/'.join(
-                [prop.ofs, netcdf_dir] + path_parts[netcdf_idx + 1:])
+            ofs_relative_path = "/".join(
+                [prop.ofs, netcdf_dir] + path_parts[netcdf_idx + 1 :]
+            )
         elif prop.ofs in path_parts:
             # Fallback: find the OFS name in the path
-            ofs_relative_path = '/'.join(
-                path_parts[path_parts.index(prop.ofs):])
+            ofs_relative_path = "/".join(
+                path_parts[path_parts.index(prop.ofs) :]
+            )
         else:
-            logger.error(f'Cannot determine OFS-relative path from: {local_path}')
+            logger.error(
+                f"Cannot determine OFS-relative path from: {local_path}"
+            )
             return None
 
         # Select appropriate S3 bucket URL based on OFS
@@ -163,18 +177,19 @@ def construct_s3_url(local_path: str, prop: Any, logger: Logger) -> Optional[str
         # directories at the bucket root); for all other OFS the bucket
         # layout matches the local layout and this is a no-op.
         ofs_relative_path = swap_path_prefix(
-            ofs_relative_path, local_prefix, bucket_prefix)
+            ofs_relative_path, local_prefix, bucket_prefix
+        )
 
         # Construct full S3 URL
-        s3_url = f'{url_root}{ofs_relative_path}'
+        s3_url = f"{url_root}{ofs_relative_path}"
         # Check if it exists on the S3 bucket
         is_exist = check_s3_for_file(s3_url, logger)
         if not is_exist:
-            raise FileNotFoundError(f'S3 file not found: {s3_url}')
+            raise FileNotFoundError(f"S3 file not found: {s3_url}")
         return s3_url
 
     except Exception as e:
-        logger.error(f'Error constructing S3 URL for {local_path}: {e}')
+        logger.error(f"Error constructing S3 URL for {local_path}: {e}")
         return None
 
 
