@@ -210,6 +210,10 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
 
             prd_path = os.path.join(prop.data_model_1d_node_path,prdfile)
             if os.path.isfile(prd_path):
+
+                # peek at the first line
+                with open(prd_path, encoding='utf-8') as f:
+                    first_line = f.readline()
                 # check for your specific header text
                 if 'Julian days' in first_line:
                     rows_to_skip = 1
@@ -257,6 +261,9 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
                                       model_dataset=cached)
                 _set_cached_model(prop, result)
             try:
+                # peek at the first line
+                with open(prd_path, encoding='utf-8') as f:
+                    first_line = f.readline()
                 # check for your specific header text
                 if 'Julian days' in first_line:
                     rows_to_skip = 1
