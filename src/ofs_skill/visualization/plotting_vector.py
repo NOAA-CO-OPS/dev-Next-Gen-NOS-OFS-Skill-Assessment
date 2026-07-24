@@ -39,6 +39,7 @@ from plotly.subplots import make_subplots
 import ofs_skill.visualization.make_static_plots as make_static_plots
 from ofs_skill.visualization.make_static_plots import combine_obs_across_casts
 from ofs_skill.visualization.plotting_functions import (
+    count_title_lines,
     find_max_data_gap,
     get_error_range,
     get_markerstyles,
@@ -491,7 +492,20 @@ def oned_vector_plot1(
     # title at y=0.97 once it wraps. Track the whichcast count to grow
     # the top margin so the legend has somewhere to expand into. Same
     # dynamic-margin pattern as plotting_scalar_ice.py.
-    tmargin = 150 + 30 * max(0, len(prop.whichcasts) - 1)
+    #
+    # Issue #221: currents titles are taller than scalar titles — they
+    # can carry a depth line and an ADCP-type line (issue #141 work) on
+    # top of the header/station/OFS/date rows, for up to 6 rows. A
+    # margin tuned for the 4-row scalar title leaves the extra title
+    # rows overlapping the legend. Grow the margin by the actual title
+    # height and push the title anchor up so both fit.
+    title_text = get_title(prop, node, station_id, name_var, logger)
+    n_title_lines = count_title_lines(title_text)
+    # Scalar titles are ~4 lines; add 30 px of headroom per extra line.
+    title_extra = 30 * max(0, n_title_lines - 4)
+    tmargin = 150 + 30 * max(0, len(prop.whichcasts) - 1) + title_extra
+    title_y = 0.97 + 0.005 * max(0, n_title_lines - 4)
+
     # Figure Config
     fig.update_layout(
         # margin=dict(t=5),
@@ -553,9 +567,9 @@ def oned_vector_plot1(
             tickvals=[-X1*4, -X1*3, -X1*2, -X1, 0, X1, X1*2, X1*3, X1*4],
         ),
         title=dict(
-            text=get_title(prop, node, station_id, name_var, logger),
+            text=title_text,
             font=dict(size=14, color='black', family='Open Sans'),
-            y=0.97,  # new
+            y=title_y,  # grows with title height (issue #221)
             x=0.5, xanchor='center', yanchor='top',
         ),
         transition_ordering='traces first', dragmode='zoom',
