@@ -23,6 +23,8 @@ The Next Gen NOS Ocean Forecast Model Skill Assessment and Processing Software, 
 
 [Original OFS skill assessment GitHub repository](https://github.com/NOAA-CO-OPS/NOS-OFS-Skill-Assessment-Code.git)
 
+[Configuration file reference (wiki)](https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment/wiki/Configuration-File-Reference) — all `conf/ofs_dps.conf` settings explained, including how to write output to an external directory or disk.
+
 ## 1.1 Package Structure & Programmatic Usage
 
 This repository is structured as a modern Python package following best practices, making it suitable for both command-line usage and programmatic integration into other projects.

@@ -904,7 +904,7 @@ def get_station_observations(prop,logger):
 
     # parameter validation
     ofs_extents_path =\
-        os.path.join(path, dir_params['ofs_extents_dir'])
+        utils.resolve_asset_path(path, dir_params['ofs_extents_dir'])
 
     argu_list = (start_date_full,
                  end_date_full,

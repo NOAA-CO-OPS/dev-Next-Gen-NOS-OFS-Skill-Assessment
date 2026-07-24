@@ -135,7 +135,7 @@ def ofs_geometry(
     """
     try:
         dir_params = utils.Utils(config_file).read_config_section('directories', logger)
-        ofs_extents_path = os.path.join(
+        ofs_extents_path = utils.resolve_asset_path(
             path,
             dir_params['ofs_extents_dir'],
         )

@@ -118,7 +118,7 @@ def validate_and_initialize_parameters(prop):
     if prop.path is None:
         prop.path = dir_params['home']
 
-    ofs_extents_path = os.path.join(prop.path, dir_params['ofs_extents_dir'])
+    ofs_extents_path = utils.resolve_asset_path(prop.path, dir_params['ofs_extents_dir'])
     if not os.path.exists(ofs_extents_path):
         logger.error('ofs_extents/ folder is not found at %s. Abort!',prop.path)
         sys.exit(-1)
@@ -387,7 +387,8 @@ def _run_pipeline(run_args):
     ofs = getattr(run_args, 'OFS', None) or getattr(run_args, 'ofs', None)
     prop1.ofs = ofs.lower()
     prop1.path = getattr(run_args, 'Path', None) or getattr(run_args, 'path', None)
-    prop1.ofs_extents_path = r'' + prop1.path + 'ofs_extents' + '/'
+    prop1.ofs_extents_path = utils.resolve_asset_path(
+        prop1.path, 'ofs_extents') + '/'
     prop1.start_date_full = run_args.StartDate_full
     prop1.end_date_full = run_args.EndDate_full
     whichcasts = getattr(run_args, 'Whichcasts', None) or getattr(
@@ -395,7 +396,7 @@ def _run_pipeline(run_args):
     prop1.whichcasts = ','.join(whichcasts) if isinstance(
         whichcasts, list) else whichcasts.lower()
     prop1.model_source = get_model_source(ofs)
-    prop1.ofsfiletype = 'fields'
+    prop1.ofsfiletype = 'fields'  # hardcoding - 2d always uses fields
     prop1.config_file = getattr(run_args, 'config', None)
 
     prop1, logger = validate_and_initialize_parameters(prop1)

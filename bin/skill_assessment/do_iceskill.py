@@ -377,7 +377,7 @@ def do_iceskill(prop, logger):
         sys.exit(-1)
 
     # prop.path validation
-    prop.ofs_extents_path = os.path.join(
+    prop.ofs_extents_path = utils.resolve_asset_path(
         prop.path, dir_params['ofs_extents_dir'],
     )
     if not os.path.exists(prop.ofs_extents_path):

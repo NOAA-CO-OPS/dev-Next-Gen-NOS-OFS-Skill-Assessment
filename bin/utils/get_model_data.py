@@ -674,7 +674,7 @@ def get_model_data(prop, logger):
             os.path.join(prop.path, 'example_data'),
         )
 
-    ofs_extents_path = os.path.join(prop.path, dir_params['ofs_extents_dir'])
+    ofs_extents_path = utils.resolve_asset_path(prop.path, dir_params['ofs_extents_dir'])
     argu_list = (
         prop.start_date_full,
         prop.end_date_full,

@@ -580,7 +580,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
             try:
                 datum_field = vdatums[f'{prop.datum.lower()}tomsl']
                 if prop.ofs == 'wcofs':
-                    file = os.path.join(prop.path, 'src', 'wcofs_msl.nc')
+                    file = utils.resolve_asset_path(prop.path, 'src', 'wcofs_msl.nc')
                     try:
                         ds_wcofs = xr.open_dataset(file)
                     except FileNotFoundError:

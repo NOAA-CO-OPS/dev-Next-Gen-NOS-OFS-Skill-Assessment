@@ -21,12 +21,26 @@
 
 home=/path/to/sa_homedir/
 
-# Data directory
+# Directory settings below may be either:
+#   - relative (default): created as subdirectories of the working
+#     directory (the -p command line argument, or home= when -p is
+#     not given), e.g. data_dir=data
+#   - absolute: used as-is, e.g. data_dir=/mnt/bigdisk/ofs_data.
+#     Use this to write output to another disk when the installation
+#     location has limited space. A leading ~ is expanded.
+# Input assets that ship with the installation (ofs_extents/, conf/)
+# are always found automatically - they never need to be copied to
+# the output location.
+
+# Data directory - the bulk of the output (model data, observations,
+# skill statistics, plots) is written here
 #data_dir=%(home)s/data/
 data_dir=data
 
 # OFS directories
 ofs_extents_dir=ofs_extents
+# Control files directory - station control files, inventories, and
+# station ledgers are written here (relative or absolute, see above)
 control_files_dir=control_files
 observations_dir=observations
 1d_station_dir=1d_station
@@ -62,6 +76,12 @@ model_historical_dir_backup=Add_model_historical_dir_backup
 # vdatum file cannot be read from the NODD S3 bucket (noaa-nos-ofs-pds).
 # Set this to the full path of a local copy of {ofs}_vdatums.nc.
 local_vdatum = Add_path_to/file.nc
+
+# Cache directory for model files streamed from the NODD S3 buckets.
+# Streamed files can accumulate several GB here, so point this at a
+# large disk if your home directory has a size quota. Leave commented
+# out (or blank) to use the default of ~/.ofs_cache/s3
+#s3_cache_dir=/path/to/large_disk/ofs_cache
 
 [urls]
 # Station URLs
