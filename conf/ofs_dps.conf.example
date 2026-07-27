@@ -89,7 +89,7 @@ nssr_sport=https://nssrgeo.ndc.nasa.gov/SPoRT/enhanced_sst/ghrsst_netcdf
 [datums]
 # List of vertical datums that the program can convert between. If a new datum
 # is added to the package, include it here!
-datum_list=MHHW MHW MLLW MLW NAVD88 IGLD85 LWD XGEOID20B
+datum_list=MHHW MHW MLLW MLW NAVD88 IGLD85 LWD XGEOID20B MSL
 
 
 [station_IDs]

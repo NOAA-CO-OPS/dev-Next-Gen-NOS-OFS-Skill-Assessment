@@ -41,7 +41,7 @@ Arguments:
  -e EndDate_full, --EndDate ENDDATE
                        End Date
  -d StartDate_full, --datum",
-                      'MHHW', 'MHW', 'MLW', 'MLLW','NAVD88','IGLD85','LWD'",
+                      'MHHW', 'MHW', 'MLW', 'MLLW','NAVD88','IGLD85','LWD','MSL'",
  -ws whichcast, --Whichcast"
                        'Nowcast', 'Forecast_A', 'Forecast_B'
  -so stationowner, --Station_Owner" [optional]
@@ -813,7 +813,15 @@ def create_1dplot(prop, logger):
     # Datum validations!
     if prop.datum not in prop.datum_list:
         logger.error('Entered datum is not valid!')
-        if 'l' not in prop.ofs[0]:
+        if prop.ofs == 'stofs_3d_pac' and prop.ofsfiletype == 'stations':
+            prop.datum = 'MSL'
+        elif prop.ofs == 'stofs_3d_atl' and prop.ofsfiletype == 'stations':
+            prop.datum = 'NAVD88'
+        elif 'stofs_3d' in prop.ofs and prop.ofsfiletype == 'fields':
+            prop.datum = 'XGEOID20B'
+        elif prop.ofs == 'stofs_2d_glo':
+            prop.datum = 'MSL'
+        elif 'l' not in prop.ofs[0]:
             prop.datum = 'MLLW'
         else:
             prop.datum = 'LWD'
@@ -839,7 +847,7 @@ def create_1dplot(prop, logger):
                          'Switching to IGLD...', prop.datum, prop.ofs)
             prop.datum = 'IGLD85'
     except TypeError:
-        if (vdatums == -9995) and prop.ofs.lower() in ('stofs_2d_glo'):
+        if (vdatums == -9995) and prop.ofs.lower() in ('stofs_2d_glo','stofs_3d_atl','stofs_3d_pac'):
             logger.info('No vdatum file for STOFS-2D-Global, as expected.')
         else:
             logger.error('Failure checking for datum netcdf file on the NODD S3 '
