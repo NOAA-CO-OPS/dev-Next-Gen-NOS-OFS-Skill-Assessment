@@ -148,6 +148,7 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
                            logger, config_file=None):
     """ Retrieving Inventories """
     lat1, lat2, lon1, lon2 = geo[-4], geo[-3], geo[-2], geo[-1]
+    
 
     t_c_future = None
     usgs_future = None
