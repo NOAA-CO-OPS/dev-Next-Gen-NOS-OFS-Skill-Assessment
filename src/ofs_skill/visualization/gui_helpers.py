@@ -233,8 +233,8 @@ def quick_run_datum(ofs: str) -> str:
     NAVD88 (STOFS), else MLLW (tidal coastal)."""
     if ofs in GREAT_LAKES_OFS:
         return 'IGLD85'
-    if ofs == 'stofs_3d_pac':
-        return 'MSL'        
+    if ofs in ('stofs_3d_pac', 'stofs_2d_glo'):
+        return 'MSL'
     if ofs in STOFS_OFS:
         return 'NAVD88'
     return 'MLLW'

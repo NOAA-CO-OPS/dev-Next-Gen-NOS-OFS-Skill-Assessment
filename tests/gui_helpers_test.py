@@ -63,10 +63,14 @@ class TestQuickRunDatum:
         """Great Lakes OFSes use IGLD85 (no MLLW in fresh water)."""
         assert gui_helpers.quick_run_datum(ofs) == 'IGLD85'
 
-    @pytest.mark.parametrize('ofs', ['stofs_2d_glo', 'stofs_3d_atl', 'stofs_3d_pac'])
-    def test_stofs_returns_navd88(self, ofs):
-        """STOFS systems lack a uniform tidal datum, so use NAVD88."""
-        assert gui_helpers.quick_run_datum(ofs) == 'NAVD88'
+    def test_stofs_3d_atl_returns_navd88(self):
+        """STOFS-3D Atlantic defaults to NAVD88."""
+        assert gui_helpers.quick_run_datum('stofs_3d_atl') == 'NAVD88'
+
+    @pytest.mark.parametrize('ofs', ['stofs_3d_pac', 'stofs_2d_glo'])
+    def test_stofs_msl_models_return_msl(self, ofs):
+        """STOFS Pacific and STOFS 2D Global default to MSL."""
+        assert gui_helpers.quick_run_datum(ofs) == 'MSL'
 
     @pytest.mark.parametrize('ofs', ['cbofs', 'ngofs2', 'wcofs', 'sscofs', 'tbofs'])
     def test_tidal_coastal_returns_mllw(self, ofs):
