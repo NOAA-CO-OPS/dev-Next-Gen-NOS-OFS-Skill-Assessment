@@ -82,10 +82,12 @@ options below.
 
    ```ini
    # API Keys Configuration
-   # Lines starting with # are comments and are ignored.
-   # Keys with empty values are skipped.
-
+   # Copy this file to api_keys.conf and fill in your keys.
+   # api_keys.conf is git-ignored and will NOT be committed.
+   #
    # USGS Water Data API key
+   # Request a free key at: https://api.waterdata.usgs.gov
+   # Without a key: 50 requests/hour. With a key: 1000 requests/hour.
    API_USGS_PAT=your-api-key-here
    ```
 
@@ -142,6 +144,7 @@ echo $env:API_USGS_PAT
 **Step 3: Run scripts**
 ```bash
 # After installation, you can run scripts directly
+# Before running the command below, please refer to Section 3.3 for setting up the configuration file
 python bin/visualization/create_1dplot.py -p ./ -o cbofs ...
 ```
 
@@ -151,13 +154,20 @@ python bin/visualization/create_1dplot.py -p ./ -o cbofs ...
 
 If you prefer using conda for environment management:
 
+Preate and activate the environment using the provided `environment.yml` file (which specifies Python 3.11):
+
 ```bash
 # Create conda environment from environment.yml
 conda env create --name ofs_dps_env --file=environment.yml
 
 # Activate environment
 conda activate ofs_dps_env
+```
 
+
+*Note:* Make sure your active environment is using Python 3.11 (python --version).
+
+```bash
 # Install package in editable mode
 pip install -e .
 ```
@@ -182,6 +192,8 @@ echo $env:API_USGS_PAT
 ```
 
 For detailed conda setup instructions for beginners, see [Section 3.2](#32-create-an-environment-with-miniconda).
+
+After installation, you can run scripts.
 
 ### Package Organization
 
@@ -664,6 +676,78 @@ python ./bin/visualization/create_1dplot.py -p ./ -o gomofs -s 2025-11-01T00:00:
 ### 3.5.1 Inputting a custom list of station IDs
 
 By default, the skill assessment will gather ALL observation stations in an OFS for the providers chosen using the `-so` argument. If instead you would like the skill assessment to run only at specific stations (or a single station) you can input a list of station IDs to the configuration file (`ofs_dps.conf`, see [Section 3.3](#33-updating-the-conf-and-logging-files)). The IDs can be a mixture of station providers. In the configuration file, there is a section called `[station_IDs]`. There, you can list IDs separated by a space, and an example is provided in the file. Then, when running the skill assessment, enable the station list option using `-so list`.
+
+
+## 3.5.2 Quick-Start Guide for STOFS Models
+
+Follow these steps to quickly execute skill assessment runs for STOFS model components (`stofs_3d_pac`, `stofs_3d_atl`, and `stofs_2d_glo`):
+
+1. **Environment Setup:** Ensure your virtual Python environment is active and running Python 3.11 (refer to [Section 1.1](#installation) or [Section 3.2](#32-create-an-environment-with-miniconda)).
+2. **USGS API Key Configuration:** Request and configure your USGS API Key in `conf/api_keys.conf` as described in [Step 2a](#step-2a-configure-usgs-api-key).
+3. **Custom Configuration File:** Copy the default configuration template inside your `conf/` directory to a new model-specific config file (e.g., `conf/ofs_dps_stofs3d_pac.conf`):
+
+```
+cp conf/ofs_dps.conf.example conf/ofs_dps_stofs3d_pac.conf
+```
+
+4. **Update Paths in Config:** Open your newly created `.conf` file and adjust the following key settings:
+   * Set `home` under `[directories]` to your package root directory.
+   * Set `netcdf_dir`:
+     * For **operational data** (e.g., `stofs_2d_glo` or standard operational runs), leave `netcdf_dir` empty (`netcdf_dir=`).
+     * If running parallel/experimental runs in a specific directory subpath, specify that relative path (e.g., `netcdf_dir=para/stofs.v3.1.1_CMMB` or `netcdf_dir=para1_pro`).
+   * Customize output directories if desired by setting `data_dir` (e.g., `data_dir=data_stofs_3d_pac`) and `ctl_file_dir` (e.g., `ctl_file_dir=control_files_stofs_3d_pac`).
+5. **Run the Skill Assessment:** Execute `create_1dplot.py` by passing your custom configuration file path using the `-c` flag.
+
+#### Example Commands
+
+**STOFS-3D-Pac:**
+```bash
+python ./bin/visualization/create_1dplot.py \
+    -c ./conf/ofs_dps_stofs3d_pac.conf \
+    -p ./ \
+    -o stofs_3d_pac \
+    -s 2026-07-01T00:00:00Z \
+    -e 2026-07-02T00:00:00Z \
+    -d MSL \
+    -ws nowcast \
+    -t stations \
+    -so CO-OPS \
+    -vs water_level
+```
+
+**STOFS-3D-ATL:**
+```bash
+python ./bin/visualization/create_1dplot.py \
+    -c ./conf/ofs_dps_stofs3d_atl.conf \
+    -p ./ \
+    -o stofs_3d_atl \
+    -s 2026-07-01T00:00:00Z \
+    -e 2026-07-02T00:00:00Z \
+    -d NAVD88 \
+    -ws nowcast \
+    -t fields \
+    -so CO-OPS \
+    -vs water_level
+```
+
+
+**STOFS-2D-Global:**
+```bash
+python ./bin/visualization/create_1dplot.py \
+    -c ./conf/ofs_dps_stofs2d_glo.conf \
+    -p ./ \
+    -o stofs_2d_glo \
+    -s 2026-07-01T00:00:00Z \
+    -e 2026-07-02T00:00:00Z \
+    -d MSL \
+    -ws nowcast \
+    -t stations \
+    -so CO-OPS \
+    -vs water_level
+```
+
+> **Note:** For the full list of input flags, descriptions, and syntax options, please refer to the argument table in [Section 3.5](#35-running-the-1d-skill-assessment).
+
 
 ## 3.6 1D outputs
 During a run, the skill assessment creates a 'data' directory to save all skill-related outputs. Within the data directory, outputs are saved in separate sub-directories depending on output type, including 'observations', 'model', 'skill', and 'visual'.
