@@ -47,19 +47,24 @@ import os
 import pathlib
 import sys
 import threading
-import traceback
 import tkinter as tk
+import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 from tkinter import messagebox, ttk
 from tkinter.font import Font
+from typing import Literal, cast
 
 from tkcalendar import DateEntry as _TkDateEntry
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours
 from ofs_skill.obs_retrieval import utils
+
+# tkinter's ``anchor`` option only accepts these compass literals; alias
+# used to narrow the (str) theme value for type checkers.
+_tk_anchor = Literal['nw', 'n', 'ne', 'w', 'center', 'e', 'sw', 's', 'se']
 
 # Where the GUI persists recently-used path selections so users do not
 # have to re-browse on every run. Lives under the user's home folder so
@@ -712,7 +717,10 @@ def form_label(
     """Standard row label; optional trailing help icon with tooltip."""
     font = theme.hint_font if italic else theme.label_font
     display = f'{text} \u24d8' if help_text else text
-    lbl = ttk.Label(parent, text=display, font=font, anchor=theme.anchor)
+    lbl = ttk.Label(
+        parent, text=display, font=font,
+        anchor=cast('_tk_anchor', theme.anchor),
+    )
     if help_text:
         lbl.config(cursor='question_arrow')
         ToolTip(lbl, help_text)
@@ -766,7 +774,7 @@ class GuiValidation:
             try:
                 cls = w.winfo_class()
                 if cls in _ERROR_TTK_CLASSES:
-                    w.configure(style=f'Error.{cls}')
+                    w.configure(style=f'Error.{cls}')  # type: ignore[call-arg]
                     self._invalid_widgets.append(w)
             except tk.TclError:
                 pass
@@ -777,7 +785,7 @@ class GuiValidation:
             try:
                 cls = w.winfo_class()
                 if cls in _ERROR_TTK_CLASSES:
-                    w.configure(style=cls)
+                    w.configure(style=cls)  # type: ignore[call-arg]
             except tk.TclError:
                 pass
 
@@ -796,7 +804,7 @@ class GuiValidation:
         default_hour: int = 0,
     ) -> None:
         """Highlight invalid date ranges as the user edits Time Range fields."""
-        date_widgets = {start_entry, end_entry}
+        date_widgets: set[tk.Widget] = {start_entry, end_entry}
         if s_hour_spin is not None:
             date_widgets.add(s_hour_spin)
         if e_hour_spin is not None:

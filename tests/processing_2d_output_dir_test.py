@@ -18,9 +18,28 @@ import logging
 import os
 from types import SimpleNamespace
 
+import pytest
+
 from ofs_skill.visualization import processing_2d
 
 logger = logging.getLogger(__name__)
+
+
+@pytest.fixture(autouse=True)
+def _no_global_logging_reconfig(monkeypatch):
+    """Stop ``param_val`` from reconfiguring the root logging system.
+
+    ``param_val`` calls ``logging.config.fileConfig`` when it builds its own
+    logger. ``fileConfig`` mutates the *global* logging configuration (and by
+    default disables existing loggers), which silently breaks ``caplog``-based
+    assertions in unrelated tests that happen to run later in the same
+    process. Neutralizing it here keeps these unit tests hermetic and prevents
+    cross-test pollution. The directory-derivation logic under test does not
+    depend on the logging handlers themselves.
+    """
+    monkeypatch.setattr(
+        processing_2d.logging.config, 'fileConfig', lambda *a, **k: None,
+    )
 
 
 def _make_prop(base, data_dir_name):
