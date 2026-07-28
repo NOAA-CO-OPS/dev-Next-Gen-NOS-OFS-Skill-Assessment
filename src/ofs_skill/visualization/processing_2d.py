@@ -85,8 +85,11 @@ def param_val(netcdf_file_sat: str | None, prop1=None) -> tuple[Logger, list]:
     Notes:
         - Creates logger if not already configured
         - Creates output directories if they don't exist
-        - Model dir: parent_parent/model/2d/
-        - Satellite dir: parent_parent/observations/2d/
+        - Output dirs honor the configured ``data_dir`` when prop1 carries
+          the resolved ``data_model_2d_json_path`` /
+          ``data_observations_2d_json_path`` attributes; otherwise falls
+          back to deriving them from the satellite file path or prop1.path
+          (which assumes the default ``data_dir=data``).
     """
     # Check logger
     logger = None
@@ -114,9 +117,20 @@ def param_val(netcdf_file_sat: str | None, prop1=None) -> tuple[Logger, list]:
     logger.info('--- Parsing to leaflet JSON file ---')
 
     outdir = []
-    # Derive output directories from satellite file path or prop1.path
-    if netcdf_file_sat is not None:
-        # Original logic: derive from satellite file path
+    # Derive output directories. Prefer the paths already resolved from the
+    # configured ``data_dir`` by the caller (create_2dplot builds these from
+    # dir_params['data_dir'], so they honor a custom/absolute data_dir). Only
+    # fall back to deriving from the satellite file path or prop1.path when
+    # those attributes are unavailable.
+    model_2d_path = getattr(prop1, 'data_model_2d_json_path', None) \
+        if prop1 is not None else None
+    obs_2d_path = getattr(prop1, 'data_observations_2d_json_path', None) \
+        if prop1 is not None else None
+    if model_2d_path and obs_2d_path:
+        outdir.append(model_2d_path)
+        outdir.append(obs_2d_path)
+    elif netcdf_file_sat is not None:
+        # Fallback: derive from satellite file path
         outdir.append(
             os.path.join(
                 os.path.dirname(
@@ -132,7 +146,9 @@ def param_val(netcdf_file_sat: str | None, prop1=None) -> tuple[Logger, list]:
             ),
         )
     elif prop1 is not None and hasattr(prop1, 'path'):
-        # Model-only mode: derive from prop1.path
+        # Fallback model-only mode: derive from prop1.path (assumes default
+        # data_dir=data). This branch only runs when the resolved 2D json
+        # paths are not set on prop1.
         base_path = prop1.path
         outdir.append(os.path.join(base_path, 'data', 'model', '2d'))
         outdir.append(os.path.join(base_path, 'data', 'observations', '2d'))
