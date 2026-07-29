@@ -219,7 +219,7 @@ def parse_leaflet_json(model, netcdf_file_sat, prop1) -> None:
     if prop1.model_source == 'roms':
         logger.info('--- '+'ROMS: Calculating regular grid'+' ---')
         logger.info('Loading mask_rho...')
-        mask = model.variables['mask_rho'][:][0, :, :].astype(bool).compute()
+        mask = model.variables['mask_rho'][:][:,:].astype(bool).compute()
         logger.info('Loading lon_rho and lat_rho...')
         lons = np.asarray(model.variables['lon_rho'][:])
         lats = np.asarray(model.variables['lat_rho'][:])
