@@ -977,8 +977,22 @@ def oned_vector_plot2b(
 
     fig.update_traces(text=[f'{i:.1f}' for i in np.arange(0, 360, 22.5)])
 
-    figheight=(fig_info_data[0][0] * 0.9) * 600
+    totalrows = fig_info_data[0][0]
+    figheight=(totalrows * 0.9) * 600
     figwidth=fig_info_data[0][1] * 500
+
+    # Reserve a dedicated band below the plot area for the legend and the
+    # colorbar caption so neither overlaps the bottom row's compass ("S")
+    # labels. Sizing everything in paper coordinates relative to a fixed
+    # pixel bottom margin keeps the spacing consistent as the number of
+    # rows (whichcasts) changes.
+    bottom_margin_px = 90
+    # Paper-space offset of one bottom-margin height, used to place the
+    # caption and legend fully below the plotting area.
+    margin_frac = bottom_margin_px / figheight
+    caption_y = -margin_frac * 0.45
+    legend_y = -margin_frac * 0.9
+
     fig.update_layout(
         title=dict(
             text=get_title(prop, node, station_id, name_var, logger),
@@ -989,21 +1003,12 @@ def oned_vector_plot2b(
         # This determines the height of the plot based on # of rows
         height=figheight,
         width=figwidth, template='seaborn',
-        margin=dict(l=20, r=20, t=160, b=0), legend=dict(
+        margin=dict(l=20, r=20, t=160, b=bottom_margin_px), legend=dict(
             font=dict(size=14, color='black', family='Arial'),
             orientation='h',
-            yanchor='bottom',
-            y=-0.3 / fig_info_data[0][0], xanchor='center', x=0.5,
+            yanchor='top',
+            y=legend_y, xanchor='center', x=0.5,
             bgcolor='rgba(0,0,0,0)', ),
-    )
-
-    # Added extra annotation to explain colors and units
-    fig.add_annotation(
-        text='Current speed, meters per second',
-        xref='paper', yref='paper',
-        font=dict(size=12, color='black'),
-        x=0.31, y=-0.08,
-        showarrow=False,
     )
 
     polars = []
@@ -1036,12 +1041,30 @@ def oned_vector_plot2b(
     for polar_layout in polars:
         fig.update_layout(polar_layout)
 
-    # This is updating the subplot title
+    # This is updating the subplot title. Nudge each subplot title up a
+    # touch (in paper coords) so it clears the top compass labels
+    # (NNW/N/NNE) of the rose immediately below it — in the single-row
+    # layout the default anchor sat right on top of the NNW tick.
     for i in fig['layout']['annotations']:
         i['font'] = dict(size=16, color='black', family='Arial')
         i['yanchor'] = 'bottom'
         i['xanchor'] = 'left'
         i['x'] = i['x'] - 0.26 * (2 / fig_info_data[0][1])  # -0.26
+        i['y'] = i['y'] + 0.02
+
+    # Added extra annotation to explain colors and units. Added AFTER the
+    # subplot-title loop above so its anchor is not shifted by that loop;
+    # centered under the plot and pushed into the reserved bottom margin so
+    # it clears the bottom-row compass "S" labels (issue: caption overlapped
+    # the "S" of the lower-left Observations rose).
+    fig.add_annotation(
+        text='Current speed, meters per second',
+        xref='paper', yref='paper',
+        font=dict(size=12, color='black'),
+        x=0.5, y=caption_y,
+        xanchor='center', yanchor='top',
+        showarrow=False,
+    )
 
     naming_ws = '_'.join(prop.whichcasts)
     output_file = (
