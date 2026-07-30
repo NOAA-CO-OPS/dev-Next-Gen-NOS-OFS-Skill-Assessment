@@ -616,7 +616,8 @@ def download_data(prop, list_of_urls1, dir_list, logger):
         # list_of_urls = list_of_urls2
 
     # Download remaining files in parallel
-    parallel_config = get_parallel_config(logger)
+    parallel_config = get_parallel_config(
+        logger, config_file=getattr(prop, 'config_file', None))
     max_workers = parallel_config['model_download_workers']
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:

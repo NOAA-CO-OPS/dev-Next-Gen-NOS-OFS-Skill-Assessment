@@ -190,6 +190,16 @@ parallel_variables=False
 # only if you have RAM to spare. 1 = fully serialized extraction.
 parallel_extract_slots=2
 
+# CO-OPS API rate limiting. The process-wide limiter allows
+# coops_request_concurrency simultaneous requests and spaces request
+# starts by coops_request_gap_sec seconds. The defaults (2 / 0.5) were
+# tuned against CO-OPS throttling on long historical windows — raising
+# them speeds up observation retrieval but risks HTTP 403 chunk drops
+# if CO-OPS throttles your IP. Note obs_coops_workers above this limit
+# adds no throughput; the limiter is the effective cap.
+coops_request_concurrency=2
+coops_request_gap_sec=0.5
+
 # Workflow-level parallelism: run obs download + model extraction concurrently
 parallel_workflow=False
 

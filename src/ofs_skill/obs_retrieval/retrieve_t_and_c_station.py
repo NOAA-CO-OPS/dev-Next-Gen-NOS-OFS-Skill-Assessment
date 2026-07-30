@@ -81,6 +81,38 @@ _exported_stations: set[str] = set()  # Tracks stations written to CSV in the cu
 _coops_last_request_time = 0.0  # pylint: disable=invalid-name
 
 
+def configure_coops_rate_limit(concurrency=None, gap_sec=None, logger=None):
+    """Override the process-wide CO-OPS limiter from configuration.
+
+    Called by ``get_station_observations`` before the station fan-out with
+    the ``coops_request_concurrency`` / ``coops_request_gap_sec`` values
+    from the [parallelization] config section. Replacing the semaphore is
+    only safe while no request is in flight, which holds at that call
+    point; requests already queued on the old semaphore finish under it.
+
+    No-ops (keeping the tuned defaults) when values are None or unchanged.
+    """
+    global _COOPS_CONCURRENCY_LIMIT, _COOPS_MIN_REQUEST_GAP_SEC, \
+        _coops_request_semaphore  # pylint: disable=global-statement
+    if concurrency is not None:
+        concurrency = max(1, int(concurrency))
+        if concurrency != _COOPS_CONCURRENCY_LIMIT:
+            _COOPS_CONCURRENCY_LIMIT = concurrency
+            _coops_request_semaphore = threading.Semaphore(concurrency)
+            if logger:
+                logger.info(
+                    'CO-OPS request concurrency set to %d (config '
+                    'override; default 2)', concurrency)
+    if gap_sec is not None:
+        gap_sec = max(0.0, float(gap_sec))
+        if gap_sec != _COOPS_MIN_REQUEST_GAP_SEC:
+            _COOPS_MIN_REQUEST_GAP_SEC = gap_sec
+            if logger:
+                logger.info(
+                    'CO-OPS request pacing gap set to %.2fs (config '
+                    'override; default 0.5s)', gap_sec)
+
+
 def _rate_limited_get(url: str, timeout: int = 120) -> requests.Response:
     """GET ``url`` through the shared session, gated by the CO-OPS semaphore
     and paced by a minimum inter-request gap.

@@ -115,7 +115,10 @@ from ofs_skill.obs_retrieval.currents_bins_override import (
 )
 from ofs_skill.obs_retrieval.retrieve_chs_station import retrieve_chs_station
 from ofs_skill.obs_retrieval.retrieve_ndbc_station import retrieve_ndbc_station
-from ofs_skill.obs_retrieval.retrieve_t_and_c_station import retrieve_t_and_c_station
+from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
+    configure_coops_rate_limit,
+    retrieve_t_and_c_station,
+)
 from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
@@ -386,8 +389,8 @@ def _fetch_and_format_station(
     try:
         station_id = station_info[0]
         source = station_info[3]
-        datum_list = (utils.Utils(config_file).read_config_section('datums', logger)\
-                           ['datum_list']).split(' ')
+        # ``datum_list`` arrives as a parameter, read from config once by
+        # the caller — no per-station config re-read here.
 
         # Each worker gets its own RetrieveProperties — critical for
         # thread safety since the object carries mutable request state.
@@ -432,11 +435,35 @@ def _fetch_and_format_station(
                 retrieve_input.variable = variable
                 retrieve_input.datum = common_value
 
+                # For currents, restrict retrieval to the one bin this ctl
+                # row asked for. Without ``only_bins`` the retrieval walks
+                # every bin of the parent ADCP (30-day chunks each) and this
+                # caller keeps one — K bins per station meant K× the CO-OPS
+                # requests per row, all through the shared rate limiter.
+                only_bins = {bin_num} if bin_num is not None else None
                 timeseries = retrieve_t_and_c_station(
                     retrieve_input, logger,
                     control_files_path,
                     config_file=config_file,
+                    only_bins=only_bins,
                     )
+
+                if (only_bins is not None
+                        and isinstance(timeseries, dict)
+                        and bin_num not in timeseries):
+                    # The pinned bin returned nothing. Preserve the legacy
+                    # any-available-bin fallback by retrying unrestricted;
+                    # rare path, so the extra fetch only happens when the
+                    # requested bin is genuinely absent.
+                    logger.warning(
+                        'CO-OPS currents bin %s of station %s returned no '
+                        'data with a restricted fetch; retrying across all '
+                        'bins.', bin_num, station_id)
+                    timeseries = retrieve_t_and_c_station(
+                        retrieve_input, logger,
+                        control_files_path,
+                        config_file=config_file,
+                        )
 
                 if variable == 'currents' and isinstance(timeseries, dict):
                     # Pick out the requested bin. When no bin suffix was
@@ -749,6 +776,15 @@ def _process_variable_obs(
 
         # Read parallel config for worker counts
         parallel_cfg = get_parallel_config(logger, config_file=config_file)
+
+        # Apply any configured CO-OPS rate-limit override before the
+        # station fan-out. Defaults (2 concurrent / 0.5 s gap) stay in
+        # force unless the [parallelization] section says otherwise.
+        configure_coops_rate_limit(
+            concurrency=parallel_cfg.get('coops_request_concurrency'),
+            gap_sec=parallel_cfg.get('coops_request_gap_sec'),
+            logger=logger,
+        )
 
         # Currents retrieval now issues one HTTP call per ADCP bin per
         # station, so it is orders of magnitude more request-dense than
