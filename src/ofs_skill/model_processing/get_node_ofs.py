@@ -36,6 +36,11 @@ from ofs_skill.model_processing.model_source import get_model_source
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
 from ofs_skill.obs_retrieval import scalar, utils, vector
 from ofs_skill.obs_retrieval.utils import get_parallel_config
+from ofs_skill.utils.file_headers import (
+    SERIES_HEADER_PREFIX,
+    series_header,
+    strip_model_ctl_header,
+)
 from ofs_skill.utils.timeseries_coverage import covers_run_window, parse_run_window
 
 logger = logging.getLogger(__name__)
@@ -269,13 +274,9 @@ def ofs_ctlfile_extract(prop, name_var, model, logger):
         ) as file:
             model_ctlfile = file.read()
             lines = model_ctlfile.split('\n')
-            # Check if the file has contents AND if the first line is header
-            if len(lines) > 0 and 'Station ID' in lines[0]:
-                # It has the 2 header rows, so skip them
-                lines = lines[2:]
-            else:
-                # No headers found, process normally
-                pass
+            # Drop the single header line, if present (legacy files
+            # have none)
+            lines = strip_model_ctl_header(lines)
             lines = [i.split(' ') for i in lines]
             lines = [list(filter(None, i)) for i in lines]
             nodes = np.array(lines[:-1])[:, 0]
@@ -1442,7 +1443,13 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
             continue
         try:
             with open(path, encoding='utf-8') as fh:
+                # Don't count the header line toward the expected
+                # timesteps, or a file truncated one data row short
+                # would pass this check.
+                first = fh.readline()
                 row_count = sum(1 for _ in fh)
+                if first and not first.startswith(SERIES_HEADER_PREFIX):
+                    row_count += 1
         except (OSError, UnicodeDecodeError) as ex:
             logger.warning(
                 'Could not read %s for row-count check (%s); treating '
@@ -1817,6 +1824,11 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        # Same header as the other .prd branch so the
+                        # file format is not cast-dependent; omitted
+                        # for empty series to keep blank files 0 bytes.
+                        if len(formatted_series) > 0:
+                            output.write(series_header(name_conventions[0]))
                         for line in formatted_series:
                             output.write(str(line) + '\n')
                         logger.info(
@@ -1878,17 +1890,11 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         'w',
                         encoding='utf-8',
                     ) as output:
-                        if name_conventions[0] == 'cu':
-                            output.write('Julian days, Year, Month, Day, Hours, Minutes, Current speed (m/s), Current direction (0-359), u, v\n')
-                        else:
-                            obs_col = None
-                            if name_conventions[0] == 'wl':
-                                obs_col = 'Water level (m)'
-                            elif name_conventions[0] == 'temp':
-                                obs_col = 'Water temperature (C)'
-                            elif name_conventions[0] == 'salt':
-                                obs_col = 'Salinity (PSU)'
-                            output.write(f'Julian days, Year, Month, Day, Hours, Minutes, {obs_col}\n')
+                        # Header only when there is data: an empty .prd
+                        # must stay 0 bytes so the getsize() blank-file
+                        # checks downstream keep working.
+                        if len(formatted_series) > 0:
+                            output.write(series_header(name_conventions[0]))
                         for line in formatted_series:
                             output.write(str(line) + '\n')
                         logger.info(

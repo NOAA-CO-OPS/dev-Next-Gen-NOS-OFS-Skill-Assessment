@@ -113,6 +113,7 @@ from ofs_skill.obs_retrieval import (
 from ofs_skill.obs_retrieval.currents_bins_override import (
     split_virtual_currents_id,
 )
+from ofs_skill.utils.file_headers import series_header
 from ofs_skill.obs_retrieval.retrieve_chs_station import retrieve_chs_station
 from ofs_skill.obs_retrieval.retrieve_ndbc_station import retrieve_ndbc_station
 from ofs_skill.obs_retrieval.retrieve_t_and_c_station import retrieve_t_and_c_station
@@ -578,17 +579,11 @@ def _fetch_and_format_station(
                     str(station_id + '_' + ofs + '_' +
                         name_var + '_station.obs'))
                 with open(obs_path, 'w', encoding='utf-8') as output:
-                    if name_var == 'cu':
-                        output.write('Julian days, Year, Month, Day, Hours, Minutes, Current speed (m/s), Current direction (0-359), u, v\n')
-                    else:
-                        obs_col = None
-                        if name_var == 'wl':
-                            obs_col = 'Water level (m)'
-                        elif name_var == 'temp':
-                            obs_col = 'Water temperature (C)'
-                        elif name_var == 'salt':
-                            obs_col = 'Salinity (PSU)'
-                        output.write(f'Julian days, Year, Month, Day, Hours, Minutes, {obs_col}\n')
+                    # Header only when there is data: an empty .obs
+                    # must stay 0 bytes so the getsize() blank-file
+                    # checks downstream keep working.
+                    if len(formatted_series) > 0:
+                        output.write(series_header(name_var))
                     for line in formatted_series:
                         output.write(str(line) + '\n')
                     logger.info(

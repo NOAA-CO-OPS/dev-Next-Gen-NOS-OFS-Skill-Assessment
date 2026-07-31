@@ -36,6 +36,7 @@ import pytest
 import xarray as xr
 
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
+from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 
 # ---------------------------------------------------------------------------
 # Fixture: synthetic multi-file FVCOM stations dataset
@@ -145,14 +146,11 @@ def _write_obs_station_ctl(control_dir, ofs, name_var, stations):
           <lat> <lon> <depth> <pad> <datum>
     """
     path = control_dir / f'{ofs}_{name_var}_station.ctl'
-    lines = [
-        'Station ID, Station info, Name',
-        '  Latitude, Longitude, Target-to-station datum offset (m), Water depth (m), Station datum (if applicable; zero otherwise)'
-    ]
+    lines = []
     for sid, lat, lon, depth in stations:
         lines.append(f'{sid} {sid}_COOPS "Station {sid}"')
         lines.append(f'  {lat} {lon} {depth} 0.0 MLLW')
-    path.write_text('\n'.join(lines) + '\n')
+    path.write_text(OBS_CTL_HEADER + '\n'.join(lines) + '\n')
     return path
 
 

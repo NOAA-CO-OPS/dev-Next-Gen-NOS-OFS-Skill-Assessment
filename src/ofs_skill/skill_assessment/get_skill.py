@@ -29,6 +29,7 @@ from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment import format_paired_one_d, metrics_paired_one_d
 from ofs_skill.skill_assessment.make_skill_maps import make_skill_maps
 from ofs_skill.tidal_analysis.extremes import extract_water_level_extrema
+from ofs_skill.utils.file_headers import series_rows_to_skip, strip_model_ctl_header
 from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
     parse_run_window,
@@ -118,15 +119,9 @@ def ofs_ctlfile_extract(prop, name_var, logger, model_dataset=None):
         if os.path.getsize(ctl_path) > 0:
             with open(ctl_path, encoding='utf-8') as file:
                 read_ofs_ctl_file = file.read()
-                # Split into lines, ignoring the first header row
-                lines = read_ofs_ctl_file.split('\n')
-                # Check if the file has contents AND if the first line is header
-                if len(lines) > 0 and 'Station ID' in lines[0]:
-                    # It has the 2 header rows, so skip them
-                    lines = lines[2:]
-                else:
-                    # No headers found, process normally
-                    pass
+                # Split into lines; drop the single header line, if
+                # present (legacy files have none)
+                lines = strip_model_ctl_header(read_ofs_ctl_file.split('\n'))
                 lines = [x for x in lines if x != '']
                 lines = [i.split(' ') for i in lines]
                 lines = [list(filter(None, i)) for i in lines]
@@ -171,20 +166,21 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
 
         if os.path.isfile(obs_path):
             if os.path.getsize(obs_path) > 0:
-                # peek at the first line
-                with open(obs_path, encoding='utf-8') as f:
-                    first_line = f.readline()
-
-                # check for your specific header text
-                if 'Julian days' in first_line:
-                    rows_to_skip = 1
-                else:
-                    rows_to_skip = 0
-                obs_df = pd.read_csv(obs_path,
-                    sep=r'\s+',
-                    header=None,
-                    skiprows=rows_to_skip, # Added to skip the new header line
-                )
+                try:
+                    obs_df = pd.read_csv(obs_path,
+                        sep=r'\s+',
+                        header=None,
+                        skiprows=series_rows_to_skip(obs_path),
+                    )
+                except EmptyDataError:
+                    logger.error(
+                        '%s/%s_%s_%s_station.obs has no data rows',
+                        prop.data_observations_1d_station_path,
+                        read_station_ctl_file[0][obs_row][0],
+                        prop.ofs,
+                        name_var,
+                    )
+                    return formatted_series
             else:
                 logger.error(
                     '%s/%s_%s_%s_station.obs is empty',
@@ -210,20 +206,14 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
 
             prd_path = os.path.join(prop.data_model_1d_node_path,prdfile)
             if os.path.isfile(prd_path):
-
-                # peek at the first line
-                with open(prd_path, encoding='utf-8') as f:
-                    first_line = f.readline()
-                # check for your specific header text
-                if 'Julian days' in first_line:
-                    rows_to_skip = 1
-                else:
-                    rows_to_skip = 0
-                ofs_df = pd.read_csv(prd_path,
-                    sep=r'\s+',
-                    header=None,
-                    skiprows=rows_to_skip
-                )
+                try:
+                    ofs_df = pd.read_csv(prd_path,
+                        sep=r'\s+',
+                        header=None,
+                        skiprows=series_rows_to_skip(prd_path)
+                    )
+                except EmptyDataError:
+                    return None
             else:
                 logger.error(
                     '%s/%s_%s_%s_%s_%s_%s_%s_model.prd is missing',
@@ -261,18 +251,10 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
                                       model_dataset=cached)
                 _set_cached_model(prop, result)
             try:
-                # peek at the first line
-                with open(prd_path, encoding='utf-8') as f:
-                    first_line = f.readline()
-                # check for your specific header text
-                if 'Julian days' in first_line:
-                    rows_to_skip = 1
-                else:
-                    rows_to_skip = 0
                 ofs_df = pd.read_csv(prd_path,
                     sep=r'\s+',
                     header=None,
-                    skiprows=rows_to_skip
+                    skiprows=series_rows_to_skip(prd_path)
                     )
             except EmptyDataError:
                 return None

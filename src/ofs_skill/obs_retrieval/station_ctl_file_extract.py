@@ -7,6 +7,8 @@ Extract and parse observation station information from control files.
 import os
 from typing import Optional
 
+from ofs_skill.utils.file_headers import strip_obs_ctl_header
+
 
 def station_ctl_file_extract(ctlfile_path: str) -> Optional[tuple[list[list[str]], list[list[str]]]]:
     """
@@ -76,15 +78,11 @@ def station_ctl_file_extract(ctlfile_path: str) -> Optional[tuple[list[list[str]
     with open(ctlfile_path, encoding='utf-8') as f:
         ctlfile = f.read()
 
-    # Split into lines, ignoring the first two header rows
-    lines = ctlfile.split('\n')
-    # Check if the file has contents AND if the first line is header
-    if len(lines) > 0 and 'Station ID' in lines[0]:
-        # It has the 2 header rows, so skip them
-        lines = lines[2:]
-    else:
-        # No headers found, process normally
-        pass
+    # Split into lines; drop the two header rows, if present (legacy
+    # files have none). Detection is anchored to the line start so a
+    # station name containing 'Station ID' cannot be mistaken for a
+    # header.
+    lines = strip_obs_ctl_header(ctlfile.split('\n'))
 
     # Extract station info (even lines: 0, 2, 4, ...)
     raw_lines1 = lines[0::2]

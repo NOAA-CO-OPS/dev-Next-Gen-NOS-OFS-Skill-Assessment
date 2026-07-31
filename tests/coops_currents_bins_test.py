@@ -720,7 +720,7 @@ def test_get_title_includes_model_depth_from_ctl(
     ctl_dir = tmp_path / 'control_files'
     ctl_dir.mkdir()
     (ctl_dir / 'cbofs_cu_model_station.ctl').write_text(
-        'Node/station index, Depth layer index, Latitude, Longitude, Station ID, Water depth (m)\n'
+        'Node/station index, Depth layer index, Latitude, Longitude, Station ID, Model layer depth (m)\n'
         '41 6 41.807 -71.401 8454000_b02 3.8\n'
     )
 

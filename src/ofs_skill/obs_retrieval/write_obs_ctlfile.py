@@ -30,6 +30,7 @@ from typing import Optional
 import pandas as pd
 
 from ofs_skill.obs_retrieval import retrieve_properties, utils, vdatum_resilient
+from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 from ofs_skill.obs_retrieval.chs_utils import (
     CHS_IWLS_BASE_URL,
     CHS_SINE_BASE_URL,
@@ -982,8 +983,11 @@ def _process_variable(
             'w',
             encoding='utf-8',
         ) as output:
-            output.write('Station ID, Station info, Name\n')
-            output.write('  Latitude, Longitude, Target-to-station datum offset (m), Water depth (m), Station datum (if applicable; zero otherwise)\n')
+            # Header only when there is data: an empty ctl must stay
+            # 0 bytes so station_ctl_file_extract keeps returning None
+            # for blank files.
+            if ctl_file:
+                output.write(OBS_CTL_HEADER)
             for i in ctl_file:
                 output.write(str(i))
             logger.info(
