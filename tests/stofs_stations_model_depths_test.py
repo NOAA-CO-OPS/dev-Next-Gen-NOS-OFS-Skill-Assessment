@@ -30,6 +30,7 @@ import xarray as xr
 
 from ofs_skill.model_processing.indexing import index_nearest_depth
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
+from ofs_skill.utils.file_headers import strip_model_ctl_header
 
 LOGGER = logging.getLogger('stofs_stations_model_depths_test')
 
@@ -238,7 +239,8 @@ def test_write_ofs_ctlfile_stofs_stations(tmp_path, variable, name_var):
 
     out = ctl_dir / f'stofs_3d_atl_{name_var}_model_station.ctl'
     assert out.is_file(), 'model ctl file was not created'
-    lines = out.read_text(encoding='utf-8').splitlines()
+    lines = strip_model_ctl_header(
+        out.read_text(encoding='utf-8').splitlines())
     # Two of the three obs stations match model station names
     assert len(lines) == 2
     for line, (sid, lat, lon) in zip(
