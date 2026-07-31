@@ -9,8 +9,38 @@ import logging
 import math
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Union
+
+# Parsed-config cache keyed on file path, invalidated by (mtime_ns, size).
+# The pipeline re-reads config sections constantly — per variable, per
+# station in the obs fan-out, per plot dispatch — and each call was a
+# fresh configparser.read() from disk. Caching the parsed object keeps
+# every call after the first in memory while an edited file (new mtime)
+# still reparses.
+_CONFIG_PARSE_CACHE: dict[Path, tuple[tuple[int, int],
+                                      configparser.ConfigParser]] = {}
+_CONFIG_PARSE_LOCK = threading.Lock()
+
+
+def _read_config_cached(config_file: Path) -> configparser.ConfigParser:
+    """Return a parsed ConfigParser for ``config_file``, cached by mtime.
+
+    Raises ``OSError`` when the file is missing, matching what callers
+    already handle for unreadable configs.
+    """
+    stat = os.stat(config_file)
+    key = (stat.st_mtime_ns, stat.st_size)
+    with _CONFIG_PARSE_LOCK:
+        cached = _CONFIG_PARSE_CACHE.get(config_file)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    with _CONFIG_PARSE_LOCK:
+        _CONFIG_PARSE_CACHE[config_file] = (key, config)
+    return config
 
 
 class Utils:
@@ -156,10 +186,9 @@ class Utils:
         an error is logged and an empty dictionary is returned.
         """
         params = {}
-        config = configparser.ConfigParser()
 
         try:
-            config.read(self.config_file)
+            config = _read_config_cached(self.config_file)
             options = config.options(section)
 
             for option in options:
@@ -431,6 +460,8 @@ def get_parallel_config(logger=None, config_file=None):
         'parallel_obs_variables': False,
         'parallel_2d_interp': False,
         'parallel_extract_slots': 2,
+        'coops_request_concurrency': 2,
+        'coops_request_gap_sec': 0.5,
     }
 
     if logger is None:
@@ -503,11 +534,30 @@ def get_parallel_config(logger=None, config_file=None):
         except ValueError:
             pass
 
+    # Parse CO-OPS rate-limit overrides. These feed the process-wide
+    # limiter in retrieve_t_and_c_station (concurrent in-flight GETs and
+    # minimum start-to-start gap). Defaults match the values tuned
+    # against CO-OPS throttling on long historical windows; raising them
+    # risks HTTP 403 chunk drops, so they are opt-in per run.
+    val = raw.get('coops_request_concurrency', '').strip().lower()
+    if val:
+        try:
+            result['coops_request_concurrency'] = min(max(1, int(val)), 8)
+        except ValueError:
+            pass
+    val = raw.get('coops_request_gap_sec', '').strip().lower()
+    if val:
+        try:
+            result['coops_request_gap_sec'] = min(max(0.0, float(val)), 10.0)
+        except ValueError:
+            pass
+
     # If parallelization is globally disabled, force all workers to 1
     if not result['parallel_enabled']:
         for key in int_keys + ['ha_workers']:
             result[key] = 1
         result['parallel_extract_slots'] = 1
+        result['coops_request_concurrency'] = 1
 
     return result
 

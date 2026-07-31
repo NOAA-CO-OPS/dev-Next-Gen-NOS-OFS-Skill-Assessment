@@ -388,7 +388,7 @@ def run_harmonic_analysis_station_loop(
     # ------------------------------------------------------------------
     # Phase 2: Dispatch work items to ProcessPoolExecutor
     # ------------------------------------------------------------------
-    parallel_config = get_parallel_config(logger)
+    parallel_config = get_parallel_config(logger, config_file=_conf)
     max_workers = parallel_config['ha_workers']
 
     if work_items:
@@ -1107,7 +1107,8 @@ def run_harmonic_analysis(prop, logger):
             )
 
     # Dispatch variable processing — parallel or sequential
-    parallel_cfg = get_parallel_config(logger)
+    parallel_cfg = get_parallel_config(
+        logger, config_file=getattr(prop, 'config_file', None))
     ha_vars = [v for v in prop.var_list if v in ('water_level', 'currents')]
     if parallel_cfg['parallel_variables'] and len(ha_vars) > 1:
         logger.info('Processing %d HA variables in parallel', len(ha_vars))

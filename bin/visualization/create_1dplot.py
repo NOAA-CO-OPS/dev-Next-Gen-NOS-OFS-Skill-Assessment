@@ -651,7 +651,8 @@ def create_1dplot_2nd_part(
     # must run sequentially.
     _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger)
 
-    parallel_config = get_parallel_config(logger)
+    parallel_config = get_parallel_config(
+        logger, config_file=getattr(prop, 'config_file', None))
     num_stations = len(read_ofs_ctl_file[1])
     use_parallel = (parallel_config.get('parallel_plotting', True)
                     and num_stations > 1)
@@ -1125,7 +1126,8 @@ def create_1dplot(prop, logger):
             _emit_summary_barplots(p, var_info, logger)
 
     # --- Forecast cycle parallelism for forecast_a mode ---
-    parallel_config = get_parallel_config(logger)
+    parallel_config = get_parallel_config(
+        logger, config_file=getattr(prop, 'config_file', None))
     if 'forecast_a' in prop.whichcast:
         #_, forecast_cycles = get_fcst_hours(prop.ofs)
         forecast_cycles = [int(prop.forecast_hr[:-1])]
