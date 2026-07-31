@@ -114,7 +114,6 @@ from ofs_skill.obs_retrieval import (
 from ofs_skill.obs_retrieval.currents_bins_override import (
     split_virtual_currents_id,
 )
-from ofs_skill.utils.file_headers import series_header
 from ofs_skill.obs_retrieval.retrieve_chs_station import retrieve_chs_station
 from ofs_skill.obs_retrieval.retrieve_ndbc_station import retrieve_ndbc_station
 from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
@@ -125,6 +124,8 @@ from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
+from ofs_skill.utils import cache_manifest
+from ofs_skill.utils.file_headers import series_header
 
 # Import directly from module to avoid circular import
 
@@ -132,6 +133,16 @@ from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
 
 TIMEOUT_SEC = 120 # default API timeout in seconds
 socket.setdefaulttimeout(TIMEOUT_SEC)
+
+# Variable -> ctl/obs/prd name-part mapping. Single source of truth so the
+# obs, ctl-manifest, and reuse gates agree on the ``wl``/``temp``/``salt``/
+# ``cu`` suffixes rather than re-deriving them inline at each site.
+_VAR_TO_NAME = {
+    'water_level': 'wl',
+    'water_temperature': 'temp',
+    'salinity': 'salt',
+    'currents': 'cu',
+}
 
 # Serializes the station ctl file build across variable threads.
 # ``write_obs_ctlfile`` creates the ctl files for ALL variables in a
@@ -358,6 +369,7 @@ def _fetch_and_format_station(
     station_info, station_metadata, variable, name_var, datum, datum_list,
     start_date, end_date, start_date_full, end_date_full, ofs,
     data_observations_1d_station_path, logger, control_files_path, config_file=None,
+    obs_signature=None,
 ):
     """Fetch observation data for a single station, format it, and write .obs file.
 
@@ -638,6 +650,11 @@ def _fetch_and_format_station(
                         '%s_%s_%s_station.obs created successfully',
                         station_id, ofs, name_var
                     )
+                # Stamp the run signature so a same-parameter rerun reuses
+                # this file and a changed-parameter run treats it as stale.
+                if obs_signature is not None:
+                    cache_manifest.record_artifact(
+                        obs_path, obs_signature, logger)
                 return station_id
             else:
                 logger.info('Formatted %s time series '
@@ -791,6 +808,15 @@ def _process_variable_obs(
         r'' + control_files_path + '/' + ofs +
         '_' + name_var + '_station.ctl'
     )
+    # A station ctl left from a run with a different window / station-owner
+    # selection encodes the wrong station set; its filename does not record
+    # those parameters, so delete it when the recorded run signature differs
+    # (issue: stale cache reuse across runs). The manifest also covers the
+    # inventory + all sibling ctl files written in the same build pass.
+    obs_ctl_signature = cache_manifest.run_signature(prop, variable=variable)
+    cache_manifest.ensure_fresh(
+        ctl_file_path, obs_ctl_signature, control_files_path,
+        'obs ctl', logger)
     read_station_ctl_file = station_ctl_file_extract(ctl_file_path)
 
     if read_station_ctl_file is not None:
@@ -805,6 +831,22 @@ def _process_variable_obs(
             ctl_file_path, prop, datum, start_date, end_date, path, ofs,
             stationowner, var_list, logger, config_file=config_file,
         )
+        # Record the signature for every station ctl the build produced, so
+        # sibling variables reuse them and a same-parameter rerun stays fast.
+        if read_station_ctl_file is not None:
+            for other_var in var_list:
+                other_name = _VAR_TO_NAME.get(other_var)
+                if other_name is None:
+                    continue
+                other_path = (
+                    r'' + control_files_path + '/' + ofs +
+                    '_' + other_name + '_station.ctl'
+                )
+                if os.path.isfile(other_path):
+                    cache_manifest.record_artifact(
+                        other_path,
+                        cache_manifest.run_signature(prop, variable=other_var),
+                        logger)
 
     logger.info('Downloading data found in the station ctl files')
 
@@ -894,7 +936,15 @@ def _process_variable_obs(
                         data_observations_1d_station_path,
                         f'{station_info[0]}_{ofs}_{name_var}_station.obs',
                     )
-                    if not os.path.isfile(obs_path):
+                    # Reuse an existing .obs only if it was written for this
+                    # run's parameters; a file from an earlier window/options
+                    # is deleted and re-fetched (issue: stale cache reuse).
+                    obs_signature = cache_manifest.run_signature(
+                        prop, variable=variable)
+                    reusable = cache_manifest.ensure_fresh(
+                        obs_path, obs_signature,
+                        data_observations_1d_station_path, 'obs', logger)
+                    if not reusable:
                         future = executor.submit(
                             _fetch_and_format_station,
                             station_info,
@@ -912,6 +962,7 @@ def _process_variable_obs(
                             logger,
                             control_files_path,
                             config_file,
+                            obs_signature,
                         )
                         futures[future] = station_info[0]
                     else:

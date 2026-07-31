@@ -91,12 +91,24 @@ from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment.get_skill import get_skill
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
     parse_run_window,
     remove_stale_artifact,
 )
 from ofs_skill.visualization import create_gui, plotting_scalar, plotting_vector, summary_barplots
+
+# Short ctl/prd name-part -> long variable name. The cache-manifest run
+# signatures are keyed on the long variable name (as written by the ctl/prd
+# builders), so the ctl-read gate maps ``wl``/``temp``/``salt``/``cu`` back
+# before comparing signatures.
+_NAME_TO_VARIABLE = {
+    'wl': 'water_level',
+    'temp': 'water_temperature',
+    'salt': 'salinity',
+    'cu': 'currents',
+}
 
 warnings.filterwarnings('ignore')
 
@@ -285,7 +297,27 @@ def ofs_ctlfile_read(prop, name_var, logger):
 
             get_skill(prop, logger)
 
-    # If file exists, use method A to parse it
+    # A model ctl left from a run with different parameters would otherwise
+    # be parsed as-is (its filename encodes only ofs+var, not the window or
+    # station-owner/datum options). Drop it on a signature mismatch so
+    # get_skill rebuilds it and the downstream artifacts for the current run
+    # (issue: stale cache reuse across runs). The build path in
+    # write_ofs_ctlfile keys the manifest on the long variable name.
+    else:
+        ctl_variable = _NAME_TO_VARIABLE.get(name_var, name_var)
+        ctl_sig = cache_manifest.run_signature(prop, variable=ctl_variable)
+        if not cache_manifest.artifact_is_fresh(filename, ctl_sig):
+            if remove_stale_artifact(
+                    filename, prop.control_files_path, logger):
+                cache_manifest.forget_artifact(filename, logger)
+                cache_manifest.note_stale('model ctl')
+            for i in prop.whichcasts:
+                prop.whichcast = i.lower()
+                logger.info(f'Running scripts for whichcast = {i}')
+                if prop.start_date_full.find('T') == -1:
+                    prop.start_date_full = prop.start_date_full_before
+                    prop.end_date_full = prop.end_date_full_before
+                get_skill(prop, logger)
     if os.path.isfile(filename):
         if os.path.getsize(filename):
             return parse_ofs_ctlfile(filename)
@@ -629,6 +661,24 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
                     pair_file, run_window[0], run_window[1])
                 remove_stale_artifact(
                     pair_file, prop.data_skill_1d_pair_path, logger)
+                cache_manifest.forget_artifact(pair_file, logger)
+            # Even a window-covering pair file may have been built under
+            # different datum/station-owner/bins parameters. The manifest
+            # catches that; delete and regenerate on a signature mismatch.
+            elif os.path.isfile(pair_file):
+                pair_sig = cache_manifest.run_signature(
+                    prop, variable=var_info[1],
+                    extra={'whichcast': current_cast})
+                if not cache_manifest.artifact_is_fresh(pair_file, pair_sig):
+                    logger.warning(
+                        'Paired dataset %s was built for different run '
+                        'parameters and is likely left over from an '
+                        'earlier run. Deleting it so it is regenerated.',
+                        pair_file)
+                    if remove_stale_artifact(
+                            pair_file, prop.data_skill_1d_pair_path, logger):
+                        cache_manifest.forget_artifact(pair_file, logger)
+                        cache_manifest.note_stale('paired')
             if not os.path.isfile(pair_file):
                 if (prop.ofsfiletype == 'fields'
                         or read_ofs_ctl_file[1][i] >= 0):
@@ -843,6 +893,10 @@ def create_1dplot(prop, logger):
         logger.info('Using log config %s', log_config_file)
 
     logger.info('--- Starting Visualization Process ---')
+
+    # Start a fresh tally of any cached artifacts we regenerate because the
+    # run parameters (window/options) changed since they were last built.
+    cache_manifest.reset_stale_counter()
 
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
     # Retrieve datum list from config file
@@ -1222,6 +1276,10 @@ def create_1dplot(prop, logger):
         search_string=prop.ofs,
         whichcasts=getattr(prop, 'whichcasts', None),
         logger=logger)
+
+    # One-line summary if any cached artifacts were regenerated because the
+    # run parameters differed from the files on disk (stale-cache guard).
+    cache_manifest.emit_stale_summary(prop.ofs, logger)
 
     return logger
 
