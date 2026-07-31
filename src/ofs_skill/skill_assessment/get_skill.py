@@ -31,6 +31,7 @@ from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment import format_paired_one_d, metrics_paired_one_d
 from ofs_skill.skill_assessment.make_skill_maps import make_skill_maps
 from ofs_skill.tidal_analysis.extremes import extract_water_level_extrema
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import series_rows_to_skip, strip_model_ctl_header
 from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
@@ -466,6 +467,14 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                 cleaned_val = str(p_value).replace(',', ' ').replace('[', '').replace(']', '')
                 output_2.write(f'{cleaned_val}\n')
         logger.info(f'{filename} is created successfully')
+        # Stamp the run signature on the paired file so a same-parameter
+        # rerun reuses it and a changed-parameter run treats it as stale.
+        cache_manifest.record_artifact(
+            int_path,
+            cache_manifest.run_signature(
+                prop, variable=name_var,
+                extra={'whichcast': getattr(prop, 'whichcast', None)}),
+            logger)
 
         # Water-level extrema (HW/LW) independent detection + ±3h pairing
         if name_var == 'wl' and prop.ofs[0] != 'l':
@@ -892,6 +901,10 @@ def get_skill(prop, logger):
                         name_var+'_station.obs'))
             if os.path.isfile(obs_path):
                 if os.path.getsize(obs_path) > 0:
+                    obs_sig = cache_manifest.run_signature(
+                        p, variable=name_var)
+                    stale_params = not cache_manifest.artifact_is_fresh(
+                        obs_path, obs_sig)
                     if (run_window is not None
                             and not covers_run_window(
                                 obs_path, run_window[0], run_window[1],
@@ -906,6 +919,23 @@ def get_skill(prop, logger):
                                 obs_path,
                                 p.data_observations_1d_station_path,
                                 logger_):
+                            cache_manifest.forget_artifact(obs_path, logger_)
+                            needs_fetch = True
+                    elif stale_params:
+                        # Same window length but built under different
+                        # datum/station-owner/bins parameters -- delete and
+                        # re-fetch for the current run.
+                        logger_.warning(
+                            '%s was built for different run parameters and '
+                            'is likely left over from an earlier run. '
+                            'Deleting it and re-fetching observations.',
+                            obs_path)
+                        if remove_stale_artifact(
+                                obs_path,
+                                p.data_observations_1d_station_path,
+                                logger_):
+                            cache_manifest.forget_artifact(obs_path, logger_)
+                            cache_manifest.note_stale('obs')
                             needs_fetch = True
                     else:
                         logger_.info('%s found', obs_path)
@@ -946,6 +976,13 @@ def get_skill(prop, logger):
                     f'{p.ofsfiletype}_model.prd'
                 )
             if os.path.isfile(prd_path):
+                prd_extra = {'whichcast': p.whichcast}
+                if p.whichcast == 'forecast_a':
+                    prd_extra['forecast_hr'] = p.forecast_hr
+                prd_sig = cache_manifest.run_signature(
+                    p, variable=name_var, extra=prd_extra)
+                stale_params = not cache_manifest.artifact_is_fresh(
+                    prd_path, prd_sig)
                 if (run_window is not None
                         and not covers_run_window(
                             prd_path, run_window[0], run_window[1],
@@ -957,6 +994,19 @@ def get_skill(prop, logger):
                         prd_path, run_window[0], run_window[1])
                     if remove_stale_artifact(
                             prd_path, p.data_model_1d_node_path, logger_):
+                        cache_manifest.forget_artifact(prd_path, logger_)
+                        needs_model = True
+                elif stale_params:
+                    # Same window length but built under different
+                    # datum/station-owner/bins parameters -- re-extract.
+                    logger_.warning(
+                        '%s was built for different run parameters and is '
+                        'likely left over from an earlier run. Deleting it '
+                        'and re-extracting model data.', prd_path)
+                    if remove_stale_artifact(
+                            prd_path, p.data_model_1d_node_path, logger_):
+                        cache_manifest.forget_artifact(prd_path, logger_)
+                        cache_manifest.note_stale('prd')
                         needs_model = True
             else:
                 logger_.info('%s is missing', prd_path)
