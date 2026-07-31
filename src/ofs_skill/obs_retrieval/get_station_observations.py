@@ -480,6 +480,19 @@ def _fetch_and_format_station(
                     if bin_num is not None and bin_num in timeseries:
                         timeseries = timeseries[bin_num]
                         logger.info('Picked currents bin successfully!')
+                    elif bin_num is not None and timeseries:
+                        # Virtual bin row whose exact bin is still absent
+                        # after the unrestricted retry. Substituting another
+                        # bin here would publish that bin's data under this
+                        # row's virtual ID and depth, silently corrupting
+                        # the skill statistics — skip the station instead.
+                        logger.error(
+                            'CO-OPS currents bin %s not found for station '
+                            '%s (available: %s); skipping station rather '
+                            'than substituting another bin\'s data.',
+                            bin_num, station_id,
+                            sorted(timeseries.keys()))
+                        return None
                     elif timeseries:
                         fallback_key = sorted(timeseries.keys())[0]
                         logger.warning(

@@ -82,7 +82,7 @@ def test_virtual_bin_row_restricts_fetch(tmp_path):
 
 
 def test_missing_bin_retries_unrestricted(tmp_path):
-    """Empty restricted fetch falls back to the legacy all-bins fetch."""
+    """Empty restricted fetch triggers the unrestricted all-bins retry."""
     calls = []
 
     def fake_retrieve(retrieve_input, logger, control_files_path,
@@ -95,9 +95,10 @@ def test_missing_bin_retries_unrestricted(tmp_path):
     result, _ = _call('1234567_b03', retrieve_mock=fake_retrieve,
                       tmp_path=tmp_path)
 
-    # Restricted first, unrestricted retry second, fallback bin used.
+    # Restricted first, unrestricted retry second. The retry still lacks
+    # bin 3, so the virtual row is skipped rather than fed bin 5's data.
     assert calls == [{3}, None]
-    assert result == '1234567_b03'
+    assert result is None
 
 
 def test_legacy_id_fetches_all_bins(tmp_path):
