@@ -30,6 +30,7 @@ from typing import Optional
 import pandas as pd
 
 from ofs_skill.obs_retrieval import retrieve_properties, utils, vdatum_resilient
+from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 from ofs_skill.obs_retrieval.chs_utils import (
     CHS_IWLS_BASE_URL,
     CHS_SINE_BASE_URL,
@@ -176,6 +177,21 @@ def _normalize_vdatum_name(name: str) -> str:
     return name
 
 
+def _ctl_availability_probe_enabled(config_file, logger) -> bool:
+    """Read the ``[settings] ctl_availability_probe`` escape hatch.
+
+    Defaults to True (probe enabled) when the key or section is absent.
+    False restores the full-download currents scan at ctl-file creation
+    — kept as an operator escape hatch because the probe trades the
+    exhaustive per-bin window downloads for short availability samples.
+    """
+    settings_params = utils.Utils(config_file).read_config_section(
+        'settings', logger
+    )
+    raw = settings_params.get('ctl_availability_probe', 'True')
+    return str(raw).strip().lower() in ('true', '1', 'yes')
+
+
 def _emit_coops_currents_entries(
     id_number,
     name,
@@ -274,6 +290,7 @@ def _process_coops_station(
     bin_overrides=None,
     config_file=None,
     control_files_path=None,
+    availability_probe=False,
 ):
     """Process a single CO-OPS station."""
     try:
@@ -294,6 +311,7 @@ def _process_coops_station(
             only_bins=only_bins,
             config_file=config_file,
             control_files_path=control_files_path,
+            availability_probe=(availability_probe and variable == 'currents'),
         )
         if variable == 'water_level':
             datum_found = None
@@ -827,6 +845,7 @@ def _process_variable(
     logger,
     currents_bins_overrides=None,
     config_file=None,
+    availability_probe=False,
 ):
     """Process all stations for a single variable. Writes .ctl file."""
     var_name_map = {
@@ -887,6 +906,7 @@ def _process_variable(
                         station_overrides,
                         config_file=config_file,
                         control_files_path=control_files_path,
+                        availability_probe=availability_probe,
                     )
                 )
 
@@ -982,6 +1002,11 @@ def _process_variable(
             'w',
             encoding='utf-8',
         ) as output:
+            # Header only when there is data: an empty ctl must stay
+            # 0 bytes so station_ctl_file_extract keeps returning None
+            # for blank files.
+            if ctl_file:
+                output.write(OBS_CTL_HEADER)
             for i in ctl_file:
                 output.write(str(i))
             logger.info(
@@ -1113,6 +1138,13 @@ def write_obs_ctlfile(
 
     reset_run_counters()
 
+    availability_probe = _ctl_availability_probe_enabled(config_file, logger)
+    if not availability_probe:
+        logger.info(
+            'ctl_availability_probe=False: CO-OPS currents ctl scan will '
+            'download the full window for every bin.'
+        )
+
     with ThreadPoolExecutor(max_workers=len(var_list)) as executor:
         futures = []
         for variable in var_list:
@@ -1132,6 +1164,7 @@ def write_obs_ctlfile(
                     logger,
                     currents_bins_overrides,
                     config_file,
+                    availability_probe=availability_probe,
                 )
             )
 

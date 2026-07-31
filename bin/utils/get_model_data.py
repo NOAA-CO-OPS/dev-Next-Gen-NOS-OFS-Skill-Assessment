@@ -718,7 +718,8 @@ def download_data(prop, list_of_urls1, dir_list, logger):
         # list_of_urls = list_of_urls2
 
     # Download remaining files in parallel
-    parallel_config = get_parallel_config(logger)
+    parallel_config = get_parallel_config(
+        logger, config_file=getattr(prop, 'config_file', None))
     max_workers = parallel_config['model_download_workers']
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -776,7 +777,7 @@ def get_model_data(prop, logger):
             os.path.join(prop.path, 'example_data'),
         )
 
-    ofs_extents_path = os.path.join(prop.path, dir_params['ofs_extents_dir'])
+    ofs_extents_path = utils.resolve_asset_path(prop.path, dir_params['ofs_extents_dir'])
     argu_list = (
         prop.start_date_full,
         prop.end_date_full,

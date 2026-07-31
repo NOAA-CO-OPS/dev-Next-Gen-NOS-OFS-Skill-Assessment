@@ -36,6 +36,12 @@ from ofs_skill.model_processing.model_source import get_model_source
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
 from ofs_skill.obs_retrieval import scalar, utils, vector
 from ofs_skill.obs_retrieval.utils import get_parallel_config
+from ofs_skill.utils.file_headers import (
+    SERIES_HEADER_PREFIX,
+    series_header,
+    strip_model_ctl_header,
+)
+from ofs_skill.utils.timeseries_coverage import covers_run_window, parse_run_window
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +274,9 @@ def ofs_ctlfile_extract(prop, name_var, model, logger):
         ) as file:
             model_ctlfile = file.read()
             lines = model_ctlfile.split('\n')
+            # Drop the single header line, if present (legacy files
+            # have none)
+            lines = strip_model_ctl_header(lines)
             lines = [i.split(' ') for i in lines]
             lines = [list(filter(None, i)) for i in lines]
             nodes = np.array(lines[:-1])[:, 0]
@@ -1275,7 +1284,7 @@ def parameter_validation(prop, dir_params, logger):
         prop.path = dir_params['home']
 
     # Path validation
-    ofs_extents_path = os.path.join(prop.path, dir_params['ofs_extents_dir'])
+    ofs_extents_path = utils.resolve_asset_path(prop.path, dir_params['ofs_extents_dir'])
     if not os.path.exists(ofs_extents_path):
         error_message = f'ofs_extents/ folder is not found. ' \
                         f'Please check Path - ' \
@@ -1434,8 +1443,14 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
             continue
         try:
             with open(path, encoding='utf-8') as fh:
+                # Don't count the header line toward the expected
+                # timesteps, or a file truncated one data row short
+                # would pass this check.
+                first = fh.readline()
                 row_count = sum(1 for _ in fh)
-        except OSError as ex:
+                if first and not first.startswith(SERIES_HEADER_PREFIX):
+                    row_count += 1
+        except (OSError, UnicodeDecodeError) as ex:
             logger.warning(
                 'Could not read %s for row-count check (%s); treating '
                 'as incomplete and re-extracting.', path, ex)
@@ -1450,6 +1465,22 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
                 'previous run likely killed mid-write. Re-extracting.',
                 path, row_count, expected_timesteps)
             return False
+
+    # Row counts alone cannot distinguish a fresh file from one left over
+    # by an earlier run of the same window length (daily operational runs
+    # produce identical row counts every day). Check that the files
+    # actually cover the requested run window before reusing them.
+    run_window = parse_run_window(prop_local, logger)
+    if run_window is not None:
+        for i in range(n_stations):
+            path = _prd_path(i)
+            if not covers_run_window(path, run_window[0], run_window[1],
+                                     logger=logger):
+                logger.warning(
+                    'Resume check: %s does not cover the run window '
+                    '%s to %s — likely left over from an earlier run. '
+                    'Re-extracting.', path, run_window[0], run_window[1])
+                return False
     return True
 
 
@@ -1793,6 +1824,11 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        # Same header as the other .prd branch so the
+                        # file format is not cast-dependent; omitted
+                        # for empty series to keep blank files 0 bytes.
+                        if len(formatted_series) > 0:
+                            output.write(series_header(name_conventions[0]))
                         for line in formatted_series:
                             output.write(str(line) + '\n')
                         logger.info(
@@ -1854,6 +1890,11 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        # Header only when there is data: an empty .prd
+                        # must stay 0 bytes so the getsize() blank-file
+                        # checks downstream keep working.
+                        if len(formatted_series) > 0:
+                            output.write(series_header(name_conventions[0]))
                         for line in formatted_series:
                             output.write(str(line) + '\n')
                         logger.info(

@@ -37,6 +37,7 @@ import numpy as np
 import ofs_skill.model_processing.indexing as indexing
 from ofs_skill.obs_retrieval import utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
+from ofs_skill.utils.file_headers import MODEL_CTL_HEADER, OBS_CTL_HEADER
 
 # Public alias for the shape-normalising static-coord helper. Keeps the
 # ctl writer source 1:1 with the indexing layer (both call sites need the
@@ -214,6 +215,11 @@ def _resolve_side_looking_depths(
     if updated and control_file_path:
         try:
             with open(control_file_path, 'w', encoding='utf-8') as fh:
+                # Re-emit the header the original writer produced —
+                # station_ctl_file_extract strips it, so a rewrite
+                # without it would silently revert the file to the
+                # legacy headerless format.
+                fh.write(OBS_CTL_HEADER)
                 for info, coords in zip(info_rows, coord_rows):
                     fh.write(
                         f'{info[0]} {info[1]} "{info[2]}"\n'
@@ -380,6 +386,13 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
     _conf = getattr(prop, 'config_file', None)
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
 
+    # Station-matching distance cutoff (km), read once from [settings] so the
+    # same value drives both the great-circle match test and the pre-filter
+    # box inside index_nearest_station.
+    station_match_max_dist = utils.get_station_match_max_dist(
+        logger, config_file=_conf
+    )
+
     prop.model_path = os.path.join(
         dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
     )
@@ -467,7 +480,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         prop.model_source,
                         name_var,
                         logger,
-                        extract[0]
+                        extract[0],
+                        max_dist_km=station_match_max_dist,
                     )
 
                 # For side-looking ADCPs (``height_from_bottom`` recorded
@@ -745,6 +759,11 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        # Header only when there is data: an empty ctl
+                        # must stay 0 bytes so the getsize() blank-file
+                        # checks downstream keep working.
+                        if model_ctl_file:
+                            output.write(MODEL_CTL_HEADER)
                         for ctl_entry in model_ctl_file:
                             output.write(str(ctl_entry))
                 elif prop.ofsfiletype == 'stations':
@@ -754,6 +773,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         'w',
                         encoding='utf-8',
                     ) as output:
+                        if model_ctl_file:
+                            output.write(MODEL_CTL_HEADER)
                         for ctl_entry in model_ctl_file:
                             output.write(str(ctl_entry))
 
