@@ -328,10 +328,19 @@ class TestEnsurePairedDataStaleness:
         pair = tmp_path / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
         _write_pair_file(pair, WINDOW_START, hours=25)
 
+        # A pair file produced by the current run carries a manifest entry
+        # matching this run's parameters (get_skill stamps it on write); a
+        # window-covering + parameter-matching file must be left alone.
+        from ofs_skill.utils import cache_manifest
+        prop = _PairCheckProp(tmp_path)
+        cache_manifest.record_artifact(
+            str(pair),
+            cache_manifest.run_signature(
+                prop, variable='temp', extra={'whichcast': 'nowcast'}))
+
         calls = []
         monkeypatch.setattr(create_1dplot_mod, 'get_skill',
                             lambda p, lg: calls.append(p.whichcast))
-        prop = _PairCheckProp(tmp_path)
         create_1dplot_mod._ensure_paired_data_exists(
             OFS_CTL, prop, VAR_INFO, _make_logger())
 
