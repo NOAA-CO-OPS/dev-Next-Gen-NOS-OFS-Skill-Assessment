@@ -149,6 +149,15 @@ _station_info_cache: dict[str, Optional[dict]] = {}
 # live one level deeper at ``stations/{id}/deployments.json``.
 _station_deployment_cache: dict[str, Optional[dict]] = {}
 
+# Per-run cache of ``check_bin_depth_changes`` results keyed by
+# station_id. The audit's expanded ``deployments,bins`` MDAPI request is
+# issued from both ``_retrieve_currents_all_bins`` and
+# ``log_and_export_deployment_info``, so an uncached lookup fires twice
+# per station scan (and again at the obs stage). Cleared by
+# ``reset_run_counters``.
+_bin_depth_change_cache: dict[str, bool] = {}
+_bin_depth_change_cache_lock = threading.Lock()
+
 # Canonical ADCP mounting symbols. Single source of truth — every
 # emitter, parser, label formatter, and run counter funnels through
 # this set so a future MDAPI vocabulary addition can be supported by
@@ -171,8 +180,9 @@ _adcp_mounting_counter_lock = threading.Lock()
 def reset_run_counters() -> None:
     """Reset module-level run counters before a fresh skill-assessment run.
 
-    Currently only resets the ADCP mounting-type tally. Idempotent and
-    safe to call from any thread (counters are guarded by a lock).
+    Resets the ADCP mounting-type tally, the deployment-summary CSV
+    export dedup set, and the bin-depth-change audit cache. Idempotent
+    and safe to call from any thread (all state is guarded by locks).
     """
     with _adcp_mounting_counter_lock:
         for key in _adcp_mounting_counter:
@@ -180,6 +190,9 @@ def reset_run_counters() -> None:
 
     with _csv_export_lock:
         _exported_stations.clear()
+
+    with _bin_depth_change_cache_lock:
+        _bin_depth_change_cache.clear()
 
 
 def canonicalize_mounting_symbol(value: Any) -> str:
@@ -538,7 +551,27 @@ def check_bin_depth_changes(
 
     Queries the MDAPI with expand=deployments,bins to get the full historical
     bin profiles, groups them by deployment ID, and compares the configurations.
+
+    Results are cached per station for the duration of the run — the
+    audit is invoked from multiple call sites per station scan and the
+    answer cannot change mid-run. The cache is cleared by
+    ``reset_run_counters``.
     """
+    with _bin_depth_change_cache_lock:
+        if station_id in _bin_depth_change_cache:
+            return _bin_depth_change_cache[station_id]
+    result = _check_bin_depth_changes_uncached(station_id, mdapi_url, logger)
+    with _bin_depth_change_cache_lock:
+        _bin_depth_change_cache[station_id] = result
+    return result
+
+
+def _check_bin_depth_changes_uncached(
+    station_id: str,
+    mdapi_url: str,
+    logger: Logger,
+) -> bool:
+    """Uncached implementation behind ``check_bin_depth_changes``."""
     url = f'{mdapi_url}/webapi/stations/{station_id}.json?expand=deployments,bins&units=metric'
 
     payload = _get_with_retry(url, station_id, 'bin-depth-audit', logger)

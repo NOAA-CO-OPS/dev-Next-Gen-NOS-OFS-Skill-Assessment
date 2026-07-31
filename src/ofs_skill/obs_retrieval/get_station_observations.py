@@ -97,6 +97,7 @@ import logging.config
 import os
 import socket
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -130,6 +131,13 @@ from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
 
 TIMEOUT_SEC = 120 # default API timeout in seconds
 socket.setdefaulttimeout(TIMEOUT_SEC)
+
+# Serializes the station ctl file build across variable threads.
+# ``write_obs_ctlfile`` creates the ctl files for ALL variables in a
+# single pass, so under parallel_variables every variable thread that
+# finds its own ctl file missing would otherwise launch the same full
+# build concurrently — quadruplicating the CO-OPS currents scan.
+_ctl_create_lock = threading.Lock()
 
 def parameter_validation(argu_list, datum_list, logger):
     """ Parameter validation """
@@ -636,6 +644,55 @@ def _fetch_and_format_station(
         return None
 
 
+def _create_station_ctl_file(
+    ctl_file_path, prop, datum, start_date, end_date, path, ofs,
+    stationowner, var_list, logger, config_file=None,
+):
+    """Build the station ctl files and return the parsed result for
+    ``ctl_file_path``.
+
+    Runs under ``_ctl_create_lock`` so only one variable thread executes
+    the full ``write_obs_ctlfile`` build; the others queue on the lock,
+    re-check existence after acquiring it, and find the file written by
+    the winning thread. The lock covers only this create path — threads
+    whose ctl file already exists never touch it.
+    """
+    with _ctl_create_lock:
+        read_station_ctl_file = station_ctl_file_extract(ctl_file_path)
+        if read_station_ctl_file is not None:
+            logger.info(
+                'Station ctl file %s was created by a concurrent '
+                'variable thread; skipping duplicate creation.',
+                ctl_file_path,
+            )
+            return read_station_ctl_file
+        try:
+            logger.info(
+                'Station ctl file not found. Creating station ctl file!. '
+                'This might take a couple of minutes'
+            )
+            write_obs_ctlfile(
+                start_date, end_date, datum, path, ofs,
+                stationowner, var_list, logger,
+                currents_bins_csv=getattr(
+                    prop, 'currents_bins_csv', None),
+                config_file=config_file,
+            )
+            read_station_ctl_file = station_ctl_file_extract(ctl_file_path)
+            logger.info('Station ctl file created '
+                        'successfully')
+            return read_station_ctl_file
+        except Exception as ex:
+            logger.error(
+                'Errors happened when creating station '
+                'ctl files -- %s.',
+                str(ex)
+            )
+            raise Exception('Error happened when '
+                            'creating station '
+                            'ctl files') from ex
+
+
 def _process_variable_obs(
     variable, prop, datum, datum_list, start_date, end_date,
     start_date_full, end_date_full, path, ofs, stationowner, var_list,
@@ -711,11 +768,11 @@ def _process_variable_obs(
     # This will try to read the station ctl file for the given ofs and for
     # all variables. If not found then it will create it using
     # write_obs_ctlfile.py
-    read_station_ctl_file = \
-        station_ctl_file_extract(
-        r'' + control_files_path + '/' + ofs +\
-            '_' + name_var + '_station.ctl'
+    ctl_file_path = (
+        r'' + control_files_path + '/' + ofs +
+        '_' + name_var + '_station.ctl'
     )
+    read_station_ctl_file = station_ctl_file_extract(ctl_file_path)
 
     if read_station_ctl_file is not None:
         logger.info('Station ctl file (%s_%s_station.ctl) '
@@ -725,40 +782,10 @@ def _process_variable_obs(
                     'delete the current file.', ofs, name_var,
                     control_files_path)
     else:
-        try:
-            logger.info(
-                'Station ctl file not found. Creating station ctl file!. '
-                'This might take a couple of minutes'
-            )
-            write_obs_ctlfile(
-                start_date, end_date, datum, path, ofs,
-                stationowner, var_list, logger,
-                currents_bins_csv=getattr(
-                    prop, 'currents_bins_csv', None),
-                config_file=config_file,
-            )
-            read_station_ctl_file = (
-                station_ctl_file_extract(
-                    r''
-                    + control_files_path
-                    + '/'
-                    + ofs
-                    + '_'
-                    + name_var
-                    + '_station.ctl'
-                )
-            )
-            logger.info('Station ctl file created '
-                        'successfully')
-        except Exception as ex:
-            logger.error(
-                'Errors happened when creating station '
-                'ctl files -- %s.',
-                str(ex)
-            )
-            raise Exception('Error happened when '
-                            'creating station '
-                            'ctl files') from ex
+        read_station_ctl_file = _create_station_ctl_file(
+            ctl_file_path, prop, datum, start_date, end_date, path, ofs,
+            stationowner, var_list, logger, config_file=config_file,
+        )
 
     logger.info('Downloading data found in the station ctl files')
 
