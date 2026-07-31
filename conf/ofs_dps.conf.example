@@ -268,3 +268,11 @@ station_match_max_dist_km=4.0
 #   h5netcdf = force the h5netcdf engine (NetCDF-4/HDF5 files only;
 #              fails on NetCDF-3 files)
 engine_strategy=auto
+
+# Ctl-file creation decides per-bin CO-OPS ADCP currents availability
+# with short probe requests (one full-window scan per station plus one
+# short confirmation per bin) instead of downloading the full window
+# for every bin — the ctl stage only needs a yes/no per bin, and the
+# full downloads dominated multi-month run times. Set False to restore
+# the full-download scan (e.g. to cross-check probe decisions).
+ctl_availability_probe=True
