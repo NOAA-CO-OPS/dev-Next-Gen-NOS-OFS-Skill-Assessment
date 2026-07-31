@@ -76,7 +76,7 @@ STOFS_OFS = ('stofs_2d_glo', 'stofs_3d_atl', 'stofs_3d_pac')
 
 # Datum fallback if the [datums] section of the conf cannot be read.
 DEFAULT_DATUMS = (
-    'MHHW', 'MHW', 'MLLW', 'MLW', 'NAVD88', 'IGLD85', 'LWD', 'XGEOID20B'
+    'MHHW', 'MHW', 'MLLW', 'MLW', 'NAVD88', 'IGLD85', 'LWD', 'XGEOID20B', 'MSL'
 )
 
 
@@ -258,6 +258,8 @@ def quick_run_datum(ofs: str) -> str:
     NAVD88 (STOFS), else MLLW (tidal coastal)."""
     if ofs in GREAT_LAKES_OFS:
         return 'IGLD85'
+    if ofs in ('stofs_3d_pac', 'stofs_2d_glo'):
+        return 'MSL'
     if ofs in STOFS_OFS:
         return 'NAVD88'
     return 'MLLW'

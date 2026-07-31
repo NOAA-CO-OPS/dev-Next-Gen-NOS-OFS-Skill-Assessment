@@ -478,6 +478,10 @@ def index_nearest_node(
 
             x_np = np.array(x_coords)
             y_np = np.array(y_coords)
+            
+            # Normalize model longitudes from [0, 360] to [-180, 180]
+            x_np = np.where(x_np > 180, x_np - 360, x_np)
+            
             for obs_p in range(len(ctl_file_extract)):
                 obs_lon = float(ctl_file_extract[obs_p][1])
                 obs_lat = float(ctl_file_extract[obs_p][0])
@@ -834,13 +838,17 @@ def index_nearest_depth(
                     raise NotImplementedError('ADCIRC depth indexing not yet implemented for models other than STOFS-2D-Global.')
 
     elif prop.ofsfiletype == 'stations':
-        if prop.ofs in ['stofs']:
-            return [], []
         index_min_depth = []  # type: ignore[no-redef]
         depth_value = []  # type: ignore[no-redef]
         length = len(index_min_dist)
-        if name_var == 'wl':
-            # Water level (zeta) is a 2D surface variable — no depth indexing needed
+        if name_var == 'wl' or prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
+            # Water level (zeta) is a 2D surface variable — no depth
+            # indexing needed. The STOFS-3D points (stations) files are
+            # surface-only for every variable: temperature/salinity are
+            # sampled 'at water surface' and u/v are surface velocities,
+            # all on (time, station) with no vertical coordinate — so
+            # there is nothing to depth-index there either. Report the
+            # surface (layer 0, depth 0.0) for each matched station.
             for idx in range(length):
                 if ~np.isnan(index_min_dist[idx]):
                     index_min_depth.append(0)
@@ -884,6 +892,16 @@ def index_nearest_depth(
                     logger.warning('SECOFS station file does not have depth '
                                    'info! Taking surface value...')
                     depth_tracker = 1
+            else:
+                # Fail loudly instead of leaving model_depths unbound in
+                # the per-station loop below (UnboundLocalError). The
+                # surface-only STOFS-3D OFS return above and never get
+                # here; any new SCHISM OFS needs its depth layout wired
+                # in explicitly.
+                raise NotImplementedError(
+                    f'SCHISM stations depth indexing not implemented '
+                    f'for {prop.ofs}'
+                )
 
         for idx in range(0, length):
             if ~np.isnan(index_min_dist[idx]):
