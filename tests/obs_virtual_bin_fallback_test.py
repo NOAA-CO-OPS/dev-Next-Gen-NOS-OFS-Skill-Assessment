@@ -17,6 +17,8 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from ofs_skill.utils.file_headers import series_header
+
 gso = importlib.import_module(
     'ofs_skill.obs_retrieval.get_station_observations')
 
@@ -98,7 +100,8 @@ def test_virtual_row_bin_present_after_retry_emits(tmp_path, caplog):
     assert result == '1234567_b03'
     mock_format.assert_called_once()
     obs_file = tmp_path / '1234567_b03_necofs_cu_station.obs'
-    assert obs_file.read_text(encoding='utf-8') == 'formatted-line\n'
+    assert obs_file.read_text(encoding='utf-8') == (
+        series_header('cu') + 'formatted-line\n')
     assert not [r for r in caplog.records if r.levelno == logging.ERROR]
 
 
