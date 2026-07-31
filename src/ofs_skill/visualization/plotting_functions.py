@@ -133,6 +133,7 @@ def get_title(
     Args:
         prop: Properties object containing run configuration.
             Must have: ``start_date_full``, ``end_date_full``, ``ofs``,
+            ``ofsfiletype`` (for STOFS-2D-Global bias correction detection),
             and (for currents) ``control_files_path`` so the depth line
             can resolve obs/model depths from the station and model
             ctl files.
@@ -187,6 +188,26 @@ def get_title(
     else:
         nwsline = ''
 
+    # Define the default OFS title.
+    ofs_group = prop.ofs.upper()
+    # For STOFS-2D-Global plots we add a bias correction annotation 
+    # (where applicable). 
+    if prop.ofs == 'stofs_2d_glo':
+        start_datetime = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
+        end_datetime = datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S')
+        v2p1_first_run = datetime.datetime(2024, 5, 14, 12, 0)
+        if prop.ofsfiletype == 'stations': 
+            if start_datetime >= v2p1_first_run:
+                ofs_group = ofs_group + '&nbsp;(bias-corrected)'
+            elif end_datetime >= v2p1_first_run:
+                logger.warning('STOFS-2D-Global has both bias-corrected and '
+                               'uncorrected data for this time period.')
+                ofs_group = ofs_group + '&nbsp;(partially&nbsp;bias-corrected)'
+        # Note as of 2026-06-18:
+        # Later we might need to add annotation for fields file bias correction, 
+        # depending on future STOFS-2D-Global releases. The above test
+        # differentiates between v2.1 and pre-v2.1.
+
     # Currents plots get an explicit "Obs depth | Model depth" annotation.
     # For CO-OPS ADCP virtual IDs (``{parent}_b{NN}``) a "Bin NN" prefix
     # is included. Obs depth is resolved from the CO-OPS bins endpoint
@@ -204,7 +225,7 @@ def get_title(
     return f'<b>NOAA/NOS OFS Skill Assessment<br>' \
             f'{station_id[2]} station:&nbsp;{station_id[1]} ' \
             f'({station_id[0]})<br>' \
-            f'OFS:&nbsp;{prop.ofs.upper()}&nbsp;&nbsp;&nbsp;Node ID:&nbsp;' \
+            f'OFS:&nbsp;{ofs_group}&nbsp;&nbsp;&nbsp;Node ID:&nbsp;' \
             f'{node}&nbsp;&nbsp;&nbsp;' \
             + nwsline + depth_line + adcp_type_line + \
             f'<br>From:&nbsp;{start_date}' \
