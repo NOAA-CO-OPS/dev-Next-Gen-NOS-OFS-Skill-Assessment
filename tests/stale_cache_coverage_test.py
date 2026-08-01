@@ -336,7 +336,8 @@ class TestEnsurePairedDataStaleness:
         cache_manifest.record_artifact(
             str(pair),
             cache_manifest.run_signature(
-                prop, variable='temp', extra={'whichcast': 'nowcast'}))
+                prop, variable='water_temperature',
+                extra={'whichcast': 'nowcast'}))
 
         calls = []
         monkeypatch.setattr(create_1dplot_mod, 'get_skill',
