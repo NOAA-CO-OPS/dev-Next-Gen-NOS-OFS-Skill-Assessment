@@ -39,6 +39,17 @@ from ofs_skill.utils.timeseries_coverage import (
     remove_stale_artifact,
 )
 
+# Short model name-part -> long variable name. Cache-manifest signatures are
+# keyed on the long variable name (the ctl/obs/prd writers pass the long
+# name), so the reuse gates in this module -- which work in the short
+# ``wl``/``temp``/``salt``/``cu`` convention -- map back before comparing.
+_NAME_TO_VARIABLE = {
+    'wl': 'water_level',
+    'temp': 'water_temperature',
+    'salt': 'salinity',
+    'cu': 'currents',
+}
+
 
 def _cache_key(prop):
     """Fields that uniquely determine the model dataset loaded by get_node_ofs.
@@ -469,10 +480,11 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
         logger.info(f'{filename} is created successfully')
         # Stamp the run signature on the paired file so a same-parameter
         # rerun reuses it and a changed-parameter run treats it as stale.
+        # Keyed on the long variable name to match the .prd/.obs writers.
         cache_manifest.record_artifact(
             int_path,
             cache_manifest.run_signature(
-                prop, variable=name_var,
+                prop, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
                 extra={'whichcast': getattr(prop, 'whichcast', None)}),
             logger)
 
@@ -902,7 +914,7 @@ def get_skill(prop, logger):
             if os.path.isfile(obs_path):
                 if os.path.getsize(obs_path) > 0:
                     obs_sig = cache_manifest.run_signature(
-                        p, variable=name_var)
+                        p, variable=_NAME_TO_VARIABLE.get(name_var, name_var))
                     stale_params = not cache_manifest.artifact_is_fresh(
                         obs_path, obs_sig)
                     if (run_window is not None
@@ -980,7 +992,8 @@ def get_skill(prop, logger):
                 if p.whichcast == 'forecast_a':
                     prd_extra['forecast_hr'] = p.forecast_hr
                 prd_sig = cache_manifest.run_signature(
-                    p, variable=name_var, extra=prd_extra)
+                    p, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
+                    extra=prd_extra)
                 stale_params = not cache_manifest.artifact_is_fresh(
                     prd_path, prd_sig)
                 if (run_window is not None

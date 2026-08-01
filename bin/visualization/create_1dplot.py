@@ -678,7 +678,8 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
             # catches that; delete and regenerate on a signature mismatch.
             elif os.path.isfile(pair_file):
                 pair_sig = cache_manifest.run_signature(
-                    prop, variable=var_info[1],
+                    prop,
+                    variable=_NAME_TO_VARIABLE.get(var_info[1], var_info[1]),
                     extra={'whichcast': current_cast})
                 if not cache_manifest.artifact_is_fresh(pair_file, pair_sig):
                     logger.warning(
