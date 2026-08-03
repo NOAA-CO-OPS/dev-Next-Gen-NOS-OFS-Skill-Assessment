@@ -10,10 +10,17 @@ import os
 from logging import Logger
 from typing import Optional
 
+import numpy as np  # Ensure numpy is imported
 import shapefile
 
 from ofs_skill.obs_retrieval import utils
 
+def normalize_longitudes(longitudes):
+    """Convert longitudes > 180 to -180..180 range."""
+    lons = np.array(longitudes, dtype=float).copy()
+    mask = lons > 180
+    lons[mask] -= 360
+    return lons
 
 def get_response_1(
     first: dict
@@ -177,6 +184,13 @@ def ofs_geometry(
                 response_2[3],
                 response_2[4],
             )
+        
+        # --- NORMALIZE LONGITUDES ONLY FOR STOFS MODELS ---
+        if 'stofs' in ofs.lower():
+            norm_lons = normalize_longitudes([pt[0] for pt in ofs_mask])
+            ofs_mask = [(float(lon), pt[1]) for lon, pt in zip(norm_lons, ofs_mask)]
+            lon_1 = float(min(norm_lons))
+            lon_2 = float(max(norm_lons))
 
     except Exception as ex:
         raise Exception(

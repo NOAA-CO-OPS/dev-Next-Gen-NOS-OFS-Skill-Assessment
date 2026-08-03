@@ -213,10 +213,10 @@ def validate_and_initialize_parameters(prop):
                     'all necessary model files '
                     'are present! Check final '
                     'time series for accuracy.')
-    # Now check if satellite files exist
-    datapath = Path(os.path.join(prop.path,'data',
-                           'observations',
-                           '2d_satellite',))
+    # Now check if satellite files exist. Use the satellite path already
+    # resolved from the configured data_dir (honors a custom/absolute
+    # data_dir) rather than rebuilding it with a hardcoded 'data'.
+    datapath = Path(prop.data_observations_2d_satellite_path)
     l3cfile = Path(os.path.join(datapath,
                            str(prop.ofs+'.nc')))
     sportfile = Path(os.path.join(datapath,
@@ -412,8 +412,7 @@ def _run_pipeline(run_args):
             model = intake_model(list_files, prop1, logger)
             logger.info('Returned from call to intake_scisa inside of '
                         'create_2dplot.')
-            satdatapath = Path(os.path.join(prop1.path, 'data',
-                                            'observations', '2d_satellite'))
+            satdatapath = Path(prop1.data_observations_2d_satellite_path)
             from ofs_skill.visualization import processing_2d
 
             if prop1.l3c:
@@ -441,8 +440,11 @@ def _run_pipeline(run_args):
             ).lower() in ('true', '1', 'yes')
             if static_plots:
                 logger.info('Generating static 2D offline maps...')
+                # Honor the configured data_dir/visual_dir rather than a
+                # hardcoded 'data'. visuals_2d_station_path is already
+                # resolved from dir_params in validate_and_initialize_parameters.
                 visual_2d_dir = os.path.join(
-                    prop1.path, 'data', 'visual', '2d',
+                    prop1.visuals_2d_station_path, '2d',
                 )
                 plotting_2d.generate_offline_maps(
                     prop1.data_model_2d_json_path,

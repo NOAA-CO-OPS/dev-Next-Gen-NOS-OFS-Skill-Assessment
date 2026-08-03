@@ -26,6 +26,7 @@ dependencies:
 
   # --- Data Access / IO ---
   - netcdf4>=1.6.5
+  - h5py
   - h5netcdf
   - intake>=2.0.0
   - conda-forge::intake-xarray>=2.0.0
