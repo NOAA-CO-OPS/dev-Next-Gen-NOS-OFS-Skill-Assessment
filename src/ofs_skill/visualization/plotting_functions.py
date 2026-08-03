@@ -220,6 +220,26 @@ def get_title(
             f'{end_date}<b>'
 
 
+def count_title_lines(title: str) -> int:
+    """Return the number of visual lines an HTML plot title occupies.
+
+    Titles built by :func:`get_title` use ``<br>`` tags to break the
+    header, station, OFS/node, optional depth and ADCP-type lines, and
+    the date range onto separate rows. Currents (``cu``) titles can add
+    up to two extra rows (a depth line and an ADCP-type line) that
+    scalar titles never have, so a fixed top margin tuned for scalar
+    plots is too small and the title collides with the horizontal
+    legend (issue #221).
+
+    A title with N ``<br>`` separators spans N+1 lines. Empty inserts
+    (e.g. an omitted depth/ADCP line) never emit a ``<br>``, so this
+    count reflects the rows actually rendered.
+    """
+    if not title:
+        return 1
+    return title.count('<br>') + 1
+
+
 _COOPS_MDAPI_URL = 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/'
 
 # Cache parsed model_station.ctl lookups keyed by file path so we read
