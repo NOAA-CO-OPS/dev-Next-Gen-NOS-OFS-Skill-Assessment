@@ -47,9 +47,16 @@ _NAVD88_WL_CODES = ['63160', '62620', '72279', '62615', '63161', '62622',
                     '62617']
 _NGVD_WL_CODES = ['63158', '62614', '62616']
 _IGLD_WL_CODES = ['72214', '72215']
-# Gage height: referenced to the local gage datum, not a vertical datum.
-# Kept as a last resort and assumed ~NAVD88 (historical behavior).
+# Gage height: referenced to the local gage datum, not a true vertical
+# datum. Assumed ~NAVD88 (historical behavior).
 _GAGE_HEIGHT_WL_CODES = ['00065']
+
+# A higher-priority code is only selected when it has at least this
+# fraction of the valid samples of the best-covered candidate. During the
+# 63160 migration a just-activated series can cover a sliver of the
+# requested window while the legacy series covers all of it; without this
+# guard the sparse series would silently win on priority alone.
+_MIN_RELATIVE_COVERAGE = 0.5
 
 # Datum assignment by code (62617 and 63161 are NAVD88 per the USGS
 # parameter-code dictionary; anything not IGLD/NGVD is labeled NAVD88)
@@ -77,20 +84,56 @@ def _water_level_code_priority(requested_datum: str) -> list:
     """Return water-level parameter codes in preference order.
 
     Codes in the family matching the requested datum come first (a direct
-    match avoids a vdatum conversion downstream), then the remaining
-    families with NAVD88 leading (vdatum-convertible to tidal datums).
-    Gage height (00065) is always last: it is referenced to the local gage
-    datum, not a true vertical datum.
+    match needs no datum conversion downstream), then NAVD88 codes (the
+    only family with a vdatum conversion path to the tidal datums), then
+    gage height (assumed ~NAVD88, so it also converts). NGVD and IGLD
+    series rank last for non-matching requests: the pipeline has no
+    conversion path for them, so selecting one would leave the station
+    with an unusable UNKNOWN datum offset.
     """
     datum_upper = (requested_datum or '').upper()
     if 'IGLD' in datum_upper or 'LWD' in datum_upper:
-        families = [_IGLD_WL_CODES, _NAVD88_WL_CODES, _NGVD_WL_CODES]
+        preferred = _IGLD_WL_CODES
     elif 'NGVD' in datum_upper:
-        families = [_NGVD_WL_CODES, _NAVD88_WL_CODES, _IGLD_WL_CODES]
+        preferred = _NGVD_WL_CODES
     else:
-        families = [_NAVD88_WL_CODES, _NGVD_WL_CODES, _IGLD_WL_CODES]
-    return [code for family in families for code in family] + \
-        _GAGE_HEIGHT_WL_CODES
+        preferred = []
+    base = (_NAVD88_WL_CODES + _GAGE_HEIGHT_WL_CODES + _NGVD_WL_CODES
+            + _IGLD_WL_CODES)
+    return preferred + [code for code in base if code not in preferred]
+
+
+def _select_water_level_code(
+    data_filtered: pd.DataFrame,
+    requested_datum: str,
+    station: str,
+    logger: Logger
+) -> str:
+    """Select the water-level parameter code to use for a station.
+
+    Walks the datum-aware priority order, skipping codes whose in-window
+    coverage falls below ``_MIN_RELATIVE_COVERAGE`` of the best-covered
+    candidate. Falls back to the first code in API order if no priority
+    code is present (future-proofing for new searvey water-level codes).
+    """
+    coverage = (
+        data_filtered.dropna(subset=['value'])
+        .groupby('code')['datetime'].nunique()
+    )
+    best_coverage = coverage.max() if not coverage.empty else 0
+    for code in _water_level_code_priority(requested_datum):
+        if code not in set(data_filtered['code']):
+            continue
+        code_coverage = coverage.get(code, 0)
+        if code_coverage >= _MIN_RELATIVE_COVERAGE * best_coverage:
+            return code
+        logger.info(
+            'USGS station %s: skipping water-level code %s (%d valid '
+            'samples vs %d for the best-covered code) — likely a '
+            'newly established series with partial coverage.',
+            station, code, code_coverage, best_coverage
+        )
+    return data_filtered['code'].iloc[0]
 
 
 def retrieve_usgs_station(
@@ -203,13 +246,11 @@ def retrieve_usgs_station(
         # Pick the best available code rather than the first one the API
         # happens to return: stations transitioning to 63160 (issue #133)
         # serve both the new NAVD88 series and legacy gage height.
-        priority = _water_level_code_priority(
-            getattr(retrieve_input, 'datum', '')
-        )
-        codes_present = set(data_filtered['code'])
-        first_code = next(
-            (code for code in priority if code in codes_present),
-            data_filtered['code'].iloc[0],
+        first_code = _select_water_level_code(
+            data_filtered,
+            getattr(retrieve_input, 'datum', ''),
+            station,
+            logger,
         )
         if first_code in _GAGE_HEIGHT_WL_CODES:
             logger.info(

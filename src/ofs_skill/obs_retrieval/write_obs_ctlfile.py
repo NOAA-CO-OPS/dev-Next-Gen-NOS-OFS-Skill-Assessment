@@ -505,7 +505,7 @@ def _process_usgs_station(
             )
 
             if variable == 'water_level':
-                ts_datum = str(timeseries['Datum'][1])
+                ts_datum = str(timeseries['Datum'].iloc[0])
                 ts_datum_upper = ts_datum.upper()
 
                 ofs_base_offsets = {
@@ -562,7 +562,7 @@ def _process_usgs_station(
                         f'{str(id_number)}_{name_var}_'
                         f'{ofs}_USGS "{name}"\n  {y_value:.3f} '
                         f'{x_value:.3f} '
-                        f'{zdiff}  0.0  {str(timeseries["Datum"][1])}\n'
+                        f'{zdiff}  0.0  {ts_datum}\n'
                     )
                 ]
 
