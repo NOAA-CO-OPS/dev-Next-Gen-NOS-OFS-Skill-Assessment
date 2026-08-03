@@ -493,6 +493,7 @@ def _process_usgs_station(
         retrieve_input.start_date = start_date
         retrieve_input.end_date = end_date
         retrieve_input.variable = variable
+        retrieve_input.datum = datum
         timeseries = retrieve_usgs_station(retrieve_input, logger)
         if isinstance(timeseries, pd.DataFrame) is False:
             logger.info(

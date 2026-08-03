@@ -39,9 +39,22 @@ _FEET_TO_METERS_CODES = {
     '63158',
 }
 
-# Datum assignment by code
-_IGLD_CODES = {'72214', '72215'}
-_NGVD_CODES = {'62616', '62614', '63161', '62617', '63158'}
+# Water-level code preference within each datum family. USGS is migrating
+# stream gages to 63160 "Stream level, NAVD88" (new time series per station,
+# target Dec 2026 — issue #133), so true-datum elevation codes must win over
+# legacy gage height (00065) whenever a station serves both.
+_NAVD88_WL_CODES = ['63160', '62620', '72279', '62615', '63161', '62622',
+                    '62617']
+_NGVD_WL_CODES = ['63158', '62614', '62616']
+_IGLD_WL_CODES = ['72214', '72215']
+# Gage height: referenced to the local gage datum, not a vertical datum.
+# Kept as a last resort and assumed ~NAVD88 (historical behavior).
+_GAGE_HEIGHT_WL_CODES = ['00065']
+
+# Datum assignment by code (62617 and 63161 are NAVD88 per the USGS
+# parameter-code dictionary; anything not IGLD/NGVD is labeled NAVD88)
+_IGLD_CODES = set(_IGLD_WL_CODES)
+_NGVD_CODES = set(_NGVD_WL_CODES)
 
 # Temperature codes in Fahrenheit
 _FAHRENHEIT_CODES = {'00011'}
@@ -58,6 +71,26 @@ _SPECIFIC_CONDUCTANCE_CODES = {'00095'}
 
 # Preferred salinity codes (actual salinity, not conductance)
 _PREFERRED_SALINITY_CODES = {'00480', '72401', '90860', '90862', '00096', '70305'}
+
+
+def _water_level_code_priority(requested_datum: str) -> list:
+    """Return water-level parameter codes in preference order.
+
+    Codes in the family matching the requested datum come first (a direct
+    match avoids a vdatum conversion downstream), then the remaining
+    families with NAVD88 leading (vdatum-convertible to tidal datums).
+    Gage height (00065) is always last: it is referenced to the local gage
+    datum, not a true vertical datum.
+    """
+    datum_upper = (requested_datum or '').upper()
+    if 'IGLD' in datum_upper or 'LWD' in datum_upper:
+        families = [_IGLD_WL_CODES, _NAVD88_WL_CODES, _NGVD_WL_CODES]
+    elif 'NGVD' in datum_upper:
+        families = [_NGVD_WL_CODES, _NAVD88_WL_CODES, _IGLD_WL_CODES]
+    else:
+        families = [_NAVD88_WL_CODES, _NGVD_WL_CODES, _IGLD_WL_CODES]
+    return [code for family in families for code in family] + \
+        _GAGE_HEIGHT_WL_CODES
 
 
 def retrieve_usgs_station(
@@ -166,8 +199,27 @@ def retrieve_usgs_station(
         if not preferred.empty:
             data_filtered = preferred
 
-    # Use the first available code that has data
-    first_code = data_filtered['code'].iloc[0]
+    if variable == 'water_level':
+        # Pick the best available code rather than the first one the API
+        # happens to return: stations transitioning to 63160 (issue #133)
+        # serve both the new NAVD88 series and legacy gage height.
+        priority = _water_level_code_priority(
+            getattr(retrieve_input, 'datum', '')
+        )
+        codes_present = set(data_filtered['code'])
+        first_code = next(
+            (code for code in priority if code in codes_present),
+            data_filtered['code'].iloc[0],
+        )
+        if first_code in _GAGE_HEIGHT_WL_CODES:
+            logger.info(
+                'USGS station %s water level uses gage height (00065), '
+                'which is referenced to the local gage datum; assuming '
+                'NAVD88.', station
+            )
+    else:
+        # Use the first available code that has data
+        first_code = data_filtered['code'].iloc[0]
     data_for_code = data_filtered[data_filtered['code'] == first_code].copy()
 
     # Filter to a single time series to avoid duplicate timestamps.

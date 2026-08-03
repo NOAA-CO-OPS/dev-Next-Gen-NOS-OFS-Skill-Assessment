@@ -36,12 +36,14 @@ class MockRetrieveInput:
         station: str,
         start_date: str,
         end_date: str,
-        variable: str = 'water_level'
+        variable: str = 'water_level',
+        datum: str = ''
     ):
         self.station = station
         self.start_date = start_date
         self.end_date = end_date
         self.variable = variable
+        self.datum = datum
 
 
 class TestUSGSImports:
@@ -507,6 +509,182 @@ class TestSalinityCodePreference:
 
         assert result is not None
         assert result['OBS'].iloc[0] == pytest.approx(0.64)
+
+
+class TestWaterLevelCodePriority:
+    """Test datum-aware water-level parameter code selection (issue #133).
+
+    USGS is migrating stream gages to parameter code 63160 (Stream level,
+    NAVD88). Stations in transition serve both the new 63160 series and
+    legacy gage height (00065); the true-datum series must win.
+    """
+
+    def test_63160_preferred_over_gage_height(self, logger):
+        """When both 00065 and 63160 exist, 63160 is used (issue #133)."""
+        mock_data = _make_usgs_multiindex_df([
+            # Legacy gage height listed first (API order must not matter)
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:00',
+             'code': '00065', 'option': '00000', 'value': 10.0},
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:15',
+             'code': '00065', 'option': '00000', 'value': 11.0},
+            # New NAVD88 stream level series
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:00',
+             'code': '63160', 'option': '00000', 'value': 2.0},
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:15',
+             'code': '63160', 'option': '00000', 'value': 2.5},
+        ])
+
+        inp = MockRetrieveInput(
+            '11162765', '20240101', '20240102', 'water_level', datum='MLLW'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        # Values from 63160 (feet converted to meters), labeled NAVD88
+        assert list(result['OBS']) == pytest.approx(
+            [2.0 * 0.3048, 2.5 * 0.3048]
+        )
+        assert result['Datum'].iloc[0] == 'NAVD88'
+
+    def test_requested_igld_prefers_igld_code(self, logger):
+        """Requested IGLD datum picks 72214 over 63160 (no vdatum trip)."""
+        mock_data = _make_usgs_multiindex_df([
+            {'site_no': '04092750', 'datetime': '2024-01-01 00:00',
+             'code': '63160', 'option': '00000', 'value': 2.0},
+            {'site_no': '04092750', 'datetime': '2024-01-01 00:00',
+             'code': '72214', 'option': '00000', 'value': 577.0},
+        ])
+
+        inp = MockRetrieveInput(
+            '04092750', '20240101', '20240102', 'water_level', datum='IGLD'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert result['OBS'].iloc[0] == pytest.approx(577.0 * 0.3048)
+        assert result['Datum'].iloc[0] == 'IGLD'
+
+    def test_gage_height_fallback_still_works(self, logger):
+        """A station with only 00065 keeps the historical NAVD88 label."""
+        mock_data = _make_usgs_multiindex_df([
+            {'site_no': '01646500', 'datetime': '2024-01-01 00:00',
+             'code': '00065', 'option': '00000', 'value': 3.0},
+        ])
+
+        inp = MockRetrieveInput(
+            '01646500', '20240101', '20240102', 'water_level', datum='NAVD88'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert result['OBS'].iloc[0] == pytest.approx(3.0 * 0.3048)
+        assert result['Datum'].iloc[0] == 'NAVD88'
+
+    def test_missing_datum_attribute_defaults_to_navd88_order(self, logger):
+        """Inputs without a datum attribute still work (NAVD88 first)."""
+        mock_data = _make_usgs_multiindex_df([
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:00',
+             'code': '00065', 'option': '00000', 'value': 10.0},
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:00',
+             'code': '63160', 'option': '00000', 'value': 2.0},
+        ])
+
+        inp = MockRetrieveInput(
+            '11162765', '20240101', '20240102', 'water_level'
+        )
+        del inp.datum
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert result['OBS'].iloc[0] == pytest.approx(2.0 * 0.3048)
+        assert result['Datum'].iloc[0] == 'NAVD88'
+
+
+class TestWaterLevelDatumLabels:
+    """Test datum labels against the USGS parameter-code dictionary."""
+
+    def test_63161_meters_navd88(self, logger):
+        """63161 (Stream level, NAVD88, meters): no ft conversion, NAVD88."""
+        mock_data = _make_usgs_multiindex_df([
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:00',
+             'code': '63161', 'option': '00000', 'value': 1.5},
+        ])
+
+        inp = MockRetrieveInput(
+            '11162765', '20240101', '20240102', 'water_level'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert result['OBS'].iloc[0] == pytest.approx(1.5)
+        assert result['Datum'].iloc[0] == 'NAVD88'
+
+    def test_62617_meters_navd88(self, logger):
+        """62617 (Elevation lake/res, NAVD88, meters) is labeled NAVD88."""
+        mock_data = _make_usgs_multiindex_df([
+            {'site_no': '04092750', 'datetime': '2024-01-01 00:00',
+             'code': '62617', 'option': '00000', 'value': 176.0},
+        ])
+
+        inp = MockRetrieveInput(
+            '04092750', '20240101', '20240102', 'water_level'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert result['OBS'].iloc[0] == pytest.approx(176.0)
+        assert result['Datum'].iloc[0] == 'NAVD88'
+
+    def test_63158_feet_ngvd(self, logger):
+        """63158 (Stream level, NGVD29, feet): ft conversion, NGVD label."""
+        mock_data = _make_usgs_multiindex_df([
+            {'site_no': '01646500', 'datetime': '2024-01-01 00:00',
+             'code': '63158', 'option': '00000', 'value': 4.0},
+        ])
+
+        inp = MockRetrieveInput(
+            '01646500', '20240101', '20240102', 'water_level'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert result['OBS'].iloc[0] == pytest.approx(4.0 * 0.3048)
+        assert result['Datum'].iloc[0] == 'NGVD'
 
 
 if __name__ == '__main__':
