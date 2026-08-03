@@ -67,10 +67,16 @@ def pandas_merge(filepath, df, datecycle, prop):
     # This is especially relevant to server/cron runs!
     if datecycle in prd.columns:
         prd.drop(columns=datecycle, inplace=True)
+    # Merge on the integer date components only. The float julian
+    # column used to be part of the key, so a cached CSV written with
+    # a different julian rounding than the fresh series (e.g. before
+    # the issue #200 precision fix) duplicated every row on the outer
+    # merge. The fresh series' julian column is carried through.
+    if 'julian' in prd.columns:
+        prd = prd.drop(columns='julian')
     df = pd.merge(
         prd, df,
         on=[
-            'julian',
             'year',
             'month',
             'day',

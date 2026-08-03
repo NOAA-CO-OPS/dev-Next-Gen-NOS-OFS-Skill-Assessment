@@ -286,7 +286,12 @@ def _station_metadata(read_station_ctl_file, read_ofs_ctl_file, obs_idx, ofs_idx
     return {
         'station_id': read_station_ctl_file[0][obs_idx][0],
         'node': read_ofs_ctl_file[1][ofs_idx],
-        'obs_depth': read_station_ctl_file[1][obs_idx][-2],
+        # Water depth is always the 4th coord token. Scalar-variable
+        # coord lines have 5 tokens so [-2] used to land on it by
+        # coincidence, but CO-OPS ADCP currents lines carry 6-7 tokens
+        # and [-2] read height_from_bottom there, making obs_water_depth
+        # constant across a station's bins (issue #200).
+        'obs_depth': read_station_ctl_file[1][obs_idx][3],
         'mod_depth': read_ofs_ctl_file[-2][ofs_idx],
         'X': str(float(read_station_ctl_file[1][obs_idx][1])),
         'Y': read_station_ctl_file[1][obs_idx][0],
