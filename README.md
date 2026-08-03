@@ -35,7 +35,7 @@ python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2
 python ./bin/visualization/create_1dplot.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -d MLLW -ws nowcast,forecast_b
 ```
 
-Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/Graphical-User-Interfaces). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/Setup-and-Installation).
+Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/10.-Graphical-User-Interfaces-(GUI)). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/01.-Setup-and-Installation).
 
 ## Documentation
 
