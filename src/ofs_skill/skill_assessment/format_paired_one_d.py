@@ -147,9 +147,8 @@ def paired_scalar(
         .reset_index()
     )
 
-    # Third we concat the observations to the ofs, group so same times
-    # are combined, drop nan, reindex. Merge on DateTime alone (as
-    # paired_vector does): the numbered date columns are redundant with
+    # Third we merge the observations onto the ofs series. Merge on
+    # DateTime alone (as paired_vector does): the numbered date columns are redundant with
     # DateTime, and using the float julian column [0] as a merge key
     # made pairing silently fail whenever the obs and model files were
     # written with different julian rounding (e.g. a cached series from
@@ -375,8 +374,7 @@ def paired_vector(
         .reset_index()
     )
 
-    # Third we concat the observations to the ofs, group so same times
-    # are combined, drop nan, reindex
+    # Third we merge the observations onto the ofs series on DateTime
     paired = pd.merge(
         paired_ofs,
         paired_obs[['DateTime', 'OBS', 'OBS_DIR', 'OBS_U', 'OBS_V']],
@@ -405,14 +403,11 @@ def paired_vector(
     # timeseries file
 
     # This is the direction bias
+    ofs_dir = paired['OFS_DIR'].to_numpy()
+    obs_dir = paired['OBS_DIR'].to_numpy()
     dir_bias = []
     for j in range(len(paired)):
-        dir_bias.append(
-            get_distance_angle(
-                paired['OFS_DIR'].to_numpy()[j],
-                paired['OBS_DIR'].to_numpy()[j]
-            )
-        )
+        dir_bias.append(get_distance_angle(ofs_dir[j], obs_dir[j]))
     paired['DIR_BIAS'] = dir_bias
     # Finally, we write the file and return the results
     paired = paired.drop(columns=['index', 'DateTime', 'OBS_U', 'OBS_V',

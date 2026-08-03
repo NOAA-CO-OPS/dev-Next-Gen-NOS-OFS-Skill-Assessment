@@ -12,6 +12,7 @@ against fresh ones.
 """
 
 import logging
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -37,6 +38,7 @@ def _six_minute_frame(n=240, value_col='OBS'):
 
 
 def test_format_scalar_uniform_six_minute_steps():
+    """format_scalar 6-min steps are uniform to within 1e-8 day (~1 ms)."""
     ts = _six_minute_frame()
     lines = format_scalar(ts, '20170301-00:00:00', '20170302-00:00:00',
                           lookback_hours=0)
@@ -50,6 +52,7 @@ def test_format_scalar_uniform_six_minute_steps():
 
 
 def test_format_vector_uniform_six_minute_steps():
+    """format_vector 6-min steps are uniform to within 1e-8 day (~1 ms)."""
     ts = _six_minute_frame()
     ts['DIR'] = 90.0
     lines = format_vector(ts, '20170301-00:00:00', '20170302-00:00:00',
@@ -133,8 +136,8 @@ def test_pandas_merge_mixed_precision_does_not_duplicate_rows(tmp_path):
                               3: 'day', 4: 'hour', 5: 'minute',
                               6: '20170301-00z_hr'})
 
-    prop_stub = type('P', (), {'datecycles':
-                               ['20170228-00z_hr', '20170301-00z_hr']})()
+    prop_stub = SimpleNamespace(
+        datecycles=['20170228-00z_hr', '20170301-00z_hr'])
     merged = pandas_merge(str(csv_path), new, '20170301-00z_hr', prop_stub)
 
     # Pre-fix: julian was a float merge key, so the rounding mismatch
@@ -145,6 +148,7 @@ def test_pandas_merge_mixed_precision_does_not_duplicate_rows(tmp_path):
 
 
 def test_pandas_merge_same_precision_still_merges(tmp_path):
+    """The component-column merge stays a clean 1:1 on same-precision data."""
     times = pd.date_range('2017-03-01 00:00', periods=24, freq='6min')
     old = _series_df(times, julian_decimals=8, value=1.0)
     old = old.rename(columns={0: 'julian', 1: 'year', 2: 'month',
@@ -158,8 +162,8 @@ def test_pandas_merge_same_precision_still_merges(tmp_path):
                               3: 'day', 4: 'hour', 5: 'minute',
                               6: '20170301-00z_hr'})
 
-    prop_stub = type('P', (), {'datecycles':
-                               ['20170228-00z_hr', '20170301-00z_hr']})()
+    prop_stub = SimpleNamespace(
+        datecycles=['20170228-00z_hr', '20170301-00z_hr'])
     merged = pandas_merge(str(csv_path), new, '20170301-00z_hr', prop_stub)
     assert len(merged) == len(times)
     assert 'julian' in merged.columns

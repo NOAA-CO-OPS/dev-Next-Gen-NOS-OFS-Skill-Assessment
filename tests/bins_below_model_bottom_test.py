@@ -20,7 +20,6 @@ a station.
 """
 
 import logging
-import os
 from types import SimpleNamespace
 
 import numpy as np
@@ -53,6 +52,7 @@ def _make_extract(rows):
 
 
 def _cu_coords(depth, hfb=0.0, mounting='up'):
+    """Build a 7-token CO-OPS currents coord line (hfb = height_from_bottom)."""
     return ['41.000', '-71.000', '0.0', f'{depth:.2f}', '0.0',
             f'{hfb:.2f}', mounting]
 
@@ -108,6 +108,7 @@ def test_single_near_bottom_bin_is_kept(logger):
 
 
 def test_in_column_bins_never_drop(logger):
+    """Bins within the model water column are always kept."""
     rows = [
         ('cb0201_b01', _cu_coords(1.5)),
         ('cb0201_b05', _cu_coords(6.0)),
@@ -144,6 +145,7 @@ def test_unknown_bathymetry_is_a_noop(logger):
 
 
 def test_nan_nodes_are_skipped(logger):
+    """Unmatched (NaN-node) stations are ignored by the pruner."""
     rows = [
         ('cb0201_b08', _cu_coords(11.10)),
         ('cb0201_b09', _cu_coords(12.64)),
@@ -169,6 +171,7 @@ def test_groups_are_per_parent_station(logger):
 
 
 def test_mismatched_list_lengths_bail_out(logger):
+    """Misaligned parallel lists disable pruning instead of mis-indexing."""
     rows = [('cb0201_b08', _cu_coords(11.10))]
     extract = _make_extract(rows)
     prop = SimpleNamespace(model_source='fvcom', station_ledger=None)
@@ -179,6 +182,7 @@ def test_mismatched_list_lengths_bail_out(logger):
 
 
 def test_ledger_records_each_drop(logger):
+    """Every pruned bin lands on the station ledger with stage depth_match."""
     ledger = StationLedger(ofs='necofs', variable='currents',
                            whichcast='hindcast', filetype='stations')
     rows = [
@@ -198,6 +202,7 @@ def test_ledger_records_each_drop(logger):
 
 
 def test_warning_names_station_and_depths(logger, caplog):
+    """The drop warning names the parent, dropped bins, and kept bin."""
     rows = [
         ('cb0201_b02', _cu_coords(2.0)),
         ('cb0201_b08', _cu_coords(11.10)),
@@ -228,10 +233,12 @@ def fvcom_stations_dataset(tmp_path):
     lon_1d = np.linspace(-71.0, -68.0, n_station, dtype=np.float64)
     lat_1d = np.linspace(41.0, 44.0, n_station, dtype=np.float64)
     h_1d = np.asarray([10.48, 20.0, 25.0, 30.0], dtype=np.float64)
-    siglay = np.tile(
-        np.linspace(-1.0, 0.0, n_siglay, dtype=np.float64)[:, None],
-        (1, n_station),
-    )
+    # Realistic FVCOM sigma-layer CENTERS (not levels): the deepest
+    # layer midpoint sits h/(2N) above the seabed, as in production
+    # grids, so the fixture exercises the same clamping geometry.
+    centers = -(2.0 * np.arange(n_siglay, dtype=np.float64) + 1.0) \
+        / (2.0 * n_siglay)
+    siglay = np.tile(centers[::-1][:, None], (1, n_station))
     ds = xr.Dataset(
         data_vars={
             'lon': (('station',), lon_1d),
@@ -309,7 +316,7 @@ def test_write_ofs_ctlfile_prunes_below_bottom_bins(
 
     out_path = control_dir / 'tbofs_cu_model_station.ctl'
     assert out_path.exists()
-    assert os.path.getsize(out_path) > 0
+    assert out_path.stat().st_size > 0
 
     rows = [ln.split() for ln in out_path.read_text().splitlines()[1:]
             if ln.strip()]

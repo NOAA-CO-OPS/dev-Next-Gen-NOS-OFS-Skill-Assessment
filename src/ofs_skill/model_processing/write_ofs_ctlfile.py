@@ -28,7 +28,6 @@ Example:
 """
 
 import os
-import re
 from logging import Logger
 from pathlib import Path
 from typing import Any
@@ -37,6 +36,9 @@ import numpy as np
 
 import ofs_skill.model_processing.indexing as indexing
 from ofs_skill.obs_retrieval import utils
+from ofs_skill.obs_retrieval.currents_bins_override import (
+    split_virtual_currents_id,
+)
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.utils.file_headers import MODEL_CTL_HEADER, OBS_CTL_HEADER
 
@@ -79,6 +81,14 @@ def _model_bathymetry_at_node(
             # Station-file FVCOM: ``z`` has shape (siglay, node, time) or
             # similar. Take the deepest layer as the bathy proxy.
             if 'h' in model:
+                # Normalise legacy time-replicated layouts the same way
+                # the depth indexer does, so both read the same value.
+                try:
+                    h_1d = _static_coord_1d(model, 'h')
+                    if h_1d.ndim == 1:
+                        return float(abs(h_1d[int(node_idx)]))
+                except (KeyError, ValueError, TypeError):
+                    pass
                 h = np.asarray(model['h'])
                 h = np.squeeze(h)
                 if h.ndim >= 2:
@@ -137,15 +147,9 @@ def _model_bathymetry_at_node(
     return 0.0
 
 
-# CO-OPS ADCP virtual-bin station IDs look like ``{parent}_b{NN}``
-# (e.g. ``cb0201_b08``). Non-virtual IDs (NDBC / USGS / CHS, or user
-# input locations) never match, so the below-bottom bin pruning is a
-# no-op for them.
-_VIRTUAL_BIN_ID = re.compile(r'^(?P<parent>.+)_b(?P<bin>\d+)$')
-
 # Slack applied before declaring an obs bin depth to be below the model
 # seabed, absorbing float noise in the bathymetry lookup. Kept small on
-# purpose: a bin a few centimetres past the model bottom is still a
+# purpose: a bin a few centimeters past the model bottom is still a
 # legitimate near-bottom comparison and is handled by the
 # keep-one-bottom-bin policy, not by this tolerance.
 _BIN_BELOW_BOTTOM_TOL_M = 0.01
@@ -171,21 +175,35 @@ def _drop_bins_below_model_bottom(
     against several different obs bins, duplicating ``mod_water_depth``
     rows in the skill CSVs.
 
-    Policy: per (parent station, node), bins deeper than the model
-    water depth are dropped, except the shallowest of them is kept when
-    no in-column bin already maps to the bottom layer — so the deepest
-    model level is still compared exactly once. Every drop is logged at
-    WARNING and recorded on ``prop.station_ledger`` when one is
-    attached.
+    Policy: per (parent station, node), bins reported deeper than the
+    model's static water depth (bathymetry) are dropped, except the
+    shallowest of them is kept when no other bin was already assigned
+    the same (clamped-to-bottom) model layer. Only bins outside the
+    static model water column are ever eligible for dropping:
+    in-column bins that share a model layer — e.g. near-bottom bins
+    between the deepest layer midpoint and the seabed — are always
+    kept, since layer sharing is ordinary vertical-resolution
+    behaviour and stays visible through the per-bin obs depths. The
+    threshold deliberately ignores the free surface: a bin below the
+    static seabed duplicates the kept bottom comparison regardless of
+    tide stage. Every drop is logged at WARNING and recorded on
+    ``prop.station_ledger`` when one is attached.
 
     The caller removes the returned indices from the parallel
     station/node/layer/depth lists before the ctl lines are written;
     the obs ctl file keeps the full bin list untouched.
     """
     coord_rows = extract[-1]
-    n = len(station_id)
+    n_stations = len(station_id)
     if not (len(coord_rows) == len(list_of_nearest_node)
-            == len(list_of_nearest_layer) == len(list_of_depths) == n):
+            == len(list_of_nearest_layer) == len(list_of_depths)
+            == n_stations):
+        logger.warning(
+            'Below-bottom ADCP bin pruning skipped: obs ctl coord rows '
+            'and node/layer/depth lists are misaligned (%d stations, '
+            '%d coord rows, %d nodes, %d layers, %d depths).',
+            n_stations, len(coord_rows), len(list_of_nearest_node),
+            len(list_of_nearest_layer), len(list_of_depths))
         return set()
 
     groups: dict[tuple[str, int], list[int]] = {}
@@ -194,17 +212,27 @@ def _drop_bins_below_model_bottom(
         try:
             if node is None or np.isnan(node):
                 continue
-        except TypeError:
+        except (TypeError, ValueError):
             continue
-        match = _VIRTUAL_BIN_ID.match(str(sid))
-        if not match:
+        # The node matchers emit -1 (not only NaN) for "no node found";
+        # a negative index would silently wrap to the last node's
+        # bathymetry, so reject it here.
+        node_int = int(node)
+        if node_int < 0:
             continue
-        groups.setdefault((match.group('parent'), int(node)), []).append(i)
+        parent, bin_num = split_virtual_currents_id(str(sid))
+        if bin_num is None:
+            # Non-virtual ID (NDBC / USGS / CHS, or user input
+            # locations) — pruning does not apply.
+            continue
+        groups.setdefault((parent, node_int), []).append(i)
 
     drop: set[int] = set()
     bathy_cache: dict[int, float] = {}
     ledger = getattr(prop, 'station_ledger', None)
     for (parent, node), members in groups.items():
+        # Coord token [3] is the water depth on every obs ctl line
+        # width (5-token scalar, 6/7-token currents).
         depths: dict[int, float] = {}
         for i in members:
             try:
@@ -221,18 +249,23 @@ def _drop_bins_below_model_bottom(
             # Bathymetry unknown at this node — cannot judge, keep all.
             continue
         too_deep = sorted(
-            (i for i in depths
-             if depths[i] > water_depth + _BIN_BELOW_BOTTOM_TOL_M),
-            key=lambda i: depths[i])
+            (i for i, depth in depths.items()
+             if depth > water_depth + _BIN_BELOW_BOTTOM_TOL_M),
+            key=depths.get)
         if not too_deep:
             continue
+        # Layers already represented by any other bin of this group —
+        # built from all members (a bin whose depth token failed to
+        # parse still occupies its assigned layer).
         in_column_layers = {list_of_nearest_layer[i]
-                            for i in depths if i not in too_deep}
+                            for i in members if i not in too_deep}
         kept = None
         if list_of_nearest_layer[too_deep[0]] not in in_column_layers:
             kept = too_deep[0]
         group_drops = [i for i in too_deep if i != kept]
         if not group_drops:
+            # Reachable only when too_deep == [kept], so ``kept`` is
+            # never None here.
             logger.warning(
                 'Station %s: ADCP bin %s reported depth %.2f m exceeds '
                 'the model water depth %.2f m at node %s; keeping it as '
@@ -594,6 +627,10 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                 station_id = [item[0] for item in extract[0]]
 
             if extract is not None:
+                # Initialised up front so static analysis (and any
+                # future ofsfiletype value) sees a defined name; both
+                # known filetypes assign it below.
+                list_of_nearest_node = []
                 if prop.ofsfiletype == 'fields':
                     list_of_nearest_node = \
                         indexing.index_nearest_node(
