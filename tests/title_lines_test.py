@@ -37,6 +37,24 @@ class TestCountTitleLines(unittest.TestCase):
         )
         self.assertEqual(count_title_lines(scalar), 4)
 
+    def test_currents_title_with_depth_no_adcp_five_lines(self):
+        """A currents title with a depth row but no ADCP-type row is 5 rows.
+
+        This is the intermediate case (e.g. a USGS/CHS or side-looking
+        currents station that has a depth line but no separate ADCP-type
+        line). It exercises the ``+30`` px / ``+0.005`` margin step once and
+        locks in the 5-line (180 px) top margin.
+        """
+        currents = (
+            '<b>NOAA/NOS OFS Skill Assessment<br>'
+            'USGS station:&nbsp;Some River (01234567)<br>'
+            'OFS:&nbsp;CBOFS&nbsp;&nbsp;&nbsp;Node ID:&nbsp;123'
+            '&nbsp;&nbsp;&nbsp;'
+            '<br>Bin&nbsp;01&nbsp;—&nbsp;Obs&nbsp;depth&nbsp;2.0&nbsp;m'
+            '<br>From:&nbsp;2025-07-01&nbsp;&nbsp;&nbsp;To:&nbsp;2025-07-02<b>'
+        )
+        self.assertEqual(count_title_lines(currents), 5)
+
     def test_currents_title_with_depth_and_adcp_six_lines(self):
         """A full currents title (depth + ADCP-type rows) is 6 rows."""
         currents = (
