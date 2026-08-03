@@ -722,6 +722,102 @@ class TestWaterLevelCodePriority:
         assert result['OBS'].iloc[0] == pytest.approx(2.0 * 0.3048)
         assert result['Datum'].iloc[0] == 'NAVD88'
 
+    def test_multisensor_aggregate_does_not_defeat_guard(self, logger):
+        """Coverage is judged per sensor series, not per-code aggregate.
+
+        Two disjoint short 63160 sensors must not pool their spans to
+        outrank a dense full-window legacy series.
+        """
+        rows = [
+            {'site_no': '11162765', 'datetime': f'2024-01-01 {h:02d}:00',
+             'code': '00065', 'option': '00000', 'value': 10.0 + h}
+            for h in range(10)
+        ]
+        rows += [
+            {'site_no': '11162765', 'datetime': f'2024-01-01 {h:02d}:00',
+             'code': '63160', 'option': '00000', 'value': 2.0}
+            for h in range(0, 3)
+        ]
+        rows += [
+            {'site_no': '11162765', 'datetime': f'2024-01-01 {h:02d}:00',
+             'code': '63160', 'option': '00001', 'value': 3.0}
+            for h in range(7, 10)
+        ]
+        mock_data = _make_usgs_multiindex_df(rows)
+
+        inp = MockRetrieveInput(
+            '11162765', '20240101', '20240102', 'water_level', datum='MLLW'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        # Each 63160 sensor spans 2h (< 50% of the 9h legacy span):
+        # fall back to the dense 00065 series
+        assert len(result) == 10
+        assert result['OBS'].iloc[0] == pytest.approx(10.0 * 0.3048)
+
+    def test_best_series_of_selected_code_used(self, logger):
+        """Within the winning code, the best-covered sensor is returned
+        (not whichever the API listed first)."""
+        rows = [
+            {'site_no': '11162765', 'datetime': '2024-01-01 00:00',
+             'code': '63160', 'option': '00000', 'value': 9.0},
+        ]
+        rows += [
+            {'site_no': '11162765', 'datetime': f'2024-01-01 {h:02d}:00',
+             'code': '63160', 'option': '00001', 'value': 2.0}
+            for h in range(10)
+        ]
+        mock_data = _make_usgs_multiindex_df(rows)
+
+        inp = MockRetrieveInput(
+            '11162765', '20240101', '20240102', 'water_level', datum='MLLW'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert len(result) == 10
+        assert result['OBS'].iloc[0] == pytest.approx(2.0 * 0.3048)
+
+    def test_low_rate_full_span_series_not_penalized(self, logger):
+        """A lower-rate 63160 series spanning the window beats a
+        higher-rate legacy series: coverage is span, not sample count."""
+        rows = [
+            {'site_no': '11162765', 'datetime': f'2024-01-01 {h:02d}:00',
+             'code': '00065', 'option': '00000', 'value': 10.0 + h}
+            for h in range(10)
+        ]
+        rows += [
+            {'site_no': '11162765', 'datetime': f'2024-01-01 {h:02d}:00',
+             'code': '63160', 'option': '00000', 'value': 2.0}
+            for h in (0, 3, 6, 9)
+        ]
+        mock_data = _make_usgs_multiindex_df(rows)
+
+        inp = MockRetrieveInput(
+            '11162765', '20240101', '20240102', 'water_level', datum='MLLW'
+        )
+
+        with patch(
+            'ofs_skill.obs_retrieval.retrieve_usgs_station.get_usgs_station_data',
+            return_value=mock_data,
+        ):
+            result = retrieve_usgs_station(inp, logger)
+
+        assert result is not None
+        assert len(result) == 4
+        assert result['OBS'].iloc[0] == pytest.approx(2.0 * 0.3048)
+
     def test_unknown_code_falls_back_to_api_order(self, logger):
         """A future searvey code outside the families still returns data."""
         mock_data = _make_usgs_multiindex_df([

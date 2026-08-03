@@ -572,7 +572,7 @@ def _process_usgs_station(
                         f'{str(id_number)} {str(id_number)}_'
                         f'{name_var}_{ofs}_USGS "{name}"\n  '
                         f'{y_value:.3f} {x_value:.3f} 0.0  '
-                        f'{timeseries["DEP01"][1]:.2f}  0.0\n'
+                        f'{timeseries["DEP01"].iloc[0]:.2f}  0.0\n'
                     )
                 ]
             elif variable == 'currents':
@@ -581,7 +581,7 @@ def _process_usgs_station(
                         f'{str(id_number)} {str(id_number)}_'
                         f'{name_var}_{ofs}_USGS "{name}"\n  '
                         f'{y_value:.3f} {x_value:.3f} 0.0  '
-                        f'{timeseries["DEP01"][1]:.2f}  0.0  0.00\n'
+                        f'{timeseries["DEP01"].iloc[0]:.2f}  0.0  0.00\n'
                     )
                 ]
     except Exception as ex:
