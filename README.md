@@ -42,26 +42,26 @@ Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../
 Full documentation lives in the [project wiki](../../wiki):
 
 **Setup**
-- [Setup and Installation](../../wiki/Setup-and-Installation) — getting the code, `make setup`, manual pip/conda routes, USGS API key, Windows notes
-- [Configuration File Reference](../../wiki/Configuration-File-Reference) — every `conf/ofs_dps.conf` setting, plus `logging.conf`
-- [Package Structure and Programmatic Usage](../../wiki/Package-Structure-and-Programmatic-Usage) — repository layout and using `ofs_skill` from your own code (see also [API_REFERENCE.md](API_REFERENCE.md) and [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md))
+- [Setup and Installation](../../wiki/01.-Setup-and-Installation) — getting the code, `make setup`, manual pip/conda routes, USGS API key, Windows notes
+- [Configuration File Reference](../../wiki/02.-Configuration-File-Reference) — every `conf/ofs_dps.conf` setting, plus `logging.conf`
+- [Package Structure and Programmatic Usage](../../wiki/03.-Package-Structure-and-Programmatic-Usage) — repository layout and using `ofs_skill` from your own code (see also [API_REFERENCE.md](API_REFERENCE.md) and [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md))
 
 **User guide**
-- [OFS Background and Concepts](../../wiki/OFS-Background-and-Concepts) — supported OFS, nowcasts vs. forecasts, run modes, file formats, data retention, vertical datums, observation data sources
-- [Downloading OFS Model Data](../../wiki/Downloading-OFS-Model-Data) — retrieving model output from the NODD S3 bucket
-- [Running the 1D Skill Assessment](../../wiki/Running-the-1D-Skill-Assessment) — argument reference, example calls, custom station lists, standalone CLI tools
-- [1D Output Reference](../../wiki/1D-Output-Reference) — control files, plots, file formats, skill metrics, maps, datum report
-- [2D Skill Assessment](../../wiki/2D-Skill-Assessment) — satellite SST vs. model fields: running the pipeline and its outputs
-- [Great Lakes Ice Skill Assessment](../../wiki/Great-Lakes-Ice-Skill-Assessment) — ice concentration and extent skill for the GLOFS models
-- [Graphical User Interfaces](../../wiki/Graphical-User-Interfaces) — the GUI launcher and tool GUIs
-- [Troubleshooting](../../wiki/Troubleshooting) — common errors and how to fix them
+- [OFS Background and Concepts](../../wiki/04.-OFS-Background-and-Concepts) — supported OFS, nowcasts vs. forecasts, run modes, file formats, data retention, vertical datums, observation data sources
+- [Downloading OFS Model Data](../../wiki/05.-Downloading-OFS-Model-Data) — retrieving model output from the NODD S3 bucket
+- [Running the 1D Skill Assessment](../../wiki/06.-Running-the-1D-Skill-Assessment) — argument reference, example calls, custom station lists, standalone CLI tools
+- [1D Output Reference](../../wiki/07.-1D-Output-Reference) — control files, plots, file formats, skill metrics, maps, datum report
+- [2D Skill Assessment](../../wiki/08.-2D-Skill-Assessment) — satellite SST vs. model fields: running the pipeline and its outputs
+- [Great Lakes Ice Skill Assessment](../../wiki/09.-Great-Lakes-Ice-Skill-Assessment) — ice concentration and extent skill for the GLOFS models
+- [Graphical User Interfaces](../../wiki/10.-Graphical-User-Interfaces-(GUI)) — the GUI launcher and tool GUIs
+- [Troubleshooting](../../wiki/11.-Troubleshooting) — common errors and how to fix them
 
 **Development and analysis**
-- [Code Development Tips](../../wiki/Code-Development-Tips)
-- [Contributing Code: Pull Request Template](../../wiki/Contributing-Code:-Pull-Request-Template)
-- [Parallelization and Performance Optimization Guide](../../wiki/Parallelization-and-Performance-Optimization-Guide)
-- [Harmonic Analysis](../../wiki/Harmonic-Analysis)
-- [CO-OPS ADCP Current Processing](../../wiki/CO%E2%80%90OPS-ADCP-current-processing)
+- [Code Development Tips](../../wiki/A.-Code-Development-Tips)
+- [Contributing Code: Pull Request Template](../../wiki/B.-Contributing-Code:-Pull-Request-Template)
+- [Parallelization and Performance Optimization Guide](../../wiki/C.-Parallelization-and-Performance-Optimization-Guide)
+- [Harmonic Analysis](../../wiki/D.-Harmonic-Analysis)
+- [CO-OPS ADCP Current Processing](../../wiki/E.-CO‐OPS-ADCP-current-processing)
 
 ## Additional resources
 
