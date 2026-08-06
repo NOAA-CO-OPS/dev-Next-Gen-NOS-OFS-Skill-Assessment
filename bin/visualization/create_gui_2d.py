@@ -7,6 +7,7 @@ Run without arguments to open the GUI directly:
 Author: TSR
 """
 from bin.visualization.create_2dplot import _run_pipeline
+
 from ofs_skill.visualization import create_gui_2d
 
 if __name__ == '__main__':

@@ -11,7 +11,6 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Union
 
 # Parsed-config cache keyed on file path, invalidated by (mtime_ns, size).
 # The pipeline re-reads config sections constantly — per variable, per
@@ -620,7 +619,7 @@ def get_station_match_max_dist(logger=None, config_file=None):
 
 
 def parse_arguments_to_list(
-    argument: Union[str, list[str]],
+    argument: str | list[str],
     logger: logging.Logger
 ) -> list[str]:
     """

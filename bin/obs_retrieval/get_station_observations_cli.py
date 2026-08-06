@@ -95,8 +95,8 @@ Revisions:
 import argparse
 import socket
 
-from ofs_skill.obs_retrieval.get_station_observations import get_station_observations
 from ofs_skill.model_processing import model_properties
+from ofs_skill.obs_retrieval.get_station_observations import get_station_observations
 
 # Import directly from module to avoid circular import
 

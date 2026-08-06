@@ -35,7 +35,7 @@ Created: Fri Jun 6 09:11:51 2025
 import os
 from datetime import datetime
 from logging import Logger
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -289,7 +289,7 @@ def report_datums(prop: Any, datum_offsets: list[list[Any]], logger: Logger) -> 
                      'Skipping this step. Exception: %s', e_x)
 
 
-def read_vdatum_from_bucket(prop: Any, logger: Logger) -> Union[xr.Dataset, int]:
+def read_vdatum_from_bucket(prop: Any, logger: Logger) -> xr.Dataset | int:
     """
     Read vertical datum conversion file from the NODD S3 bucket.
 

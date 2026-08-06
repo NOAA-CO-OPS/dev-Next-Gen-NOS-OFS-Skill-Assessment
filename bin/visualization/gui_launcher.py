@@ -107,23 +107,28 @@ def _open_selected_gui(key: str) -> None:
     if key == '1d':
 
         from bin.visualization.create_1dplot import _run_pipeline
+
         from ofs_skill.visualization import create_gui
         parser = argparse.ArgumentParser()
         create_gui.create_gui(parser, runner=_run_pipeline)
     elif key == '2d':
         from bin.visualization.create_2dplot import _run_pipeline
+
         from ofs_skill.visualization import create_gui_2d
         create_gui_2d.create_gui_2d(runner=_run_pipeline)
     elif key == 'ice':
         from bin.skill_assessment.do_iceskill import _run_pipeline
+
         from ofs_skill.visualization import create_gui_ice
         create_gui_ice.create_gui_ice(runner=_run_pipeline)
     elif key == 'obs':
         from bin.obs_retrieval.get_station_observations_cli import _run_pipeline
+
         from ofs_skill.visualization import create_gui_obs
         create_gui_obs.create_gui_obs(runner=_run_pipeline)
     elif key == 'model':
         from bin.model_processing.get_node_cli import _run_pipeline
+
         from ofs_skill.visualization import create_gui_model
         create_gui_model.create_gui_model(runner=_run_pipeline)
     else:

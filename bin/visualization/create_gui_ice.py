@@ -7,6 +7,7 @@ Run without arguments to open the GUI directly:
 Author: TSR
 """
 from bin.skill_assessment.do_iceskill import _run_pipeline
+
 from ofs_skill.visualization import create_gui_ice
 
 if __name__ == '__main__':

@@ -13,6 +13,7 @@ from ofs_skill.model_processing import model_properties
 from ofs_skill.model_processing.get_node_ofs import get_node_ofs
 from ofs_skill.model_processing.model_source import get_model_source
 
+
 def _run_pipeline(run_args):
     """Execute model time-series extraction with the given arguments."""
     prop1 = model_properties.ModelProperties()
