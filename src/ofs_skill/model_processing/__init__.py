@@ -24,6 +24,7 @@ from ofs_skill.model_processing.get_datum_offset import (
     read_vdatum_from_bucket,
     report_datums,
     roms_nodes,
+    validate_secofs_local_vdatum,
 )
 
 # Forecast cycle management
@@ -107,6 +108,7 @@ __all__ = [
     # Datum conversions
     'get_datum_offset',
     'read_vdatum_from_bucket',
+    'validate_secofs_local_vdatum',
     'report_datums',
     'roms_nodes',
     'is_number',

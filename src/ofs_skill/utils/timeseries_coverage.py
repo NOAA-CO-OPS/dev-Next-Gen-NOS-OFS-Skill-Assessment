@@ -21,6 +21,7 @@ concurrent run having already deleted the file.
 
 import contextlib
 import os
+import time
 from datetime import datetime, timedelta, timezone
 
 # How far a cached artifact's data may stop short of the reachable run
@@ -31,6 +32,13 @@ from datetime import datetime, timedelta, timezone
 # very start or end of the window will regenerate on every run; gaps in
 # the middle of the window are never penalized.
 STALENESS_TOLERANCE = timedelta(hours=12)
+
+# Captured when this module is first imported, which happens during
+# pipeline startup — i.e. before any artifact is (re)generated. Used by
+# ``created_this_run`` below. Slack absorbs coarse filesystem mtime
+# resolution and clock adjustments between import and first write.
+_PROCESS_START_TS = time.time()
+_MTIME_SLACK_SECONDS = 2.0
 
 
 def _parse_date(raw):
@@ -140,6 +148,90 @@ def covers_run_window(path, start_dt, end_dt, *, logger=None, now=None):
     if last < effective_end - STALENESS_TOLERANCE:
         return False
     return True
+
+
+def created_this_run(path):
+    """True if ``path``'s mtime says the current process wrote it.
+
+    A file created by the running pipeline is by definition not "left
+    over from an earlier run", no matter what window it covers — the
+    archive simply cannot provide more. Staleness deletion must skip
+    such files, or a window the catalog cannot fully cover turns into a
+    delete/re-extract loop: each multi-hour extraction pass is thrown
+    away and repeated by the next variable's check.
+
+    Returns False when the file is missing or unreadable, so callers
+    fall through to their normal handling.
+    """
+    try:
+        return os.path.getmtime(path) >= (
+            _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
+    except OSError:
+        return False
+
+
+def dataset_time_bounds(dataset):
+    """Return (first, last) naive datetimes of a model dataset time axis.
+
+    Probes the axis names used across the supported model families
+    (``time`` for SCHISM/FVCOM, ``ocean_time`` for ROMS). Returns
+    ``None`` when ``dataset`` is ``None``, has no recognizable time
+    axis, or the axis cannot be converted — callers then skip clamping
+    and keep the requested window.
+    """
+    if dataset is None:
+        return None
+    try:
+        variables = dataset.variables
+    except AttributeError:
+        return None
+    for name in ('time', 'ocean_time'):
+        if name not in variables:
+            continue
+        try:
+            # Local import keeps this module import-light for CLI --help.
+            import pandas as pd  # pylint: disable=import-outside-toplevel
+            values = dataset[name].values
+            if getattr(values, 'size', 0) == 0:
+                return None
+            first = pd.Timestamp(values.min())
+            last = pd.Timestamp(values.max())
+            return (first.to_pydatetime().replace(tzinfo=None),
+                    last.to_pydatetime().replace(tzinfo=None))
+        except (TypeError, ValueError, AttributeError, ImportError):
+            return None
+    return None
+
+
+def clamp_window_to_coverage(window, bounds, logger=None, label=None):
+    """Clamp a requested run window to what the model catalog provides.
+
+    ``covers_run_window`` compares artifacts against the requested
+    window; when the catalog itself cannot reach the window edges (files
+    dropped after a mid-window model-configuration change, or plain
+    archive gaps), a freshly extracted artifact is indistinguishable
+    from a stale one and regeneration can never converge. Clamping to
+    the catalog's actual first/last timestamps makes "covers everything
+    the catalog can provide" count as fresh — the same reasoning
+    ``covers_run_window`` already applies by clamping the end to *now*
+    for forecast windows.
+
+    ``window`` and ``bounds`` are ``(start, end)`` tuples or ``None``;
+    either being ``None`` returns ``window`` unchanged.
+    """
+    if window is None or bounds is None:
+        return window
+    start_dt, end_dt = window
+    new_start = max(start_dt, bounds[0])
+    new_end = min(end_dt, bounds[1])
+    if (new_start, new_end) != (start_dt, end_dt) and logger is not None:
+        logger.info(
+            'Model data%s covers %s to %s; clamping the staleness-check '
+            'window from (%s, %s) to (%s, %s) so artifacts are not '
+            'regenerated for data the catalog cannot provide.',
+            f' for {label}' if label else '', bounds[0], bounds[1],
+            start_dt, end_dt, new_start, new_end)
+    return new_start, new_end
 
 
 def is_within_directory(path, directory):

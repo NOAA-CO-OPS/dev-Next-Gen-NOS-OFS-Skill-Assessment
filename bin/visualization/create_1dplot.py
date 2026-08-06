@@ -87,6 +87,7 @@ from ofs_skill.model_processing import (
     model_properties,
     parse_ofs_ctlfile,
     read_vdatum_from_bucket,
+    validate_secofs_local_vdatum,
 )
 from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
@@ -1010,6 +1011,13 @@ def create_1dplot(prop, logger):
         else:
             logger.error('Failure checking for datum netcdf file on the NODD S3 '
                         'bucket! Datum conversions may fail. Continuing...')
+
+    # SECOFS water-level conversion reads a *local* corrections/vdatum
+    # file (directories.local_vdatum), not the bucket file probed above.
+    # A bad path otherwise surfaces only hours into the run, once per
+    # station, as -9994 offsets — with the run still "succeeding".
+    if prop.ofs == 'secofs' and 'water_level' in prop.var_list:
+        validate_secofs_local_vdatum(prop, logger)
 
     # Date-gate for forecast horizon functionality
     if ((datetime.strptime(prop.end_date_full,'%Y-%m-%dT%H:%M:%SZ')-
