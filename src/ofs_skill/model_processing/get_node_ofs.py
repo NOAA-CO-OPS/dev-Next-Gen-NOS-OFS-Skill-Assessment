@@ -979,8 +979,12 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
     actual_var = model_var
     if prop.model_source == 'roms' and model_var == 'salinity':
         actual_var = 'salt'
-    if prop.model_source == 'schism' and model_var == 'temp':
-        actual_var = 'temperature'
+    if prop.model_source == 'schism' and model_var in ('temp', 'temperature'):
+        # STOFS files name the variable 'temperature'; SECOFS stations
+        # files keep SCHISM's native 'temp'. Probe instead of assuming,
+        # or the KeyError drops the variable to per-station extraction.
+        actual_var = 'temperature' if 'temperature' in model.variables \
+            else 'temp'
     if prop.model_source == 'schism' and model_var == 'zeta':
         actual_var = 'elevation' if prop.ofsfiletype == 'fields' else model_var
 
@@ -1012,9 +1016,8 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
             )
     elif prop.model_source == 'schism':
         if 'stofs' in prop.ofs and model_var in ('temp', 'temperature'):
-            scalar_data = _batch_extract(
-                model, 'temperature', indices, None, logger=logger, **extract_kwargs
-            )
+            scalar_data = _batch_extract(model, actual_var, indices, None,
+                                         logger=logger, **extract_kwargs)
         elif is_2d:
             scalar_data = _batch_extract(
                 model, actual_var, indices, None, logger=logger, **extract_kwargs
