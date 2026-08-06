@@ -2093,11 +2093,13 @@ def get_node_ofs(prop, logger, model_dataset=None):
             serieskey = _merge_filename_key(filepath, serieskey, logger)
         serieskey.to_csv(filepath, index_label='DateTime')
     except KeyError:
-        logger.error(
-            'No filename variable found in the lazy loaded model '
-            'dataset! Cannot write filename time series key. '
-            'Moving on...'
-        )
+        # Expected whenever a cached/pre-loaded dataset is reused: the
+        # filename bookkeeping variable is dropped during resampling,
+        # and the key CSV was already written on the first load. Not an
+        # error — at ERROR level this repeated on every extraction pass.
+        logger.info('No filename variable in the model dataset (typical '
+                    'for a cached/pre-loaded dataset); skipping the '
+                    'filename time series key.')
     except Exception as ex:
         logger.error('Error writing model time series filename ' 'key: %s', ex)
 
