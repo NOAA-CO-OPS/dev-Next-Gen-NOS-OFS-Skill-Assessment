@@ -1,0 +1,62 @@
+# Scheduled / manual live API tests (not run on every PR).
+#
+# Default CI (.github/workflows/ci.yml) always uses:
+#   pytest -m "not network and not manual"
+# so this workflow is the only place live USGS (and related) network
+# tests should run. Requires repository secret API_USGS_PAT.
+
+name: Network tests
+
+on:
+  schedule:
+    # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: network-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  network:
+    name: Pytest (network)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require USGS API secret
+        env:
+          API_USGS_PAT: ${{ secrets.API_USGS_PAT }}
+        run: |
+          if [ -z "${API_USGS_PAT}" ]; then
+            echo "::error::API_USGS_PAT secret is not set. Add an encrypted GitHub Actions secret (USGS Water Data API token) to run live network tests."
+            exit 1
+          fi
+
+      - name: Set up micromamba
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          cache-environment: true
+          cache-downloads: true
+          cache-environment-key: env-${{ runner.os }}-${{ hashFiles('environment.yml') }}-v1
+          cache-downloads-key: downloads-${{ runner.os }}-${{ hashFiles('environment.yml') }}-v1
+
+      - name: Install package (editable, no deps)
+        run: pip install -e . --no-deps
+
+      - name: Run network-marked tests
+        env:
+          PROJ_NETWORK: "ON"
+          API_USGS_PAT: ${{ secrets.API_USGS_PAT }}
+        run: |
+          pytest \
+            -m network \
+            -n auto \
+            -o addopts="" \
+            --cov=src/ofs_skill \
+            --cov-report=term-missing

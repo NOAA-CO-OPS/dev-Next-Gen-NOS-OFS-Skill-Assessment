@@ -10,7 +10,7 @@ authors = [
     {name = "NOAA CO-OPS", email = "co-ops.userservices@noaa.gov"}
 ]
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 license = {text = "Public Domain"}
 keywords = ["oceanography", "forecasting", "skill-assessment", "NOAA", "OFS"]
 classifiers = [
@@ -19,11 +19,9 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Atmospheric Science",
     "Topic :: Scientific/Engineering :: Hydrology",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 
 dependencies = [
@@ -67,13 +65,20 @@ all = [
 dev = [
     "pytest>=6.2.0",
     "pytest-cov>=2.12.0",
+    "pytest-xdist>=3.3.0",
     "black>=21.0",
     "flake8>=3.9.0",
-    "mypy>=0.910",
+    "ruff==0.7.0",
+    "mypy>=1.16.0",
     "types-requests>=2.31.0",
     "types-python-dateutil>=2.9.0",
+    "detect-secrets>=1.5.0",
     "ipython>=7.26.0",
     "pre-commit>=3.0.0",
+]
+docs = [
+    "mkdocs>=1.6.0",
+    "mkdocs-material>=9.5.0",
 ]
 
 [project.scripts]
@@ -104,7 +109,7 @@ version = {attr = "ofs_skill.__version__"}
 
 [tool.black]
 line-length = 88
-target-version = ['py38', 'py39', 'py310', 'py311']
+target-version = ['py311', 'py312']
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -120,6 +125,41 @@ extend-exclude = '''
 )/
 '''
 
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "bin"]
+
+[tool.ruff.lint]
+extend-select = ["I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Matplotlib / toolkit backends must be set before importing pyplot.
+"**/plot_forecast_hours.py" = ["E402"]
+"**/make_static_plots.py" = ["E402"]
+"bin/**" = ["E402"]
+# Import order is constrained by a circular dependency.
+"src/ofs_skill/obs_retrieval/__init__.py" = ["I001"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/ofs_skill"]
+ignore_missing_imports = true
+warn_unused_ignores = false
+show_error_codes = true
+pretty = true
+
+# Known typing debt left for follow-up PRs; the gate still covers the rest of the package.
+[[tool.mypy.overrides]]
+module = [
+    "ofs_skill.visualization.processing_2d",
+    "ofs_skill.visualization.plotting_2d",
+    "ofs_skill.visualization.gui_helpers",
+    "ofs_skill.skill_assessment.make_2d_skill_maps",
+    "ofs_skill.model_processing.indexing",
+]
+ignore_errors = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
@@ -128,4 +168,5 @@ addopts = "--verbose --cov=src/ofs_skill --cov-report=html --cov-report=term-mis
 markers = [
     "network: marks tests as requiring network access (deselect with '-m \"not network\"')",
     "manual: marks tests as opt-in / live-API audits (run with '-m manual')",
+    "integration: marks fixture-based pipeline integration tests (run in CI; no live network)",
 ]

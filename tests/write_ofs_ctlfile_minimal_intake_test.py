@@ -159,6 +159,7 @@ def _write_obs_station_ctl(control_dir, ofs, name_var, stations):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_write_ofs_ctlfile_fvcom_stations_minimal_intake(
     tmp_path, fvcom_minimal_dataset,
 ):
