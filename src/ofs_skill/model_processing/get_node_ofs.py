@@ -41,7 +41,13 @@ from ofs_skill.utils.file_headers import (
     series_header,
     strip_model_ctl_header,
 )
-from ofs_skill.utils.timeseries_coverage import covers_run_window, parse_run_window
+from ofs_skill.utils.timeseries_coverage import (
+    clamp_window_to_coverage,
+    covers_run_window,
+    created_this_run,
+    dataset_time_bounds,
+    parse_run_window,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1396,10 +1402,16 @@ def read_custom_filenames(filepath):
 
 
 def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
-                            expected_timesteps, logger):
+                            expected_timesteps, logger,
+                            time_bounds=None):
     """Return ``True`` iff every per-station ``.prd`` file for this
     (variable, whichcast, ofsfiletype) combo exists on disk with the
     expected number of data rows.
+
+    ``time_bounds`` is the model dataset's (first, last) time-axis
+    span when the caller has it; the run-window coverage check below is
+    clamped to it so files covering everything the catalog can provide
+    are reused instead of being re-extracted on every run.
 
     A SIGKILL during the per-station write loop can leave one ``.prd``
     truncated to N-1 rows. Without a row-count check the next run would
@@ -1469,11 +1481,19 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
     # Row counts alone cannot distinguish a fresh file from one left over
     # by an earlier run of the same window length (daily operational runs
     # produce identical row counts every day). Check that the files
-    # actually cover the requested run window before reusing them.
+    # actually cover the reachable run window before reusing them —
+    # clamped to the catalog's own coverage, since re-extracting cannot
+    # produce data the archive does not have.
     run_window = parse_run_window(prop_local, logger)
+    run_window = clamp_window_to_coverage(
+        run_window, time_bounds, logger=logger, label=name_var)
     if run_window is not None:
         for i in range(n_stations):
             path = _prd_path(i)
+            if created_this_run(path):
+                # Written by the current process; re-extracting would
+                # reproduce it identically.
+                continue
             if not covers_run_window(path, run_window[0], run_window[1],
                                      logger=logger):
                 logger.warning(
@@ -1754,7 +1774,8 @@ def get_node_ofs(prop, logger, model_dataset=None):
 
                 if n_stations > 0 and _all_prd_files_complete(
                         prop_local, ofs_ctlfile, name_conventions[0],
-                        expected_ts, logger):
+                        expected_ts, logger,
+                        time_bounds=dataset_time_bounds(model)):
                     logger.info(
                         '[%s] all %d .prd file(s) on disk look complete '
                         '— skipping precompute and per-station writes',
