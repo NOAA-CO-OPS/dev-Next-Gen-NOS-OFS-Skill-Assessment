@@ -138,18 +138,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # environment.yml pins python=3.11.*; passing create-args python=3.12
+      # keeps BOTH pins and the solver fails. Rewrite the pin for this cell.
+      - name: Materialize matrix environment.yml
+        shell: bash
+        run: |
+          sed "s/^  - python=3\\.11\\.\\*/  - python=${{ matrix.python-version }}/" \
+            environment.yml > environment-ci.yml
+          grep -n '^  - python=' environment-ci.yml
+
       - name: Set up micromamba
         uses: mamba-org/setup-micromamba@v2
         with:
-          environment-file: environment.yml
-          # Override environment.yml's python=3.11.* for the matrix cell.
-          create-args: >-
-            python=${{ matrix.python-version }}
+          environment-file: environment-ci.yml
           cache-environment: true
           cache-downloads: true
           # Bump trailing -vN to force a rebuild without editing environment.yml.
-          cache-environment-key: env-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v1
-          cache-downloads-key: downloads-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v1
+          cache-environment-key: env-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v2
+          cache-downloads-key: downloads-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v2
 
       - name: Install package (editable, no deps)
         run: pip install -e . --no-deps
