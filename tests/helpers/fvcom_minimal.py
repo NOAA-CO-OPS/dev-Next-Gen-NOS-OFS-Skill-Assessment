@@ -74,15 +74,14 @@ def build_fvcom_minimal_dataset(tmp_path):
 
 
 def write_minimal_config(tmp_path):
-    """Write a minimal INI config the writer needs for read_config_section."""
-    cfg_path = tmp_path / 'ofs_dps.conf'
-    cfg_path.write_text(
-        '[directories]\n'
-        f'home={tmp_path.as_posix()}\n'
-        'model_historical_dir=%(home)s/example_data\n'
-        'netcdf_dir=netcdf\n'
-    )
-    return cfg_path
+    """Write a minimal INI config the writer needs for read_config_section.
+
+    Delegates to the shared superset helper so the test suite has a single
+    definition of the minimal ``ofs_dps.conf``.
+    """
+    from tests.helpers.api_mocks import write_minimal_ofs_config
+
+    return write_minimal_ofs_config(tmp_path)
 
 
 def write_obs_station_ctl(control_dir, ofs, name_var, stations):

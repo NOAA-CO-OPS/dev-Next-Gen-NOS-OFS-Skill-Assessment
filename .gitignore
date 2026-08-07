@@ -4,6 +4,9 @@ dist/
 build/
 site/
 
+# CI-generated (matrix python pin rewrite in ci.yml)
+environment-ci.yml
+
 # Python compiled files
 __pycache__/
 *.py[cod]

@@ -108,14 +108,9 @@ def test_write_ofs_ctlfile_fvcom_stations_minimal_intake(
         )
         # 1-D source values must round-trip through the writer at 3 dp.
         assert written_lat == pytest.approx(float(lat_1d[node_idx]), abs=5e-4)
-        # The writer subtracts ``lon_wrap=360`` for non-necofs FVCOM
-        # because the indexer added 360 to obs_lon. Source lon values
-        # in our fixture are already negative (W. Atl), so the round
-        # trip is: stored = lon_1d[node_idx] - 360, then -360 again
-        # in writer => stored_in_ctl = lon_1d[node_idx] - 360.
-        # Actually the writer reads ``lon_1d[node]`` (raw, negative)
-        # and subtracts ``lon_wrap=360``, yielding lon - 360 in the
-        # ctl. We assert that to keep the test honest about behaviour.
+        # For non-necofs FVCOM the writer reads the raw (negative,
+        # W. Atlantic) source lon and subtracts lon_wrap=360, so the ctl
+        # stores lon - 360. Assert that documented behaviour.
         assert written_lon == pytest.approx(
             float(lon_1d[node_idx]) - 360.0, abs=5e-4,
         )

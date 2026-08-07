@@ -21,6 +21,7 @@ jobs:
   network:
     name: Pytest (network)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash -el {0}
@@ -28,16 +29,26 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Require USGS API secret
+      - name: Check USGS API secret
+        id: secret-check
         env:
           API_USGS_PAT: ${{ secrets.API_USGS_PAT }}
         run: |
-          if [ -z "${API_USGS_PAT}" ]; then
+          if [ -n "${API_USGS_PAT}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Manual runs should fail loudly so the operator notices.
             echo "::error::API_USGS_PAT secret is not set. Add an encrypted GitHub Actions secret (USGS Water Data API token) to run live network tests."
             exit 1
+          else
+            # Scheduled runs skip quietly until the secret exists, instead
+            # of failing every week.
+            echo "::warning::API_USGS_PAT secret is not set; skipping scheduled network tests."
+            echo "available=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Set up micromamba
+        if: steps.secret-check.outputs.available == 'true'
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: environment.yml
@@ -47,9 +58,11 @@ jobs:
           cache-downloads-key: downloads-${{ runner.os }}-${{ hashFiles('environment.yml') }}-v1
 
       - name: Install package (editable, no deps)
+        if: steps.secret-check.outputs.available == 'true'
         run: pip install -e . --no-deps
 
       - name: Run network-marked tests
+        if: steps.secret-check.outputs.available == 'true'
         env:
           PROJ_NETWORK: "ON"
           API_USGS_PAT: ${{ secrets.API_USGS_PAT }}

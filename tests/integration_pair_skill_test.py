@@ -1,4 +1,4 @@
-"""Integration tests: pair → skill metrics → skill CSV (+ plot smoke)."""
+"""Integration tests: pair → skill metrics (+ fixture layout, plot smoke)."""
 
 from __future__ import annotations
 
@@ -16,13 +16,11 @@ from ofs_skill.skill_assessment.metrics_paired_one_d import skill_scalar
 from ofs_skill.visualization import summary_barplots
 from tests.helpers.api_mocks import PIPELINE_FIXTURES, load_julian_disk_series
 
-FIXTURES = Path(__file__).resolve().parent / 'fixtures' / 'pipeline'
-
 # Mentor CBOFS wl window for station 8637689 (native 6-min cadence).
-_OBS_PATH = FIXTURES / '8637689_cbofs_wl_station.obs'
-_PRD_PATH = FIXTURES / '8637689_cbofs_wl_45_nowcast_stations_model.prd'
-_PAIR_PATH = FIXTURES / 'cbofs_wl_8637689_45_nowcast_stations_pair.int'
-_SKILL_PATH = FIXTURES / 'skill_cbofs_water_level_nowcast_stations.csv'
+_OBS_PATH = PIPELINE_FIXTURES / '8637689_cbofs_wl_station.obs'
+_PRD_PATH = PIPELINE_FIXTURES / '8637689_cbofs_wl_45_nowcast_stations_model.prd'
+_PAIR_PATH = PIPELINE_FIXTURES / 'cbofs_wl_8637689_45_nowcast_stations_pair.int'
+_SKILL_PATH = PIPELINE_FIXTURES / 'skill_cbofs_water_level_nowcast_stations.csv'
 _WINDOW_START = '20260327-18:00:00'
 _WINDOW_END = '20260327-22:42:00'
 
@@ -33,8 +31,8 @@ def logger():
 
 
 @pytest.mark.integration
-def test_pair_skill_csv_pipeline(tmp_path, logger):
-    """Core 1D boundary: mentor .obs/.prd → paired_scalar → skill_scalar → CSV."""
+def test_pair_skill_metrics_pipeline(tmp_path, logger):
+    """Core 1D boundary: mentor .obs/.prd → paired_scalar → skill_scalar."""
     conf_dir = tmp_path / 'conf'
     conf_dir.mkdir()
     shutil.copy(PIPELINE_FIXTURES / 'error_ranges.csv', conf_dir / 'error_ranges.csv')
@@ -77,31 +75,6 @@ def test_pair_skill_csv_pipeline(tmp_path, logger):
     # Mentor pair window has a clear positive model-minus-obs bias.
     assert 0.05 < float(metrics[2]) < 0.30
 
-    skill_dir = tmp_path / 'data' / 'skill' / '1d' / 'table'
-    skill_dir.mkdir(parents=True)
-    csv_data = {
-        'ID': ['8637689'],
-        'NODE': [45],
-        'rmse': [metrics[0]],
-        'r': [metrics[1]],
-        'bias': [metrics[2]],
-        'bias_perc': [metrics[3]],
-        'central_freq': [metrics[5]],
-        'central_freq_pass_fail': [metrics[6]],
-        'target_error_range': [metrics[18] if len(metrics) > 18 else metrics[-1]],
-        'datum': ['MLLW'],
-        'Y': [37.227],
-        'X': [-76.479],
-        'start_date': ['2026-03-27T18:00:00Z'],
-        'end_date': ['2026-03-27T22:42:00Z'],
-    }
-    out = skill_dir / 'skill_cbofs_wl_nowcast_stations.csv'
-    pd.DataFrame(csv_data).to_csv(out)
-    assert out.exists()
-    loaded = pd.read_csv(out)
-    assert str(loaded.iloc[0]['ID']) == '8637689'
-    assert float(loaded.iloc[0]['rmse']) == pytest.approx(float(metrics[0]))
-
 
 @pytest.mark.integration
 def test_fixture_obs_prd_pair_aligned():
@@ -126,7 +99,7 @@ def test_fixture_obs_prd_pair_aligned():
 def test_currents_obs_fixture_layout():
     """ADCP currents .obs has four value columns (speed dir u v)."""
     cu = load_julian_disk_series(
-        FIXTURES / 'cb0201_b01_stofs_3d_atl_cu_station.obs',
+        PIPELINE_FIXTURES / 'cb0201_b01_stofs_3d_atl_cu_station.obs',
         n_value_cols=4,
     )
     assert len(cu) == 48

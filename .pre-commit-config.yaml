@@ -50,8 +50,9 @@ repos:
     hooks:
     -   id: ci-local
         name: ci-local (fast pre-push)
-        # language: system does not activate conda; always run inside ofs_dps.
-        entry: conda run -n ofs_dps bash scripts/ci-local.sh
+        # Runs in the ambient shell env; ci-local.sh preflights that the
+        # dev env (ofs_skill importable) is active and says how to fix it.
+        entry: bash scripts/ci-local.sh
         language: system
         pass_filenames: false
         always_run: true

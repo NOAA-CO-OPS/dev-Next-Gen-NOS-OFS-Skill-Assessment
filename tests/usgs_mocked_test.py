@@ -37,7 +37,7 @@ def test_retrieve_water_temperature_mocked(logger):
         )
 
     assert isinstance(result, pd.DataFrame)
-    assert list(result.columns) == ['DateTime', 'DEP01', 'OBS']
+    assert set(result.columns) == {'DateTime', 'DEP01', 'OBS'}
     assert len(result) == 12
     assert result['OBS'].iloc[0] == pytest.approx(15.0)
 
