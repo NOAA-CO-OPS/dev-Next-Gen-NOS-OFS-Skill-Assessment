@@ -15,12 +15,7 @@ from ofs_skill.skill_assessment.get_skill import (
     _set_cached_model,
     ofs_ctlfile_extract,
 )
-
-# Reuse the synthetic FVCOM fixture builder from the minimal-intake regression.
-from tests.write_ofs_ctlfile_minimal_intake_test import (  # noqa: E402
-    _write_minimal_config,
-    _write_obs_station_ctl,  # pytest fixture re-export
-)
+from tests.helpers.fvcom_minimal import write_minimal_config, write_obs_station_ctl
 
 
 @pytest.mark.integration
@@ -28,7 +23,7 @@ def test_write_ofs_ctlfile_from_synthetic_netcdf(tmp_path, fvcom_minimal_dataset
     """Model extract boundary: synthetic NetCDF → model station.ctl."""
     combined, lon_1d, lat_1d = fvcom_minimal_dataset
 
-    cfg_path = _write_minimal_config(tmp_path)
+    cfg_path = write_minimal_config(tmp_path)
     control_dir = tmp_path / 'control_files'
     control_dir.mkdir()
 
@@ -37,7 +32,7 @@ def test_write_ofs_ctlfile_from_synthetic_netcdf(tmp_path, fvcom_minimal_dataset
         (f'9000{ni:02d}', float(lat_1d[ni]), float(lon_1d[ni]), 0.0)
         for ni in chosen_nodes
     ]
-    _write_obs_station_ctl(control_dir, 'tbofs', 'wl', stations)
+    write_obs_station_ctl(control_dir, 'tbofs', 'wl', stations)
 
     prop = SimpleNamespace(
         config_file=str(cfg_path),

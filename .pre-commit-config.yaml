@@ -50,7 +50,8 @@ repos:
     hooks:
     -   id: ci-local
         name: ci-local (fast pre-push)
-        entry: bash scripts/ci-local.sh
+        # language: system does not activate conda; always run inside ofs_dps.
+        entry: conda run -n ofs_dps bash scripts/ci-local.sh
         language: system
         pass_filenames: false
         always_run: true
