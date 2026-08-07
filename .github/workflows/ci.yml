@@ -11,6 +11,36 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Skip the heavy OS×Python test matrix on docs-only changes.
+  changes:
+    name: Detect code changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Filter paths
+        uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'bin/**'
+              - 'tests/**'
+              - 'environment.yml'
+              - 'pyproject.toml'
+              - 'Makefile'
+              - 'scripts/**'
+              - '.github/workflows/**'
+              - '.pre-commit-config.yaml'
+              - '.secrets.baseline'
+
   lint:
     name: Lint (ruff + detect-secrets)
     runs-on: ubuntu-latest
@@ -87,11 +117,22 @@ jobs:
       - name: MkDocs build (strict)
         run: mkdocs build --strict
 
+  # Cross-platform suite: Ubuntu (primary fast path) + Windows + macOS × 3.11/3.12.
+  # Install path matches INSTALL_WINDOWS.md Method A (environment.yml → editable pip).
+  # Python 3.13 deferred until the conda-forge stack is ready.
   tests:
-    name: Pytest
-    runs-on: ubuntu-latest
+    name: Pytest (${{ matrix.os }}, py${{ matrix.python-version }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12"]
     defaults:
       run:
+        # setup-micromamba activates the env for bash on Linux, macOS, and Windows.
         shell: bash -el {0}
     steps:
       - name: Checkout
@@ -101,11 +142,14 @@ jobs:
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-file: environment.yml
+          # Override environment.yml's python=3.11.* for the matrix cell.
+          create-args: >-
+            python=${{ matrix.python-version }}
           cache-environment: true
           cache-downloads: true
           # Bump trailing -vN to force a rebuild without editing environment.yml.
-          cache-environment-key: env-${{ runner.os }}-${{ hashFiles('environment.yml') }}-v1
-          cache-downloads-key: downloads-${{ runner.os }}-${{ hashFiles('environment.yml') }}-v1
+          cache-environment-key: env-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v1
+          cache-downloads-key: downloads-${{ runner.os }}-py${{ matrix.python-version }}-${{ hashFiles('environment.yml') }}-v1
 
       - name: Install package (editable, no deps)
         run: pip install -e . --no-deps
@@ -114,7 +158,7 @@ jobs:
         env:
           PROJ_NETWORK: "ON"
         run: |
-          # Unit + integration on every PR. Live APIs stay on network-tests.yml.
+          # Unit + integration on every code PR. Live APIs stay on network-tests.yml.
           pytest \
             -m "not network and not manual" \
             -n auto \
@@ -124,7 +168,7 @@ jobs:
             -o addopts=""
 
       - name: Upload coverage report
-        if: always()
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         uses: actions/upload-artifact@v4
         with:
           name: coverage-xml
