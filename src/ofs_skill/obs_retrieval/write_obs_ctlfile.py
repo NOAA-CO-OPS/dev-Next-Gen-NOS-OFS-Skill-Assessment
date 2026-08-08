@@ -493,6 +493,7 @@ def _process_usgs_station(
         retrieve_input.start_date = start_date
         retrieve_input.end_date = end_date
         retrieve_input.variable = variable
+        retrieve_input.datum = datum
         timeseries = retrieve_usgs_station(retrieve_input, logger)
         if isinstance(timeseries, pd.DataFrame) is False:
             logger.info(
@@ -504,7 +505,7 @@ def _process_usgs_station(
             )
 
             if variable == 'water_level':
-                ts_datum = str(timeseries['Datum'][1])
+                ts_datum = str(timeseries['Datum'].iloc[0])
                 ts_datum_upper = ts_datum.upper()
 
                 ofs_base_offsets = {
@@ -561,7 +562,7 @@ def _process_usgs_station(
                         f'{str(id_number)}_{name_var}_'
                         f'{ofs}_USGS "{name}"\n  {y_value:.3f} '
                         f'{x_value:.3f} '
-                        f'{zdiff}  0.0  {str(timeseries["Datum"][1])}\n'
+                        f'{zdiff}  0.0  {ts_datum}\n'
                     )
                 ]
 
@@ -571,7 +572,7 @@ def _process_usgs_station(
                         f'{str(id_number)} {str(id_number)}_'
                         f'{name_var}_{ofs}_USGS "{name}"\n  '
                         f'{y_value:.3f} {x_value:.3f} 0.0  '
-                        f'{timeseries["DEP01"][1]:.2f}  0.0\n'
+                        f'{timeseries["DEP01"].iloc[0]:.2f}  0.0\n'
                     )
                 ]
             elif variable == 'currents':
@@ -580,7 +581,7 @@ def _process_usgs_station(
                         f'{str(id_number)} {str(id_number)}_'
                         f'{name_var}_{ofs}_USGS "{name}"\n  '
                         f'{y_value:.3f} {x_value:.3f} 0.0  '
-                        f'{timeseries["DEP01"][1]:.2f}  0.0  0.00\n'
+                        f'{timeseries["DEP01"].iloc[0]:.2f}  0.0  0.00\n'
                     )
                 ]
     except Exception as ex:
