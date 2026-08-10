@@ -56,16 +56,23 @@ Declared in `pyproject.toml`:
 2. **types** — `mypy` on `src/ofs_skill`
 3. **docs** — `mkdocs build --strict`
 4. **tests** — micromamba + `pytest -m "not network and not manual"`
-   (unit **and** integration; mocked USGS included; no internet/API keys required)
+   (unit **and** integration; mocked USGS included; no internet/API keys required).
+   Coverage: `coverage.xml` artifact on Ubuntu/3.11; CI fails below
+   `fail_under` in `pyproject.toml` (repo-only gate; no Coveralls).
 
 **Scheduled / manual only** (`.github/workflows/network-tests.yml`):
 
 - `pytest -m network` with encrypted secret `API_USGS_PAT`
 - Trigger: weekly cron (Monday 06:00 UTC) or `workflow_dispatch`
 
+After a local CI-equivalent run, print the coverage summary:
+
+```bash
+python scripts/coverage_summary.py coverage.xml --fail-under-from-pyproject
+```
+
 See [fixtures/README.md](fixtures/README.md) for fixture layout and refresh steps.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup and `make ci-local`.
-
 ## Adding tests
 
 1. Prefer offline unit/integration tests with mocks/fixtures over live API calls

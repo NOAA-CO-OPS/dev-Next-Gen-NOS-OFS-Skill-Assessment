@@ -176,13 +176,34 @@ jobs:
           PROJ_NETWORK: "ON"
         run: |
           # Unit + integration on every code PR. Live APIs stay on network-tests.yml.
+          # coverage.xml is regenerated every run (never restored from cache).
+          # Floor: pyproject.toml [tool.coverage.report] fail_under — ratchet up only.
+          FLOOR="$(python scripts/coverage_summary.py --print-fail-under)"
+          echo "Using coverage fail_under=${FLOOR} from pyproject.toml"
           pytest \
             -m "not network and not manual" \
             -n auto \
             --cov=src/ofs_skill \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
+            --cov-fail-under="${FLOOR}" \
             -o addopts=""
+
+      - name: Coverage summary (repo-only)
+        if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
+        run: |
+          python scripts/coverage_summary.py coverage.xml --fail-under-from-pyproject
+
+      - name: Reject lowering coverage floor vs base
+        if: >
+          github.event_name == 'pull_request' &&
+          matrix.os == 'ubuntu-latest' &&
+          matrix.python-version == '3.11'
+        run: |
+          git fetch --depth=1 origin "${{ github.base_ref }}"
+          python scripts/coverage_summary.py \
+            --check-floor-not-lowered \
+            --base-ref "origin/${{ github.base_ref }}"
 
       - name: Upload coverage report
         if: always() && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
@@ -192,3 +213,4 @@ jobs:
           path: coverage.xml
           if-no-files-found: ignore
           retention-days: 14
+          # Do not cache coverage.xml across jobs/runs — always regenerate.

@@ -76,14 +76,25 @@ GitHub Actions runs **in parallel** on PRs (`.github/workflows/ci.yml`):
 | **lint** | `ruff` + `detect-secrets` (pip-only; no full conda env) |
 | **types** | `mypy` on `src/ofs_skill` (pip-only) |
 | **docs** | `mkdocs build --strict` (pip-only) |
-| **tests** | micromamba from `environment.yml` + pytest (`not network and not manual`) |
+| **tests** | micromamba from `environment.yml` + pytest (`not network and not manual`) + coverage gate |
 
 Live network tests: `.github/workflows/network-tests.yml` (weekly cron + manual), using encrypted secret `API_USGS_PAT`. Do **not** commit keys to `conf/api_keys.conf`.
 
+### Coverage gate (repo-only; no Coveralls)
+
+CO-OPS/NOAA org policy may block third-party coverage hosts (e.g. Coveralls), so we keep coverage inside GitHub Actions:
+
+- `pytest-cov` writes `coverage.xml` every run (never restored from cache)
+- Ubuntu / Python 3.11 uploads it as the `coverage-xml` artifact
+- CI fails if coverage is below `[tool.coverage.report] fail_under` in `pyproject.toml` (initial floor **39**, matching the ~40% baseline)
+- PRs that **lower** `fail_under` vs the base branch fail — ratchet up only, with maintainer approval to lower
+- Optional local summary: `python scripts/coverage_summary.py coverage.xml --fail-under-from-pyproject`
+
 Caching:
-- Micromamba env/downloads keyed by OS + `environment.yml` hash (`-v1` bust suffix)
+- Micromamba env/downloads keyed by OS + `environment.yml` hash (`-v2` bust suffix)
 - Pip cache for lint/types/docs
 - Pre-commit cache keyed by `.pre-commit-config.yaml`
+- **Do not** cache `coverage.xml`
 
 ## Docs
 
