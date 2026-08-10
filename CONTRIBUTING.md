@@ -76,9 +76,12 @@ GitHub Actions runs **in parallel** on PRs (`.github/workflows/ci.yml`):
 | **lint** | `ruff` + `detect-secrets` (pip-only; no full conda env) |
 | **types** | `mypy` on `src/ofs_skill` (pip-only) |
 | **docs** | `mkdocs build --strict` (pip-only) |
+| **package** | `python -m build` + `twine check` (pip-only) |
 | **tests** | micromamba from `environment.yml` + pytest (`not network and not manual`) + coverage gate |
 
-Live network tests: `.github/workflows/network-tests.yml` (weekly cron + manual), using encrypted secret `API_USGS_PAT`. Do **not** commit keys to `conf/api_keys.conf`.
+Live network tests: `.github/workflows/network-tests.yml` (weekly Sunday 17:00 UTC ≈ 12:00 PM US Eastern, or `workflow_dispatch`), using encrypted secret `API_USGS_PAT` as an env var. Do **not** write keys into `conf/api_keys.conf` or commit them. Scheduled runs skip if the secret is missing; manual runs fail loudly. Logs redact the token.
+
+Docs site: `docs-pages.yml` deploys MkDocs to GitHub Pages from `main` (enable **Settings → Pages → Source = GitHub Actions**).
 
 ### Coverage gate (repo-only; no Coveralls)
 
@@ -103,6 +106,17 @@ pip install -e ".[docs]"
 mkdocs serve          # local preview
 mkdocs build --strict # same gate as CI
 ```
+
+## Packaging check (same as CI)
+
+```bash
+pip install -e ".[packaging]"
+python -m build
+twine check dist/*
+```
+
+Git deps `searvey` and `coastalmodeling-vdatum` are pinned to release tags in both
+`pyproject.toml` and `environment.yml` — keep those pins synchronized when bumping.
 
 ## Pull requests
 

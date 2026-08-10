@@ -329,6 +329,22 @@ def get_s3_cache_dir(config_file=None, logger=None) -> str:
     return configured
 
 
+def redact_secrets(text: str, env_keys: tuple[str, ...] = ('API_USGS_PAT',)) -> str:
+    """Return ``text`` with known secret env values replaced by ``***``.
+
+    Use before logging exceptions or writing diagnostics so tokens never
+    appear in CI logs, tracebacks, or uploaded artifacts.
+    """
+    if text is None:
+        return text
+    out = str(text)
+    for key in env_keys:
+        value = os.environ.get(key, '').strip()
+        if value:
+            out = out.replace(value, '***')
+    return out
+
+
 def load_api_keys(config_filename='conf/api_keys.conf'):
     """
     Load API keys from a config file into environment variables.
@@ -349,6 +365,7 @@ def load_api_keys(config_filename='conf/api_keys.conf'):
     - Lines starting with ``#`` and blank lines are skipped.
     - Keys with empty values (e.g., ``API_USGS_PAT=``) are skipped.
     - If the file does not exist, a debug message is logged.
+    - Values are never written to the log — only key names.
     """
     logger = logging.getLogger(__name__)
 
@@ -377,7 +394,11 @@ def load_api_keys(config_filename='conf/api_keys.conf'):
                     os.environ[key] = value
                     logger.info('Loaded %s from %s', key, config_path)
                 else:
-                    logger.info('%s already set in environment, ignoring value from config file', key)
+                    logger.info(
+                        '%s already set in environment, ignoring value from '
+                        'config file',
+                        key,
+                    )
 
     if 'API_USGS_PAT' not in os.environ:
         logger.warning(

@@ -55,7 +55,8 @@ Declared in `pyproject.toml`:
 1. **lint** — `ruff` + `detect-secrets`
 2. **types** — `mypy` on `src/ofs_skill`
 3. **docs** — `mkdocs build --strict`
-4. **tests** — micromamba + `pytest -m "not network and not manual"`
+4. **package** — `python -m build` + `twine check`
+5. **tests** — micromamba + `pytest -m "not network and not manual"`
    (unit **and** integration; mocked USGS included; no internet/API keys required).
    Coverage: `coverage.xml` artifact on Ubuntu/3.11; CI fails below
    `fail_under` in `pyproject.toml` (repo-only gate; no Coveralls).
@@ -63,7 +64,10 @@ Declared in `pyproject.toml`:
 **Scheduled / manual only** (`.github/workflows/network-tests.yml`):
 
 - `pytest -m network` with encrypted secret `API_USGS_PAT`
-- Trigger: weekly cron (Monday 06:00 UTC) or `workflow_dispatch`
+- Trigger: weekly cron (Sunday 17:00 UTC ≈ 12:00 PM US Eastern) or `workflow_dispatch`
+- Step summary records duration / exit for Actions monitoring; nightly cron deferred until weekly is stable
+
+**Docs Pages** (`.github/workflows/docs-pages.yml`): deploy MkDocs from `main` (org must enable Pages → GitHub Actions).
 
 After a local CI-equivalent run, print the coverage summary:
 

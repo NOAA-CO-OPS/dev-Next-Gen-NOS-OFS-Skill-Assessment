@@ -29,6 +29,8 @@ from searvey.usgs import (
     get_usgs_station_data,
 )
 
+from ofs_skill.obs_retrieval.utils import redact_secrets
+
 # Track whether we've already warned about rate limiting this session
 _warned_rate_limit = False
 
@@ -144,7 +146,7 @@ def retrieve_usgs_station(
             return None
         logger.error(
             'Retrieve USGS data failed for %s station %s: %s',
-            variable, station, ex
+            variable, station, redact_secrets(str(ex)),
         )
         return None
 

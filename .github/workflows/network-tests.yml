@@ -4,13 +4,17 @@
 #   pytest -m "not network and not manual"
 # so this workflow is the only place live USGS (and related) network
 # tests should run. Requires repository secret API_USGS_PAT.
+#
+# After several stable weekly runs, consider adding a nightly cron, e.g.:
+#   - cron: "0 17 * * *"   # daily 17:00 UTC (same local wall time as weekly)
 
 name: Network tests
 
 on:
   schedule:
-    # Mondays 06:00 UTC
-    - cron: "0 6 * * 1"
+    # Sundays 17:00 UTC = 12:00 PM US Eastern Standard Time (EST).
+    # During EDT this is 1:00 PM Eastern. GitHub cron is UTC-only (no DST).
+    - cron: "0 17 * * 0"
   workflow_dispatch:
 
 concurrency:
@@ -34,7 +38,10 @@ jobs:
         env:
           API_USGS_PAT: ${{ secrets.API_USGS_PAT }}
         run: |
+          # GitHub already masks secrets.* in logs; add-mask is belt-and-suspenders
+          # if the value is ever echoed by a later step.
           if [ -n "${API_USGS_PAT}" ]; then
+            echo "::add-mask::${API_USGS_PAT}"
             echo "available=true" >> "$GITHUB_OUTPUT"
           elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             # Manual runs should fail loudly so the operator notices.
@@ -42,7 +49,7 @@ jobs:
             exit 1
           else
             # Scheduled runs skip quietly until the secret exists, instead
-            # of failing every week.
+            # of failing every week. Forks / missing secret never see the value.
             echo "::warning::API_USGS_PAT secret is not set; skipping scheduled network tests."
             echo "available=false" >> "$GITHUB_OUTPUT"
           fi
@@ -62,14 +69,46 @@ jobs:
         run: pip install -e . --no-deps
 
       - name: Run network-marked tests
+        id: pytest-network
         if: steps.secret-check.outputs.available == 'true'
         env:
           PROJ_NETWORK: "ON"
           API_USGS_PAT: ${{ secrets.API_USGS_PAT }}
         run: |
+          echo "::add-mask::${API_USGS_PAT}"
+          START_TS="$(date -u +%s)"
+          set +e
           pytest \
             -m network \
             -n auto \
             -o addopts="" \
             --cov=src/ofs_skill \
             --cov-report=term-missing
+          STATUS=$?
+          set -e
+          END_TS="$(date -u +%s)"
+          echo "duration_sec=$((END_TS - START_TS))" >> "$GITHUB_OUTPUT"
+          echo "pytest_exit=${STATUS}" >> "$GITHUB_OUTPUT"
+          exit "${STATUS}"
+
+      - name: Workflow summary (runtime / reliability)
+        if: always()
+        env:
+          DURATION: ${{ steps.pytest-network.outputs.duration_sec }}
+          PYTEST_EXIT: ${{ steps.pytest-network.outputs.pytest_exit }}
+          SECRET_OK: ${{ steps.secret-check.outputs.available }}
+        run: |
+          {
+            echo "## Network tests"
+            echo ""
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Event | \`${{ github.event_name }}\` |"
+            echo "| Ref | \`${{ github.ref_name }}\` |"
+            echo "| Secret available | \`${SECRET_OK:-false}\` |"
+            echo "| Pytest exit | \`${PYTEST_EXIT:-n/a}\` |"
+            echo "| Duration (s) | \`${DURATION:-n/a}\` |"
+            echo ""
+            echo "Monitor Actions usage under the repo **Insights → Actions** page."
+            echo "Keep this weekly until stable; then consider a nightly cron (see file header)."
+          } >> "$GITHUB_STEP_SUMMARY"

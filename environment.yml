@@ -1,3 +1,7 @@
+# Conda env for local / CI installs.
+# Keep pip Git pins below in sync with pyproject.toml [project] dependencies
+# (searvey + coastalmodeling-vdatum tags). Other stacks differ on purpose:
+# conda provides geospatial binaries; pyproject declares the pip package surface.
 name: ofs_dps
 channels:
   - conda-forge
@@ -53,10 +57,13 @@ dependencies:
 
   - pip
   - pip:
+    # Keep Git pins in sync with pyproject.toml [project] dependencies.
     - global-land-mask==1.0.0
     - tkcalendar==1.6.1
-    - git+https://github.com/oceanmodeling/coastalmodeling-vdatum.git
-    - git+https://github.com/oceanmodeling/searvey.git@master
+    # coastalmodeling-vdatum v0.3.2 == 0d63b2bbc0b0634e20a0ec55023a53354fab1b47
+    - git+https://github.com/oceanmodeling/coastalmodeling-vdatum.git@v0.3.2
+    # searvey v0.4.2 == 4c2afb8655dfc052f49855db1c9f30ad64b68522
+    - git+https://github.com/oceanmodeling/searvey.git@v0.4.2
     - utide>=0.3.0
 
 # Activation-time env vars exported into the conda env.

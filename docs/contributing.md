@@ -15,7 +15,10 @@ On every pull request, GitHub Actions runs these jobs in parallel:
 - **lint** — `ruff` and `detect-secrets`
 - **types** — `mypy` on `src/ofs_skill`
 - **docs** — `mkdocs build --strict`
+- **package** — `python -m build` and `twine check`
 - **tests** — micromamba + `pytest -m "not network and not manual"`
+
+Live USGS network tests run only on the weekly / manual **Network tests** workflow (secret `API_USGS_PAT`). MkDocs is also deployed to GitHub Pages from `main` via `docs-pages.yml`.
 
 ## Local pre-push
 

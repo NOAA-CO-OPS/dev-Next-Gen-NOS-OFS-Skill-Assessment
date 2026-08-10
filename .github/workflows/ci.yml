@@ -121,6 +121,32 @@ jobs:
       - name: MkDocs build (strict)
         run: mkdocs build --strict
 
+  package:
+    name: Package (build + twine)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Twine check
+        run: twine check dist/*
+
   # Cross-platform suite: Ubuntu (primary fast path) + Windows + macOS × 3.11/3.12.
   # Install path matches INSTALL_WINDOWS.md Method A (environment.yml → editable pip).
   # Python 3.13 deferred until the conda-forge stack is ready.
