@@ -11,7 +11,6 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Union
 
 # Parsed-config cache keyed on file path, invalidated by (mtime_ns, size).
 # The pipeline re-reads config sections constantly — per variable, per
@@ -330,6 +329,36 @@ def get_s3_cache_dir(config_file=None, logger=None) -> str:
     return configured
 
 
+def redact_secrets(
+    text: str | None, env_keys: tuple[str, ...] = ('API_USGS_PAT',)
+) -> str | None:
+    """Return ``text`` with known secret env values replaced by ``***``.
+
+    Use before logging exceptions or writing diagnostics so tokens never
+    appear in CI logs, tracebacks, or uploaded artifacts.
+
+    Args:
+        text: Raw string that may contain secret values, or ``None``.
+        env_keys: Environment variable names whose values should be redacted.
+
+    Returns:
+        Redacted string, or ``None`` if ``text`` was ``None``.
+
+    Note:
+        Only values with length ``>= 6`` are redacted, so a pathologically
+        short or empty secret cannot mangle unrelated log text. This is
+        belt-and-suspenders on top of GitHub ``::add-mask::``.
+    """
+    if text is None:
+        return None
+    out = str(text)
+    for key in env_keys:
+        value = os.environ.get(key, '').strip()
+        if len(value) >= 6:
+            out = out.replace(value, '***')
+    return out
+
+
 def load_api_keys(config_filename='conf/api_keys.conf'):
     """
     Load API keys from a config file into environment variables.
@@ -350,6 +379,7 @@ def load_api_keys(config_filename='conf/api_keys.conf'):
     - Lines starting with ``#`` and blank lines are skipped.
     - Keys with empty values (e.g., ``API_USGS_PAT=``) are skipped.
     - If the file does not exist, a debug message is logged.
+    - Values are never written to the log — only key names.
     """
     logger = logging.getLogger(__name__)
 
@@ -378,7 +408,11 @@ def load_api_keys(config_filename='conf/api_keys.conf'):
                     os.environ[key] = value
                     logger.info('Loaded %s from %s', key, config_path)
                 else:
-                    logger.info('%s already set in environment, ignoring value from config file', key)
+                    logger.info(
+                        '%s already set in environment, ignoring value from '
+                        'config file',
+                        key,
+                    )
 
     if 'API_USGS_PAT' not in os.environ:
         logger.warning(
@@ -620,7 +654,7 @@ def get_station_match_max_dist(logger=None, config_file=None):
 
 
 def parse_arguments_to_list(
-    argument: Union[str, list[str]],
+    argument: str | list[str],
     logger: logging.Logger
 ) -> list[str]:
     """

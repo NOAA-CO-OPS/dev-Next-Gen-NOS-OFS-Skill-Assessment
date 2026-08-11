@@ -21,8 +21,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from ofs_skill.visualization import (plotting_functions,
-                                     make_static_plots)
+
+from ofs_skill.visualization import make_static_plots, plotting_functions
 
 
 def make_table(grouped, info, prop, stat):

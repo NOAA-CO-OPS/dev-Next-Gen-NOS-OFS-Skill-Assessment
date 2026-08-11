@@ -6,10 +6,9 @@ skill assessment metrics. The output is a list with the result for each metric.
 """
 
 import math
-import os
 import warnings
 from logging import Logger
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -85,7 +84,7 @@ def skill_scalar(
     station_id: str,
     prop: Any,
     logger: Logger,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """
     Calculate skill metrics for scalar variables.
 
@@ -282,7 +281,7 @@ def skill_vector(
     name_var: str,
     prop: Any,
     logger: Logger,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """
     Calculate skill metrics for vector variables.
 
@@ -442,7 +441,7 @@ def skill_vector_dir(
     name_var: str,
     prop: Any,
     logger: Logger,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """
     Calculate skill metrics for current direction.
 
@@ -598,7 +597,7 @@ def skill_extrema(
     df_paired: pd.DataFrame,
     name_var: str,
     prop: Any,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """Calculate amplitude + timing skill metrics for water-level extrema (HW/LW).
 
     MDPO/MDNO/WOF are intentionally omitted (they are ill-defined on an

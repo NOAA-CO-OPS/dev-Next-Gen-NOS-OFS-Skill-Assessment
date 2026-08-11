@@ -8,7 +8,6 @@ time series and creates paired datasets for skill assessment.
 from datetime import datetime, timedelta
 from enum import Enum
 from logging import Logger
-from typing import Optional, Union
 
 import numpy as np
 import pandas as pd
@@ -29,7 +28,7 @@ class PairingStatus(str, Enum):
 
 # Return type shared by the pairing functions: either the paired result
 # tuple, or a PairingStatus sentinel explaining why no pairing was produced.
-PairedResult = Union[tuple[list[list], pd.DataFrame], PairingStatus]
+PairedResult = tuple[list[list], pd.DataFrame] | PairingStatus
 
 
 def paired_scalar(
@@ -39,7 +38,7 @@ def paired_scalar(
     end_date_full: str,
     logger: Logger,
     lookback_hours: int = 6,
-) -> Optional[PairedResult]:
+) -> PairedResult | None:
     """
     Create paired time series for scalar variables.
 
@@ -252,7 +251,7 @@ def paired_vector(
     end_date_full: str,
     logger: Logger,
     lookback_hours: int = 6,
-) -> Optional[tuple[list[list], pd.DataFrame]]:
+) -> tuple[list[list], pd.DataFrame] | None:
     """
     Create paired time series for vector variables.
 
