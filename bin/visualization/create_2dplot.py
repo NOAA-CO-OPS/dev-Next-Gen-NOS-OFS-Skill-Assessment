@@ -48,6 +48,7 @@ import json
 import logging
 import logging.config
 import os
+import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -65,6 +66,15 @@ from ofs_skill.model_processing import (
 )
 from ofs_skill.obs_retrieval import utils
 from ofs_skill.visualization import plotting_2d
+
+
+def _format_run_command():
+    """Reconstruct the exact python command used to launch this run.
+
+    Echoing this into the log lets us debug a user's run from the log file
+    alone, without asking them to also send the command they invoked.
+    """
+    return shlex.join([sys.executable, *sys.argv])
 
 
 def validate_and_initialize_parameters(prop):
@@ -88,6 +98,7 @@ def validate_and_initialize_parameters(prop):
 
     logging.config.fileConfig(log_config_file)
     logger = logging.getLogger('root')
+    logger.info('Run command: %s', _format_run_command())
     logger.info('Using config %s', config_file)
     logger.info('Using log config %s', log_config_file)
     logger.info('--- Starting Visualization Process ---')

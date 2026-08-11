@@ -71,6 +71,7 @@ import glob
 import logging
 import logging.config
 import os
+import shlex
 import sys
 import time
 import warnings
@@ -99,6 +100,16 @@ from ofs_skill.utils.timeseries_coverage import (
 from ofs_skill.visualization import create_gui, plotting_scalar, plotting_vector, summary_barplots
 
 warnings.filterwarnings('ignore')
+
+
+def _format_run_command():
+    """Reconstruct the exact python command used to launch this run.
+
+    Echoing this into the log lets us debug a user's run from the log file
+    alone, without asking them to also send the command they invoked.
+    """
+    return shlex.join([sys.executable, *sys.argv])
+
 
 def parameter_validation(prop, logger):
     """ Parameter validation """
@@ -839,6 +850,7 @@ def create_1dplot(prop, logger):
         # Creater logger
         logging.config.fileConfig(log_config_file)
         logger = logging.getLogger('root')
+        logger.info('Run command: %s', _format_run_command())
         logger.info('Using config %s', config_file)
         logger.info('Using log config %s', log_config_file)
 
