@@ -29,6 +29,7 @@ Design choices:
   corrupt index (fails open into "stale", forcing a safe regeneration).
 """
 
+import contextlib
 import json
 import os
 import threading
@@ -180,12 +181,22 @@ def _load_index(directory: str) -> dict:
 
 
 def _write_index(directory: str, index: dict, logger=None) -> None:
+    # Write atomically: dump to a temp file in the same directory, then
+    # os.replace() over the real index. A crash mid-write can only leave the
+    # (discarded) temp file behind, never a half-written index -- so a killed
+    # run does not corrupt the manifest and force an unnecessary full-dir
+    # regeneration. os.replace is atomic on the same filesystem on both
+    # POSIX and Windows.
     path = _index_path(directory)
+    tmp_path = f'{path}.{os.getpid()}.tmp'
     try:
         os.makedirs(directory, exist_ok=True)
-        with open(path, 'w', encoding='utf-8') as handle:
+        with open(tmp_path, 'w', encoding='utf-8') as handle:
             json.dump(index, handle, indent=2, sort_keys=True)
+        os.replace(tmp_path, path)
     except OSError as exc:  # pragma: no cover - defensive
+        with contextlib.suppress(OSError):
+            os.remove(tmp_path)
         if logger is not None:
             logger.warning(
                 'Could not write cache manifest %s: %s. Cached-artifact '
