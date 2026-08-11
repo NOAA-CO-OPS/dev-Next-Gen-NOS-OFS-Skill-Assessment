@@ -1877,25 +1877,22 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         return (datum_offset, model_station)
                     filename = (f'{prop_local.ofs}_{ofs_ctlfile[4][i]}_'
                     f'{name_conventions[0]}_fcst_horizons.csv')
-                    filepath = os.path.join(prop_local.data_horizon_1d_node_path,
-                                 filename)
-                    if os.path.isfile(filepath):
-                        try:
-                            df = do_horizon_skill_utils.pandas_merge(filepath, df,
-                                                            datecycle,prop_local)
-                        except Exception as e_x:
-                            logger.error('Could not concat forecast horizon '
-                                         'series in pandas for %s at station '
-                                         '%s! Error: %s', name_conventions[0],
-                                         ofs_ctlfile[4][i], e_x)
-                            logger.error('No forecast horizons available!')
-                            return (datum_offset, model_station)
-                    # Save pandas dataframe with horizon time series
+                    # Stash this cycle in an in-memory accumulator keyed by the
+                    # station CSV filename. All cycles are merged and written
+                    # once at the end of the cycle loop by
+                    # do_horizon_skill.make_horizon_series (via
+                    # flush_horizon_series), which keeps the horizon workflow
+                    # scaling linearly with the number of cycles instead of
+                    # re-reading and re-merging the growing CSV on every cycle
+                    # (previously O(cycles**2) on disk I/O).
                     try:
-                        df.to_csv(filepath, index=False)
+                        do_horizon_skill_utils.accumulate_cycle(
+                            prop_local, filename, df, datecycle)
                     except Exception as e_x:
-                        logger.error("Couldn't save forecast horizons to csv!"
-                                     'Error: %s', e_x)
+                        logger.error('Could not accumulate forecast horizon '
+                                     'series for %s at station %s! Error: %s',
+                                     name_conventions[0],
+                                     ofs_ctlfile[4][i], e_x)
                         return (datum_offset, model_station)
                 else:
                     prd_path_std = (
@@ -2049,6 +2046,13 @@ def get_node_ofs(prop, logger, model_dataset=None):
             for variable in prop.var_list:
                 prop_local = copy.deepcopy(prop)
                 prop_local.var_list = [variable]
+                # deepcopy would give each variable its own accumulator dict,
+                # which flush_horizon_series (called on the outer prop by
+                # make_horizon_series) would never see. Re-share the outer
+                # prop's accumulator so all variables/cycles append into the
+                # same store.
+                if hasattr(prop, '_horizon_accumulator'):
+                    prop_local._horizon_accumulator = prop._horizon_accumulator
                 futures.append(executor.submit(
                     _extract_variable, variable, prop_local))
             for f in futures:
