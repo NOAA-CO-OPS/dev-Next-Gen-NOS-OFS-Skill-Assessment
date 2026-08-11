@@ -17,7 +17,18 @@ tests/
 
 ## Run tests locally
 
-From the repository root, with the conda env activated (`ofs_dps`):
+From the repository root, with the conda env activated (`ofs_dps`).
+
+**Before pytest on a PR branch**, reinstall the package editable from *this*
+checkout so you are not accidentally using another clone’s install:
+
+```bash
+pip install -e ".[dev]"
+```
+
+If you skip that and the env still points at another checkout, the first
+failure can look severe (`ImportError` for symbols such as `redact_secrets`,
+or coverage stuck at **0%**) even though the branch itself is fine.
 
 ```bash
 # Full default suite (uses pyproject.toml addopts, including coverage HTML)
@@ -77,6 +88,7 @@ python scripts/coverage_summary.py coverage.xml --fail-under-from-pyproject
 
 See [fixtures/README.md](fixtures/README.md) for fixture layout and refresh steps.
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup and `make ci-local`.
+
 ## Adding tests
 
 1. Prefer offline unit/integration tests with mocks/fixtures over live API calls

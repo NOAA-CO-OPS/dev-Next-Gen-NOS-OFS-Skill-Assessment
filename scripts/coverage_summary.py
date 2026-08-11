@@ -22,6 +22,7 @@ import argparse
 import re
 import subprocess
 import sys
+import tomllib
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -54,10 +55,18 @@ def parse_coverage_xml(path: Path) -> tuple[int, int, float]:
     return statements, missing, percent
 
 
-def read_fail_under_from_pyproject(pyproject: Path) -> int:
-    """Parse fail_under from [tool.coverage.report] without adding deps."""
-    text = pyproject.read_text(encoding='utf-8')
-    # Narrow to the coverage.report table when possible.
+def _fail_under_from_toml_text(text: str) -> int | None:
+    """Parse fail_under via tomllib; return None if missing/invalid."""
+    try:
+        data = tomllib.loads(text)
+        value = data['tool']['coverage']['report']['fail_under']
+        return int(value)
+    except (tomllib.TOMLDecodeError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _fail_under_from_regex(text: str) -> int | None:
+    """Regex fallback for incomplete or oddly formatted TOML text."""
     match = re.search(
         r'\[tool\.coverage\.report\](.*?)(?:\n\[|\Z)',
         text,
@@ -66,10 +75,19 @@ def read_fail_under_from_pyproject(pyproject: Path) -> int:
     section = match.group(1) if match else text
     found = re.search(r'(?m)^fail_under\s*=\s*(\d+)\s*$', section)
     if not found:
+        return None
+    return int(found.group(1))
+
+
+def read_fail_under_from_pyproject(pyproject: Path) -> int:
+    """Parse fail_under from [tool.coverage.report] using tomllib."""
+    text = pyproject.read_text(encoding='utf-8')
+    value = _fail_under_from_toml_text(text)
+    if value is None:
         raise SystemExit(
             f'Could not find fail_under in [tool.coverage.report] ({pyproject})'
         )
-    return int(found.group(1))
+    return value
 
 
 def read_fail_under_from_ref(
@@ -77,7 +95,8 @@ def read_fail_under_from_ref(
 ) -> int | None:
     """Read fail_under from pyproject.toml at a git ref.
 
-    Returns None if the file or setting is missing on that ref (first
+    Prefers tomllib on ``git show`` stdout; falls back to regex if parsing
+    fails. Returns None if the file or setting is missing on that ref (first
     introduction of the floor is allowed).
     """
     try:
@@ -89,16 +108,9 @@ def read_fail_under_from_ref(
         )
     except subprocess.CalledProcessError:
         return None
-    match = re.search(
-        r'\[tool\.coverage\.report\](.*?)(?:\n\[|\Z)',
-        proc.stdout,
-        flags=re.DOTALL,
+    return _fail_under_from_toml_text(proc.stdout) or _fail_under_from_regex(
+        proc.stdout
     )
-    section = match.group(1) if match else proc.stdout
-    found = re.search(r'(?m)^fail_under\s*=\s*(\d+)\s*$', section)
-    if not found:
-        return None
-    return int(found.group(1))
 
 
 def print_summary(path: Path, statements: int, missing: int, percent: float) -> None:

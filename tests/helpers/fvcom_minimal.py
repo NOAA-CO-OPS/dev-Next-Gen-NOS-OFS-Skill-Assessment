@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import xarray as xr
 
 
-def build_fvcom_minimal_dataset(tmp_path):
+def build_fvcom_minimal_dataset(
+    tmp_path: Path,
+) -> tuple[xr.Dataset, np.ndarray, np.ndarray]:
     """Build two small FVCOM stations files + combine via xr.open_mfdataset.
 
     With ``data_vars='minimal'`` and a single time-concat dim, static
@@ -14,11 +18,13 @@ def build_fvcom_minimal_dataset(tmp_path):
     shape (no time replication). ``zeta`` is the only time-varying var
     here.
 
-    Returns
-    -------
-    (xr.Dataset, np.ndarray, np.ndarray)
-        The combined dataset and the original 1-D lon / lat arrays the
-        caller can use to verify the written ctl file.
+    Args:
+        tmp_path: Pytest temporary directory for the NetCDF files.
+
+    Returns:
+        ``(combined_dataset, lon_1d, lat_1d)`` — the combined dataset and
+        the original 1-D lon / lat arrays the caller can use to verify the
+        written ctl file.
     """
     n_station = 6
     n_siglay = 3
@@ -32,7 +38,7 @@ def build_fvcom_minimal_dataset(tmp_path):
         (1, n_station),
     )
 
-    def _make_file(path, t_offset):
+    def _make_file(path: Path, t_offset: int) -> None:
         ds = xr.Dataset(
             data_vars={
                 'lon': (('station',), lon_1d),
@@ -73,7 +79,7 @@ def build_fvcom_minimal_dataset(tmp_path):
     return combined, lon_1d, lat_1d
 
 
-def write_minimal_config(tmp_path):
+def write_minimal_config(tmp_path: Path) -> Path:
     """Write a minimal INI config the writer needs for read_config_section.
 
     Delegates to the shared superset helper so the test suite has a single
@@ -84,8 +90,23 @@ def write_minimal_config(tmp_path):
     return write_minimal_ofs_config(tmp_path)
 
 
-def write_obs_station_ctl(control_dir, ofs, name_var, stations):
-    """Write a minimal obs station.ctl file the writer will read."""
+def write_obs_station_ctl(
+    control_dir: Path,
+    ofs: str,
+    name_var: str,
+    stations: list[tuple[str, float, float, float]],
+) -> Path:
+    """Write a minimal obs station.ctl file the writer will read.
+
+    Args:
+        control_dir: Directory for the ``*_station.ctl`` file.
+        ofs: OFS identifier used in the filename.
+        name_var: Variable key used in the filename.
+        stations: Rows of ``(station_id, lat, lon, depth)``.
+
+    Returns:
+        Path to the written control file.
+    """
     # Lazy import: keep helper module loadable without ofs_skill on path.
     from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 

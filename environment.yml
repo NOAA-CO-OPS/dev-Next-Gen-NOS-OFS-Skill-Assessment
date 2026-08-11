@@ -58,12 +58,13 @@ dependencies:
   - pip
   - pip:
     # Keep Git pins in sync with pyproject.toml [project] dependencies.
+    # Pin to immutable commit SHAs; release tags stay in comments.
     - global-land-mask==1.0.0
     - tkcalendar==1.6.1
-    # coastalmodeling-vdatum v0.3.2 == 0d63b2bbc0b0634e20a0ec55023a53354fab1b47
-    - git+https://github.com/oceanmodeling/coastalmodeling-vdatum.git@v0.3.2
-    # searvey v0.4.2 == 4c2afb8655dfc052f49855db1c9f30ad64b68522
-    - git+https://github.com/oceanmodeling/searvey.git@v0.4.2
+    # coastalmodeling-vdatum v0.3.2
+    - git+https://github.com/oceanmodeling/coastalmodeling-vdatum.git@0d63b2bbc0b0634e20a0ec55023a53354fab1b47
+    # searvey v0.4.2
+    - git+https://github.com/oceanmodeling/searvey.git@4c2afb8655dfc052f49855db1c9f30ad64b68522
     - utide>=0.3.0
 
 # Activation-time env vars exported into the conda env.

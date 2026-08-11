@@ -37,15 +37,39 @@ make ci-local
 bash scripts/ci-local.sh
 ```
 
+**Windows:** use Git Bash for the commands above, or run the PowerShell
+equivalent from the repo root:
+
+```powershell
+.\scripts\ci-local.ps1
+```
+
 This runs:
-- `ruff check src bin`
+- `ruff check src bin` via **pinned** `ruff==0.7.0` (same as CI / pre-commit;
+  newer ruff is rejected so you do not see spurious UP031/UP042 failures)
 - `detect-secrets` against `.secrets.baseline`
 - a small pytest subset (`tests/test_package_imports.py`)
 
 If `ci-local` fails, the push is blocked. Fix locally and try again.
 You can bypass with `git push --no-verify` (not recommended).
 
+If imports fail or coverage looks like 0% because another checkout’s editable
+install is active, run from **this** branch checkout:
+
+```bash
+pip install -e ".[dev]"
+```
+
+A stale editable install against a different clone is a common footgun: the
+first symptom is often `ImportError: cannot import name 'redact_secrets'`
+(or similar) and pytest reporting **0% coverage**, which looks like a hard
+failure but is just the wrong `ofs_skill` on `sys.path`. Reinstalling
+editable from this checkout fixes it.
+
 ## Tests and markers
+
+Reinstall from this checkout first if you switched branches or clones
+(`pip install -e ".[dev]"`) — see the note under [Local checks before push](#local-checks-before-push).
 
 ```bash
 # Default local suite (includes coverage HTML via pyproject addopts)
@@ -115,8 +139,9 @@ python -m build
 twine check dist/*
 ```
 
-Git deps `searvey` and `coastalmodeling-vdatum` are pinned to release tags in both
-`pyproject.toml` and `environment.yml` — keep those pins synchronized when bumping.
+Git deps `searvey` and `coastalmodeling-vdatum` are pinned to immutable commit
+SHAs in both `pyproject.toml` and `environment.yml` (release tags kept in
+comments) — keep those pins synchronized when bumping.
 
 ## Pull requests
 

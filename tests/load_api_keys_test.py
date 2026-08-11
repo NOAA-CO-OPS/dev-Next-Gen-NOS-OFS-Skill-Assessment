@@ -107,3 +107,10 @@ def test_redact_secrets_masks_usgs_pat(monkeypatch):
     msg = 'request failed with Authorization=super-secret-token'
     assert 'super-secret-token' not in redact_secrets(msg)
     assert '***' in redact_secrets(msg)
+
+
+def test_redact_secrets_skips_short_and_none(monkeypatch):
+    """Short secrets are not redacted; None passes through."""
+    monkeypatch.setenv('API_USGS_PAT', 'short')  # len 5 < 6
+    assert redact_secrets('has short in it') == 'has short in it'
+    assert redact_secrets(None) is None

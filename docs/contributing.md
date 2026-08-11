@@ -22,7 +22,14 @@ Live USGS network tests run only on the weekly / manual **Network tests** workfl
 
 ## Local pre-push
 
-`make setup` installs a **pre-push** hook that runs `scripts/ci-local.sh` (ruff, detect-secrets, and a small pytest smoke). A failed hook blocks `git push`.
+`make setup` installs a **pre-push** hook that runs `scripts/ci-local.sh`
+(pinned `ruff==0.7.0`, detect-secrets, and a small pytest smoke). A failed
+hook blocks `git push`.
+
+On Windows, use Git Bash for `make ci-local`, or run `.\scripts\ci-local.ps1`
+in PowerShell. If imports fail because another checkout’s editable install is
+active (e.g. missing `redact_secrets`, or coverage at 0%), run
+`pip install -e ".[dev]"` from this branch checkout first.
 
 ## Test markers
 

@@ -17,6 +17,10 @@ on:
     - cron: "0 17 * * 0"
   workflow_dispatch:
 
+# Least privilege. Secrets (API_USGS_PAT) are available without extra scopes.
+permissions:
+  contents: read
+
 concurrency:
   group: network-tests-${{ github.ref }}
   cancel-in-progress: true
@@ -56,7 +60,8 @@ jobs:
 
       - name: Set up micromamba
         if: steps.secret-check.outputs.available == 'true'
-        uses: mamba-org/setup-micromamba@v2
+        # Pin to full SHA (mutable tag was mamba-org/setup-micromamba@v2 / v2.0.7).
+        uses: mamba-org/setup-micromamba@add3a49764cedee8ee24e82dfde87f5bc2914462  # v2.0.7
         with:
           environment-file: environment.yml
           cache-environment: true

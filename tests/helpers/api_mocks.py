@@ -6,8 +6,10 @@ Live coverage stays on ``@pytest.mark.network`` / ``@pytest.mark.manual`` jobs.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -74,7 +76,7 @@ def mock_usgs_searvey(
     timeseries: pd.DataFrame | None = None,
     inventory: pd.DataFrame | None = None,
     param_codes: dict | None = None,
-):
+) -> Iterator[dict[str, Any]]:
     """Patch searvey entry points used by USGS retrieve/inventory modules."""
     ts = timeseries if timeseries is not None else make_usgs_searvey_raw()
     inv = inventory if inventory is not None else make_usgs_inventory_stations()
@@ -105,8 +107,10 @@ def mock_usgs_searvey(
 
 
 @contextmanager
-def mock_coops_http(json_payload: dict | list | None = None,
-                    text_payload: str = ''):
+def mock_coops_http(
+    json_payload: dict | list | None = None,
+    text_payload: str = '',
+) -> Iterator[dict[str, Any]]:
     """Patch CO-OPS urllib + requests helpers used by inventory/retrieve."""
     payload = json_payload if json_payload is not None else {'stations': []}
 
@@ -131,7 +135,7 @@ def mock_coops_http(json_payload: dict | list | None = None,
 
 
 @contextmanager
-def mock_ndbc_http(activestations_xml: str | None = None):
+def mock_ndbc_http(activestations_xml: str | None = None) -> Iterator[dict[str, Any]]:
     """Patch NDBC activestations.xml fetch (urllib)."""
     xml = activestations_xml or (
         '<?xml version="1.0"?>'

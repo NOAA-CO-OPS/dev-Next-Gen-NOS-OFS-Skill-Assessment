@@ -329,18 +329,32 @@ def get_s3_cache_dir(config_file=None, logger=None) -> str:
     return configured
 
 
-def redact_secrets(text: str, env_keys: tuple[str, ...] = ('API_USGS_PAT',)) -> str:
+def redact_secrets(
+    text: str | None, env_keys: tuple[str, ...] = ('API_USGS_PAT',)
+) -> str | None:
     """Return ``text`` with known secret env values replaced by ``***``.
 
     Use before logging exceptions or writing diagnostics so tokens never
     appear in CI logs, tracebacks, or uploaded artifacts.
+
+    Args:
+        text: Raw string that may contain secret values, or ``None``.
+        env_keys: Environment variable names whose values should be redacted.
+
+    Returns:
+        Redacted string, or ``None`` if ``text`` was ``None``.
+
+    Note:
+        Only values with length ``>= 6`` are redacted, so a pathologically
+        short or empty secret cannot mangle unrelated log text. This is
+        belt-and-suspenders on top of GitHub ``::add-mask::``.
     """
     if text is None:
-        return text
+        return None
     out = str(text)
     for key in env_keys:
         value = os.environ.get(key, '').strip()
-        if value:
+        if len(value) >= 6:
             out = out.replace(value, '***')
     return out
 
