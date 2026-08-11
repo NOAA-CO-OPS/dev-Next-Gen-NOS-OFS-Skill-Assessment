@@ -7,6 +7,7 @@ Run without arguments to open the GUI directly:
 Author: TSR
 """
 from bin.model_processing.get_node_cli import _run_pipeline
+
 from ofs_skill.visualization import create_gui_model
 
 if __name__ == '__main__':

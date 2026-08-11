@@ -1,0 +1,29 @@
+site_name: OFS Skill Assessment
+site_description: Next-Gen NOS OFS Skill Assessment developer docs
+repo_url: https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment
+edit_uri: ""
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: blue grey
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: blue grey
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Contributing: contributing.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+
+strict: true

@@ -25,12 +25,10 @@ Date          Author             Description
 import math
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
 
 import pandas as pd
 
 from ofs_skill.obs_retrieval import retrieve_properties, utils, vdatum_resilient
-from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 from ofs_skill.obs_retrieval.chs_utils import (
     CHS_IWLS_BASE_URL,
     CHS_SINE_BASE_URL,
@@ -53,6 +51,7 @@ from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
     retrieve_t_and_c_station,
 )
 from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
+from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 
 _COOPS_MAX_WORKERS = 6
 _COOPS_CURRENTS_MAX_WORKERS = 2
@@ -95,7 +94,7 @@ def _get_chs_uuid(identifier: str, logger) -> str:
 
 
 def _extract_chs_metadata(
-    station_id: str, logger, target_datum: Optional[str] = None
+    station_id: str, logger, target_datum: str | None = None
 ) -> dict:
     """Retrieves and parses CHS station metadata via explicit schema paths."""
     url = f'{CHS_SINE_BASE_URL}/stations/{station_id}/metadata'

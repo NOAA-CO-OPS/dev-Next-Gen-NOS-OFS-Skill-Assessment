@@ -5,7 +5,6 @@ This module defines the properties class used by retrieve_usgs_station.py
 for managing USGS API interactions and data retrieval.
 """
 
-from typing import Optional
 
 import pandas as pd
 
@@ -36,7 +35,7 @@ class USGSProperties:
     def __init__(self):
         self.base_url: str = ''
         self.url: str = ''
-        self.obs_final: Optional[pd.DataFrame] = None
+        self.obs_final: pd.DataFrame | None = None
         self.start: str = ''
         self.end: str = ''
         self.start_year: str = ''

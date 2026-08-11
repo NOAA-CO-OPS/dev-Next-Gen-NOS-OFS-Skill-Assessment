@@ -21,9 +21,9 @@ from pathlib import Path
 import geopandas as gpd
 
 from ofs_skill.obs_retrieval.filter_inventory import filter_inventory
-from ofs_skill.obs_retrieval.utils import resolve_asset_path
 from ofs_skill.obs_retrieval.ofs_geometry import ofs_geometry
 from ofs_skill.obs_retrieval.ofs_inventory_stations import retrieving_inventories
+from ofs_skill.obs_retrieval.utils import resolve_asset_path
 
 
 def _resolve_ofs_shapefile(ofs_name, shape_path):

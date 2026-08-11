@@ -51,8 +51,8 @@ import tkinter as tk
 import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from datetime import date as date_type
-from datetime import datetime, timedelta, timezone
 from tkinter import messagebox, ttk
 from tkinter.font import Font
 from typing import Literal, cast
@@ -277,7 +277,7 @@ def compute_recent_cycle(ofs: str, now: datetime | None = None):
     _, fcstcycles = get_fcst_hours(ofs)
     cycles = sorted(int(c) for c in fcstcycles)
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     now_utc = now.replace(minute=0, second=0, microsecond=0)
     cutoff = now_utc - timedelta(hours=2)
     today = now_utc.replace(hour=0)
@@ -331,7 +331,7 @@ def build_utc_datetime(date_obj, hour) -> datetime | None:
     try:
         return datetime(
             date_obj.year, date_obj.month, date_obj.day,
-            int(hour), tzinfo=timezone.utc,
+            int(hour), tzinfo=UTC,
         )
     except (TypeError, ValueError):
         return None
@@ -353,7 +353,7 @@ def validate_start_not_future(start_dt: datetime | None,
     if start_dt is None:
         return None
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     if start_dt > now:
         return 'Start date/hour cannot be in the future (UTC).'
     return None
@@ -1015,6 +1015,6 @@ def launch_with_progress(
 def set_date_entry_today(entry: DateEntry) -> None:
     """Set a DateEntry to today's date, ignoring Tcl errors."""
     try:
-        entry.set_date(datetime.now(timezone.utc).date())
+        entry.set_date(datetime.now(UTC).date())
     except (tk.TclError, ValueError):
         pass

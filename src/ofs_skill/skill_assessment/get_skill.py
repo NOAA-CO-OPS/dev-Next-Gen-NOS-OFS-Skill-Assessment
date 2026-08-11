@@ -359,7 +359,7 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
             not formatted_series
             or isinstance(
                 formatted_series,
-                (str, format_paired_one_d.PairingStatus),
+                str | format_paired_one_d.PairingStatus,
             )
             or len(formatted_series[0]) <= 1
         ):
