@@ -27,7 +27,7 @@ conda activate ofs_dps
 cp conf/ofs_dps.conf.example conf/ofs_dps.conf
 #    ...then edit conf/ofs_dps.conf and set home=/path/to/working_directory
 
-# 3a. Ensure use_s3_fallback=True is set in conf/ofs_dps.conf, and the skill
+# 3a. (Preferred) Ensure use_s3_fallback=True is set in conf/ofs_dps.conf, and the skill
 #     assessment routine will read and stream model files from the
 #     NODD S3 bucket on demand when local files are missing.
  
