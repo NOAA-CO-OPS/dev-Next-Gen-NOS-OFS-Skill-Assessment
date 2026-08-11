@@ -1031,7 +1031,26 @@ def write_obs_ctlfile(
     currents_bins_csv=None,
     config_file=None,
 ):
-    """Main entry point to loop over inventories and write observation CTL files."""
+    """Build observation inventories and write station control (CTL) files.
+
+    Loops providers/variables, applies optional ADCP bin overrides, and
+    writes CTL files used by later model extraction and skill pairing.
+
+    Args:
+        start_date: Assessment start (ISO or pipeline date string).
+        end_date: Assessment end.
+        datum: Vertical datum for water levels.
+        path: Working directory root.
+        ofs: OFS identifier.
+        stationowner: Station-provider selection (e.g. list of owners).
+        var_list: Variables to inventory (water level, temp, salt, currents).
+        logger: Logger instance.
+        currents_bins_csv: Optional CSV path for ADCP bin overrides.
+        config_file: Optional path to ``ofs_dps.conf``.
+
+    Returns:
+        None. Side effects: inventory/CTL files under ``control_files``.
+    """
     dir_params = utils.Utils(config_file).read_config_section('directories', logger)
 
     currents_bins_overrides = load_currents_bins_csv(currents_bins_csv, logger)

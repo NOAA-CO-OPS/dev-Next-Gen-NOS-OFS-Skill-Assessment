@@ -516,14 +516,24 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
 
 
 def skill(read_station_ctl_file, read_ofs_ctl_file, prop, name_var, logger):
-    """
-    This function 1) writes the paired observation and model time series to
-    file (.int), and 2) sends the paired time series to
-    metrics_paired_one_d to calculate skill stats, which are returned from the
-    function.
+    """Pair observation and model series for one variable and compute skill.
 
-    Returns a list: [output] for scalars, [output, output_dir] for currents,
-    [output, output_hw, output_lw] for water level (when extrema were paired).
+    Writes paired time series (``.int``) and calls
+    ``metrics_paired_one_d`` to produce per-station skill rows.
+
+    Args:
+        read_station_ctl_file: Parsed observation control-file structure
+            (station rows / metadata).
+        read_ofs_ctl_file: Parsed model control-file structure aligned to
+            the same stations.
+        prop: ``ModelProperties`` for paths, dates, and run settings.
+        name_var: Variable key (e.g. ``water_level``, ``currents``).
+        logger: Logger for progress and drop reasons.
+
+    Returns:
+        A list of output dicts: ``[output]`` for scalars;
+        ``[output, output_dir]`` for currents; and for water level with
+        extrema pairing, HW/LW dicts are included as well.
     """
 
     def _create_output_dict(extrema=False):
@@ -629,10 +639,25 @@ def name_convent(variable):
 
 
 def get_skill(prop, logger):
-    """
- This is the final skill assessment script.
- This function reads the obs and ofs control files, search for the
- respective data and creates the paired (.int) datasets and skill table.
+    """Run the 1D skill assessment for the variables configured on ``prop``.
+
+    For each variable, ensures observation (``.obs``) and model (``.prd``)
+    products exist (fetching/extracting when missing or stale), pairs them
+    into ``.int`` files, computes skill tables via :func:`skill`, and writes
+    outputs under the skill/paths on ``prop``.
+
+    Args:
+        prop: ``ModelProperties`` with OFS, dates, datum, whichcast(s),
+            paths, and variable list populated.
+        logger: Logger instance, or ``None`` to load from config.
+
+    Returns:
+        None. Side effects: paired series, skill CSVs/tables, and related
+        artifacts on disk.
+
+    Raises:
+        SystemExit: If required config/logging files are missing when
+            ``logger`` is ``None``.
     """
 
     if logger is None:

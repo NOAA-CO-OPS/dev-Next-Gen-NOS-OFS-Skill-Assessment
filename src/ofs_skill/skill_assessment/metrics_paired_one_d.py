@@ -85,55 +85,26 @@ def skill_scalar(
     prop: Any,
     logger: Logger,
 ) -> list[float | str | None]:
-    """
-    Calculate skill metrics for scalar variables.
+    """Compute NOS-style skill metrics for a scalar paired series.
 
-    Computes skill assessment metrics including RMSE, correlation coefficient,
-    bias, central frequency, and outlier frequencies for scalar variables
-    (water level, temperature, salinity).
+    Includes RMSE, correlation, bias, central frequency, and outlier
+    frequencies for water level, temperature, or salinity.
 
-    Parameters
-    ----------
-    df_paired : pd.DataFrame
-        Paired observation and model data with columns ['OBS', 'OFS', 'BIAS']
-    name_var : str
-        Variable name ('wl', 'temp', or 'salt')
-    prop : Any
-        Properties object containing configuration parameters
-    logger : Logger
-        Logger instance for logging messages
+    Args:
+        df_paired: Paired data with columns ``OBS``, ``OFS``, ``BIAS``.
+        name_var: Short variable key (``wl``, ``temp``, or ``salt``).
+        station_id: Station id (used for tidal/auxiliary lookups when needed).
+        prop: Run properties / config object.
+        logger: Logger for warnings and skip reasons.
 
-    Returns
-    -------
-    List[Union[float, str]]
-        List of skill metrics:
-        [rmse, r_value, bias, bias_perc, np.nan, cf, cfpf, pof, pofpf,
-         nof, nofpf, stdev, X1]
-        Where:
-        - rmse: Root mean squared error
-        - r_value: Pearson correlation coefficient
-        - bias: Mean bias
-        - bias_perc: Mean bias as percentage of mean observation
-        - cf: Central frequency (percentage within error threshold)
-        - cfpf: Central frequency pass/fail ('pass' if >= 90%)
-        - pof: Positive outlier frequency
-        - pofpf: Positive outlier frequency pass/fail
-        - nof: Negative outlier frequency
-        - nofpf: Negative outlier frequency pass/fail
-        - mdpo: Max duration of positive outliers
-        - mdpopf: MDPO pass/fail
-        - mdno: Max duration of negative outliers
-        - mdnopf: MDNO pass/fail
-        - wof: worst-case outlier frequency
-        - wofpf: WOF pass/fail
-        - stdev: Standard deviation of bias
-        - X1: Error threshold
+    Returns:
+        Metric list:
+        ``[rmse, r_value, bias, bias_perc, nan, cf, cfpf, pof, pofpf,
+        nof, nofpf, stdev, X1]``.
 
-    Notes
-    -----
-    Some stations have constant values for the entire period. By definition,
-    correlation cannot be calculated between observations and model if one
-    of the timeseries is constant, which will trigger a warning.
+    Note:
+        Constant series cannot yield a correlation; SciPy may warn and
+        the coefficient is reported as NaN in that case.
     """
     # Get target error range
     X1, X2 = nos_metrics.get_error_threshold(

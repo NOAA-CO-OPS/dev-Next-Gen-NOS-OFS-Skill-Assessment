@@ -281,11 +281,13 @@ def user_input_extract(prop: Any, logger: Logger) -> list[list[list[Any]]]:
 
     Examples
     --------
-    >>> station_info = user_input_extract(prop, logger)
-    >>> print(station_info[0][0])  # First station name fields
-    ['Station1', 'Station1', 'Station1', 'Station1', 'Station1']
-    >>> print(station_info[1][0])  # First station data fields
-    ['36.85', '-76.01', '5.0', 0, 'NAVD88']
+    ```python
+    station_info = user_input_extract(prop, logger)
+    print(station_info[0][0])  # First station name fields
+    # ['Station1', 'Station1', 'Station1', 'Station1', 'Station1']
+    print(station_info[1][0])  # First station data fields
+    # ['36.85', '-76.01', '5.0', 0, 'NAVD88']
+    ```
     """
     _conf = getattr(prop, 'config_file', None)
     xy_path = (utils.Utils(_conf).read_config_section('user_xy_inputs', logger)

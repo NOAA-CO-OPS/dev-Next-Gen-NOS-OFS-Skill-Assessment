@@ -19,91 +19,48 @@ _DEEPCOPY_SKIP_ATTRS = frozenset({'_cached_model', '_cached_model_key'})
 
 
 class ModelProperties:
-    """
-    Properties and configuration for OFS Model operations.
+    """Configuration bag for OFS model processing and skill runs.
 
-    This class stores all configuration needed for model data processing,
-    including OFS identifier, file paths, time ranges, and data paths.
+    Holds the OFS id, whichcast mode, vertical datum, time window, and
+    derived directory paths used across model extraction, pairing, and
+    plotting. Callers typically construct an instance and set fields from
+    CLI args or a config file before passing ``prop`` into pipeline
+    functions.
 
-    Attributes
-    ----------
-    ofs : str
-        OFS identifier (e.g., 'cbofs', 'ngofs2')
-    whichcast : str
-        Forecast type (e.g., 'nowcast', 'forecast_a')
-    whichcasts : str
-        Comma-separated list of forecast types
-    forecast_hr : str
-        Forecast hour
-    path : Path or str
-        Root working directory path
-    datum : str
-        Vertical datum (e.g., 'MLLW', 'NAVD88')
-    datum_list : str
-        List of datums to process
-    start_date_full : str
-        Start date in ISO format (YYYY-MM-DDTHH:MM:SSZ)
-    end_date_full : str
-        End date in ISO format
-    startdate : str
-        Start date (shortened format)
-    enddate : str
-        End date (shortened format)
-    ofsfiletype : str
-        File type ('stations' or 'fields')
-    control_files_path : str
-        Path to control files
-    model_path : str
-        Path to model data
-    ofs_extents_path : str
-        Path to OFS extent shapefiles
-    data_model_1d_node_path : str
-        Path for 1D model node data
-    data_model_2d_json_path : str
-        Path for 2D model JSON data
-    data_observations_1d_station_path : str
-        Path for 1D observation station data
-    data_observations_2d_station_path : str
-        Path for 2D observation station data
-    data_observations_2d_json_path : str
-        Path for 2D observation JSON data
-    data_skill_1d_pair_path : str
-        Path for 1D skill paired data
-    data_skill_1d_table_path : str
-        Path for 1D skill tables
-    data_skill_stats_path : str
-        Path for skill statistics
-    data_skill_2d_json_path : str
-        Path for 2D skill JSON data
-    visuals_1d_station_path : str
-        Path for 1D station visualizations
-    visuals_2d_station_path : str
-        Path for 2D station visualizations
-    data_skill_ice1dpair_path : str
-        Path for ice 1D paired data
-    visuals_maps_ice_path : str
-        Path for ice map visualizations
-    visuals_1d_ice_path : str
-        Path for 1D ice visualizations
-    visuals_stats_ice_path : str
-        Path for ice statistics visualizations
-    data_observations_2d_satellite_path : str
-        Path for satellite observation data
-    data_model_ice_path : str
-        Path for model ice data
-    model_source : str
-        Model source type (e.g., 'fvcom', 'roms', 'schism')
+    Attributes:
+        ofs: OFS identifier (e.g. ``cbofs``, ``ngofs2``).
+        whichcast: Forecast type (``nowcast``, ``forecast_a``, ``forecast_b``).
+        whichcasts: Comma-separated list of forecast types when running several.
+        forecast_hr: Forecast hour string when applicable.
+        path: Root working directory.
+        datum: Vertical datum (e.g. ``MLLW``, ``NAVD88``).
+        datum_list: Space-separated datums from config when batching.
+        start_date_full: Run start in ISO form ``YYYY-MM-DDTHH:MM:SSZ``.
+        end_date_full: Run end in ISO form.
+        ofsfiletype: Model file kind (``stations`` or ``fields``).
+        model_source: Framework once detected (``roms``, ``fvcom``, ``schism``).
+        control_files_path: Directory for ``*.ctl`` files.
+        model_path: Directory for downloaded/extracted model files.
+        data_model_1d_node_path: 1D model node/time-series outputs.
+        data_observations_1d_station_path: 1D observation station outputs.
+        data_skill_1d_pair_path: Paired ``.int`` skill inputs.
+        data_skill_1d_table_path: Skill tables.
+        visuals_1d_station_path: 1D station plot outputs.
 
-    Examples
-    --------
-    >>> prop = ModelProperties()
-    >>> prop.ofs = "cbofs"
-    >>> prop.datum = "MLLW"
-    >>> prop.path = Path("./")
+    Example:
+        ```python
+        prop = ModelProperties()
+        prop.ofs = "cbofs"
+        prop.datum = "MLLW"
+        prop.path = "./"
+        prop.whichcast = "nowcast"
+        prop.start_date_full = "2025-07-01T00:00:00Z"
+        prop.end_date_full = "2025-07-02T00:00:00Z"
+        ```
     """
 
     def __init__(self):
-        """Initialize ModelProperties with default values."""
+        """Create an empty ``ModelProperties`` with blank/default fields."""
         # Many of these attributes are reassigned downstream to bool/None
         # values (e.g. user_input_location is a bool once set from the CLI,
         # forecast_hr is Optional[str]). Typed as Any so dynamic attribute
