@@ -81,6 +81,14 @@ def make_horizon_series(prop, logger):
     # Assign relevant things to prop11
     prop11.datecycles = datecycles
     prop11.whichcast = 'forecast_a'
+    # Shared in-memory accumulator for per-station model-cycle series. Each
+    # get_node_ofs call stashes its cycle here (see
+    # do_horizon_skill_utils.accumulate_cycle) instead of re-reading and
+    # re-merging the growing per-station CSV every cycle. We initialize it
+    # up front so that any shallow copies get_node_ofs makes for parallel
+    # station/variable dispatch share the same dict reference and append into
+    # the same store.
+    prop11._horizon_accumulator = {}
     fcstlength, _ = get_fcst_cycle.get_fcst_hours(prop.ofs)
     for i, filename in enumerate(filenames):
         if 'nowcast' in str(filename.split('.')):
@@ -115,6 +123,21 @@ def make_horizon_series(prop, logger):
                 'Passing to next horizon. '
                 'Error: %s', e_x,
             )
+
+    # Merge all accumulated cycles per station and write the horizon CSVs in a
+    # single pass (one merge + write per station). This replaces the old
+    # per-cycle read-merge-write loop that scaled quadratically on disk I/O.
+    try:
+        n_written = do_horizon_skill_utils.flush_horizon_series(prop11, logger)
+        logger.info(
+            'Flushed %s forecast horizon station CSV(s) to disk.',
+            str(n_written),
+        )
+    except Exception as e_x:
+        logger.error(
+            'Error flushing accumulated forecast horizon series to CSV! '
+            'Error: %s', e_x,
+        )
 
     logger.info(
         'Done loading and saving model forecast horizon series! '

@@ -1011,17 +1011,29 @@ def create_1dplot(prop, logger):
             logger.error('Failure checking for datum netcdf file on the NODD S3 '
                         'bucket! Datum conversions may fail. Continuing...')
 
-    # Date-gate for forecast horizon functionality
+    # Date-gate for forecast horizon functionality. The maximum allowed
+    # window (in days) is configurable via 'horizon_max_days' in the
+    # [settings] section of the conf file (default 2). The horizon workflow
+    # scales ~linearly with the number of model cycles in the window, so this
+    # can be raised for week+ horizon skill at the cost of longer run times.
+    try:
+        horizon_max_days = int(conf_settings.get('horizon_max_days', 2))
+    except (TypeError, ValueError):
+        logger.warning("Invalid 'horizon_max_days' in conf; defaulting to 2.")
+        horizon_max_days = 2
     if ((datetime.strptime(prop.end_date_full,'%Y-%m-%dT%H:%M:%SZ')-
-         datetime.strptime(prop.start_date_full,'%Y-%m-%dT%H:%M:%SZ')).days > 2
+         datetime.strptime(prop.start_date_full,'%Y-%m-%dT%H:%M:%SZ')).days
+        > horizon_max_days
         and prop.horizonskill):
         logger.error('Time range of %s days is too long for forecast '
-                    'horizon skill! Resetting forecast horizon skill argument '
+                    'horizon skill (max %s days, see horizon_max_days in '
+                    'conf)! Resetting forecast horizon skill argument '
                     'to False.',str(
                         (datetime.strptime(prop.end_date_full,\
                                            '%Y-%m-%dT%H:%M:%SZ')-
                          datetime.strptime(prop.start_date_full,\
-                                           '%Y-%m-%dT%H:%M:%SZ')).days))
+                                           '%Y-%m-%dT%H:%M:%SZ')).days),
+                    str(horizon_max_days))
         prop.horizonskill = False
     # Cast-gate for nowcast horizon functionality
     if ('forecast_b' not in prop.whichcasts) and prop.horizonskill:

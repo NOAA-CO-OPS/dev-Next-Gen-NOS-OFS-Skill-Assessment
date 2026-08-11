@@ -14,7 +14,9 @@ Created on Wed Jan 14 08:24:39 2026
 
 from __future__ import annotations
 
+import os
 import sys
+import threading
 from datetime import datetime, timedelta
 
 import numpy as np
@@ -25,11 +27,43 @@ from ofs_skill.model_processing import (
 )
 
 
+def _coerce_cycle_dtypes(df, datecycle):
+    '''Set the standard dtypes on a single-cycle model series dataframe.'''
+    return df.astype({
+        'julian': 'float',
+        'year': 'int64',
+        'month': 'int64',
+        'day': 'int64',
+        'hour': 'int64',
+        'minute': 'int64',
+        datecycle: 'float',
+    })
+
+
+# Time-axis columns shared by every model-cycle series. Used as the merge key
+# when combining accumulated cycles into a single wide dataframe.
+_TIME_KEYS = ['julian', 'year', 'month', 'day', 'hour', 'minute']
+
+# Guards the in-memory horizon accumulator, since station/variable extraction
+# in get_node_ofs may run in parallel threads that all append into the same
+# shared dict.
+_ACCUMULATOR_LOCK = threading.Lock()
+
+
 def pandas_merge(filepath, df, datecycle, prop):
     '''
     Merges/appends a single model cycle time series dataframe to an existing
     dataframe containing all model cycle time series.
     Called by get_node_ofs.py.
+
+    Performance note
+    ----------------
+    Historically this re-read the growing on-disk CSV and did a full outer
+    merge on every single model cycle, which made the horizon workflow scale
+    as O(cycles**2) on CSV I/O -- painful for week+ windows. When an in-memory
+    accumulator is available on ``prop`` (see ``accumulate_cycle`` /
+    ``flush_horizon_series``), get_node_ofs uses that instead and this
+    disk-merge path is only a fallback for callers that still pass a filepath.
 
     Parameters
     ----------
@@ -38,7 +72,7 @@ def pandas_merge(filepath, df, datecycle, prop):
     dataframe.
     datecycle: column name string with date and model cycle of series
     to be merged.
-    logger : logging interface.
+    prop : model properties object (provides prop.datecycles).
 
     Returns
     -------
@@ -54,33 +88,126 @@ def pandas_merge(filepath, df, datecycle, prop):
     if cols_to_drop:
         prd.drop(columns=cols_to_drop, inplace=True)
     # Set datatypes of new model cycle series before merging
-    df = df.astype({
-        'julian': 'float',
-        'year': 'int64',
-        'month': 'int64',
-        'day': 'int64',
-        'hour': 'int64',
-        'minute': 'int64',
-        datecycle: 'float',
-    })
+    df = _coerce_cycle_dtypes(df, datecycle)
     # Merge away, but avoid duplicates if files exist from a previous run!
     # This is especially relevant to server/cron runs!
     if datecycle in prd.columns:
         prd.drop(columns=datecycle, inplace=True)
     df = pd.merge(
         prd, df,
-        on=[
-            'julian',
-            'year',
-            'month',
-            'day',
-            'hour',
-            'minute',
-        ],
+        on=_TIME_KEYS,
         how='outer',
     )
 
     return df
+
+
+def accumulate_cycle(prop, station_key, df, datecycle):
+    '''
+    Stash a single model-cycle series in an in-memory accumulator on ``prop``
+    instead of re-reading and re-merging the growing per-station CSV on every
+    cycle. This keeps the horizon workflow scaling linearly with the number of
+    model cycles rather than quadratically on disk I/O.
+
+    The accumulator lives at ``prop._horizon_accumulator`` as a dict keyed by
+    ``station_key`` -> list of (datecycle, single-cycle dataframe). It is
+    flushed to CSV by ``flush_horizon_series`` once all cycles are loaded.
+
+    Parameters
+    ----------
+    prop : model properties object (carried across all cycle iterations).
+    station_key : unique key for the station/variable CSV (its filename).
+    df : single-cycle model series dataframe (time keys + the datecycle col).
+    datecycle : column name for this cycle's series.
+    '''
+    df = _coerce_cycle_dtypes(df, datecycle)
+    with _ACCUMULATOR_LOCK:
+        store = getattr(prop, '_horizon_accumulator', None)
+        if store is None:
+            store = {}
+            prop._horizon_accumulator = store
+        # Guard against a duplicate cycle appearing twice (e.g. resumed runs).
+        cycles = store.setdefault(station_key, [])
+        cycles[:] = [(dc, cdf) for (dc, cdf) in cycles if dc != datecycle]
+        cycles.append((datecycle, df))
+
+
+def flush_horizon_series(prop, logger=None):
+    '''
+    Merge all accumulated per-station model-cycle series into a single wide
+    dataframe each and write them to CSV. This performs one merge/write pass
+    per station at the end of the cycle loop, replacing the previous
+    per-cycle read-merge-write cycle.
+
+    If a CSV already exists on disk (e.g. a resumed/cron run), its cycle
+    columns are folded in so nothing already computed is lost.
+
+    Parameters
+    ----------
+    prop : model properties object holding ``_horizon_accumulator`` and
+        ``data_horizon_1d_node_path``.
+    logger : optional logging interface.
+
+    Returns
+    -------
+    int : number of station CSVs written.
+    '''
+    store = getattr(prop, '_horizon_accumulator', None)
+    if not store:
+        return 0
+
+    written = 0
+    for filename, cycles in store.items():
+        if not cycles:
+            continue
+        # Build the wide dataframe by merging each cycle on the shared time
+        # keys. Start from the first cycle and outer-merge the rest.
+        base_dc, wide = cycles[0]
+        for datecycle, cdf in cycles[1:]:
+            wide = pd.merge(wide, cdf, on=_TIME_KEYS, how='outer')
+
+        filepath = os.path.join(prop.data_horizon_1d_node_path, filename)
+        # Fold in any pre-existing on-disk cycles from a prior run so we do
+        # not clobber previously computed horizons.
+        if os.path.isfile(filepath):
+            try:
+                prd = pd.read_csv(filepath)
+                desired_cols = getattr(prop, 'datecycles', [])
+                stale = [c for c in prd.columns.difference(desired_cols)
+                         if 'hr' in c]
+                if stale:
+                    prd = prd.drop(columns=stale)
+                # Drop any cycle columns we just recomputed to avoid dupes.
+                new_cols = [dc for (dc, _) in cycles]
+                overlap = [c for c in new_cols if c in prd.columns]
+                if overlap:
+                    prd = prd.drop(columns=overlap)
+                # Only merge if the old file still has meaningful cycle cols.
+                extra_cols = [c for c in prd.columns
+                              if c not in _TIME_KEYS and 'forecast' in c]
+                if extra_cols:
+                    wide = pd.merge(
+                        wide, prd[_TIME_KEYS + extra_cols],
+                        on=_TIME_KEYS, how='outer')
+            except Exception as e_x:  # pylint: disable=broad-except
+                if logger is not None:
+                    logger.warning(
+                        'Could not fold existing horizon CSV %s into '
+                        'accumulator; overwriting. Error: %s', filepath, e_x)
+
+        try:
+            wide.to_csv(filepath, index=False)
+            written += 1
+        except Exception as e_x:  # pylint: disable=broad-except
+            if logger is not None:
+                logger.error(
+                    "Couldn't save accumulated forecast horizons to %s! "
+                    'Error: %s', filepath, e_x)
+
+    # Clear the accumulator so a subsequent run in the same process starts
+    # fresh.
+    prop._horizon_accumulator = {}
+    return written
 
 
 def pandas_processing(name_conventions, datecycle, formatted_series):
