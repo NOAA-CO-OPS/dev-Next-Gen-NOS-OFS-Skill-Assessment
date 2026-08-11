@@ -106,6 +106,31 @@ class TestArtifactFreshness:
         cm.record_artifact(path, cm.run_signature(_prop()))
         assert (tmp_path / cm.MANIFEST_FILENAME).is_file()
 
+    def test_write_leaves_no_temp_file(self, tmp_path):
+        # The atomic write (temp file + os.replace) must not leave the
+        # temp artifact behind on success.
+        path = str(tmp_path / 'cbofs_wl_station.ctl')
+        _touch(path)
+        cm.record_artifact(path, cm.run_signature(_prop()))
+        leftovers = [p.name for p in tmp_path.iterdir()
+                     if p.name.startswith(cm.MANIFEST_FILENAME)
+                     and p.name != cm.MANIFEST_FILENAME]
+        assert leftovers == []
+
+    def test_rewrite_preserves_prior_entries(self, tmp_path):
+        # Recording a second artifact must merge into the existing index
+        # (atomic replace of the whole file), not clobber the first entry.
+        p1 = str(tmp_path / 'cbofs_wl_station.ctl')
+        p2 = str(tmp_path / 'cbofs_temp_station.ctl')
+        _touch(p1)
+        _touch(p2)
+        sig1 = cm.run_signature(_prop(), variable='water_level')
+        sig2 = cm.run_signature(_prop(), variable='water_temperature')
+        cm.record_artifact(p1, sig1)
+        cm.record_artifact(p2, sig2)
+        assert cm.artifact_is_fresh(p1, sig1) is True
+        assert cm.artifact_is_fresh(p2, sig2) is True
+
     def test_corrupt_index_fails_open(self, tmp_path):
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
