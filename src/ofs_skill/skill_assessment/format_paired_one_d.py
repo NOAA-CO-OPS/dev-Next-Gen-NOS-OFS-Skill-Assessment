@@ -146,12 +146,16 @@ def paired_scalar(
         .reset_index()
     )
 
-    # Third we concat the observations to the ofs, group so same times
-    # are combined, drop nan, reindex
+    # Third we merge the observations onto the ofs series. Merge on
+    # DateTime alone (as paired_vector does): the numbered date columns are redundant with
+    # DateTime, and using the float julian column [0] as a merge key
+    # made pairing silently fail whenever the obs and model files were
+    # written with different julian rounding (e.g. a cached series from
+    # before the issue #200 precision fix meeting a fresh one).
     paired = pd.merge(
             paired_ofs,
-            paired_obs[['DateTime', 'OBS', 0, 1, 2, 3, 4, 5]],
-            on=['DateTime', 0, 1, 2, 3, 4, 5],
+            paired_obs[['DateTime', 'OBS']],
+            on=['DateTime'],
             how='left'
     )
 
@@ -182,8 +186,7 @@ def paired_scalar(
 
     paired = paired.reset_index()
 
-    # Then we create the speed bias, mask for start and end time and
-    # create julian
+    # Then we create the bias and mask for start and end time
     paired['BIAS'] = paired['OFS'] - paired['OBS']
 
     # Lookback ensures overlap between consecutive casts (e.g., nowcast + forecast_a)
@@ -370,8 +373,7 @@ def paired_vector(
         .reset_index()
     )
 
-    # Third we concat the observations to the ofs, group so same times
-    # are combined, drop nan, reindex
+    # Third we merge the observations onto the ofs series on DateTime
     paired = pd.merge(
         paired_ofs,
         paired_obs[['DateTime', 'OBS', 'OBS_DIR', 'OBS_U', 'OBS_V']],
@@ -381,8 +383,7 @@ def paired_vector(
 
     paired = paired.reset_index()
 
-    # Then we create the speed bias, mask for start and end time and
-    # create julian
+    # Then we create the speed bias and mask for start and end time
     paired['SPD_BIAS'] = paired['OFS'] - paired['OBS']
     # Lookback ensures overlap between consecutive casts (e.g., nowcast + forecast_a)
     paired = paired.loc[
@@ -397,28 +398,15 @@ def paired_vector(
             )
         )
     ]
-    julian = (
-        pd.array(paired['DateTime']).to_julian_date()
-        - pd.Timestamp(
-            datetime.strptime(
-                str(datetime.strptime(start_date_full,
-                                      '%Y%m%d-%H:%M:%S').year), '%Y'
-            )
-        ).to_julian_date()
-    )
-
     # Here we create the numpy arrays that will be used in the paired
     # timeseries file
 
     # This is the direction bias
+    ofs_dir = paired['OFS_DIR'].to_numpy()
+    obs_dir = paired['OBS_DIR'].to_numpy()
     dir_bias = []
-    for j in range(len(julian)):
-        dir_bias.append(
-            get_distance_angle(
-                paired['OFS_DIR'].to_numpy()[j],
-                paired['OBS_DIR'].to_numpy()[j]
-            )
-        )
+    for j in range(len(paired)):
+        dir_bias.append(get_distance_angle(ofs_dir[j], obs_dir[j]))
     paired['DIR_BIAS'] = dir_bias
     # Finally, we write the file and return the results
     paired = paired.drop(columns=['index', 'DateTime', 'OBS_U', 'OBS_V',
