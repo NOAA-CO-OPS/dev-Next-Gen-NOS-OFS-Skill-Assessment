@@ -61,12 +61,12 @@ if TYPE_CHECKING:
 # Module-level constants for model variable processing
 MODEL_VAR_NAMES = ('sst', 'ssh', 'sss', 'ssu', 'ssv')
 VELOCITY_VARS = ('ssu', 'ssv')
-CAST_PREFIX_MAP = {
-    'nowcast': 'n',
-    'forecast_a': 'f',
-    'forecast_b': 'f',
-    'hindcast': 'h',
-}
+
+# Great Lakes OFS. The global_land_mask library classifies the Great Lakes
+# as land, which zeroes out every interpolated grid cell for these domains.
+# For these OFS we skip the global land mask in interp_grid() and rely solely
+# on the OFS shapefile domain mask to define valid water points.
+GREAT_LAKES_OFS = ('leofs', 'lmhofs', 'loofs', 'loofs2', 'lsofs')
 
 
 def param_val(netcdf_file_sat: str | None, prop1=None) -> tuple[Logger, list]:
@@ -757,24 +757,41 @@ def _build_ascii_grid_filename(
     """
     Generate output filename for current vector ASCII grid files.
 
+    Hourly current-vector grids are tagged with the same ``YYYYMMDD-HHz``
+    timestamp used by the scalar model JSON files (see
+    :func:`_build_model_output_filename`). This lets the front end pair the
+    vector (dir/mag) layers with the SST/SSH/SSS layers on a shared time
+    axis. Previously the vector grids used a sequential per-timestep counter
+    (``n001``, ``n002`` ...) that rolled continuously across day boundaries
+    and never encoded the model hour, so the vector and scalar layers could
+    not be aligned (issue #195, symptom 3).
+
     Args:
         outdir: Output directory path
         ofs: OFS name (e.g., 'cbofs', 'wcofs')
         dtime: Datetime for the file
         derived_var: Derived variable name ('mag' or 'dir')
         whichcast: Forecast type ('nowcast', 'forecast_a', etc.)
-        step_number: Sequential 1-based timestep number
+        step_number: Sequential 1-based timestep number (retained for API
+            compatibility; no longer used for hourly filenames)
         is_daily: If True, generate daily average filename
 
     Returns:
         Full path to output .txt file
     """
-    date_str = dtime.strftime('%Y%m%d')
     if is_daily:
+        date_str = dtime.strftime('%Y%m%d')
         suffix = 'daily'
     else:
-        prefix = CAST_PREFIX_MAP.get(whichcast, 'n')
-        suffix = f'{prefix}{step_number:03d}'
+        # Match the scalar model JSON hour tag so the front end can pair the
+        # vector layers with the SST/SSH/SSS layers on the same time axis.
+        date_str = dtime.strftime('%Y%m%d-%Hz')
+        suffix = None
+    if suffix is None:
+        return os.path.join(
+            outdir,
+            f'{ofs}_{derived_var}_{date_str}.txt',
+        )
     return os.path.join(
         outdir,
         f'{ofs}_{derived_var}_{date_str}_{suffix}.txt',
@@ -1014,14 +1031,23 @@ def interp_grid(
     # ==========================================
     # --- Apply Land Mask ---
     # ==========================================
-    logger.info('--- Applying Land Mask ---')
+    # global_land_mask misclassifies the Great Lakes as land, which would
+    # null out every interpolated cell for Great Lakes OFS. Skip the global
+    # land mask for those domains and rely on the OFS shapefile mask below.
+    if str(getattr(prop1, 'ofs', '')).lower() in GREAT_LAKES_OFS:
+        logger.info(
+            '--- Skipping global land mask for Great Lakes OFS %s '
+            '(relying on shapefile domain mask) ---', prop1.ofs,
+        )
+    else:
+        logger.info('--- Applying Land Mask ---')
 
-    # globe.is_land returns True for land, False for water (and oceans)
-    # Pass the grid coordinates to check every point
-    is_land = globe.is_land(lat_grid, lon_grid)
+        # globe.is_land returns True for land, False for water (and oceans)
+        # Pass the grid coordinates to check every point
+        is_land = globe.is_land(lat_grid, lon_grid)
 
-    # Set all land points to NaN (making them transparent in plotting)
-    sst_out[is_land] = np.nan
+        # Set all land points to NaN (making them transparent in plotting)
+        sst_out[is_land] = np.nan
 
     # ==========================================
     # --- Apply Shapefile Mask ---
