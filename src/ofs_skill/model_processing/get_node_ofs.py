@@ -24,6 +24,7 @@ import pandas as pd
 import xarray as xr
 
 from ofs_skill.model_processing import do_horizon_skill_utils
+from ofs_skill.model_processing.ctl_builder_report import report_ctl_matches
 
 # Use new package imports - import directly from modules to avoid circular import
 from ofs_skill.model_processing.get_datum_offset import get_datum_offset as get_datum_offset_func
@@ -33,6 +34,7 @@ from ofs_skill.model_processing.list_of_files import list_of_dir
 from ofs_skill.model_processing.list_of_files import list_of_files as list_of_files_func
 from ofs_skill.model_processing.model_format_properties import ModelFormatProperties
 from ofs_skill.model_processing.model_source import get_model_source
+from ofs_skill.model_processing.station_ledger import StationLedger
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
 from ofs_skill.obs_retrieval import scalar, utils, vector
 from ofs_skill.obs_retrieval.utils import get_parallel_config
@@ -1508,7 +1510,12 @@ def get_node_ofs(prop, logger, model_dataset=None):
     prop.model_source = get_model_source(prop.ofs)
     if logger is None:
         log_config_file = 'conf/logging.conf'
-        log_config_file = (Path(__file__).parent.parent.parent / log_config_file).resolve()
+        # __file__ is src/ofs_skill/model_processing/get_node_ofs.py, so four
+        # parents up is the repo root that holds conf/logging.conf. (Three
+        # parents lands in src/, where the file does not exist.)
+        log_config_file = (
+            Path(__file__).parent.parent.parent.parent / log_config_file
+        ).resolve()
 
         # Check if log file exists
         if not os.path.isfile(log_config_file):
@@ -1684,13 +1691,73 @@ def get_node_ofs(prop, logger, model_dataset=None):
         logger.info('Resample complete on a %s time axis.',
                     prop.model_source)
 
+    prop.ctl_flag = 0 #Need flag to track control file production if
+                 #user_input_location == True
+
+    # Build-only mode (issue #189): write/verify the model control files
+    # and report obs-model station distances, then stop before the
+    # expensive time-series extraction. Lets a user inspect and hand-edit
+    # the matches before committing to a full run.
+    if getattr(prop, 'build_ctl_only', False):
+        logger.info(
+            'Build-ctl-only mode: writing model control file(s) for %s '
+            'and reporting station distances (no time series will be '
+            'extracted).', list(prop.var_list),
+        )
+        # Force a rebuild so the ctl reflects THIS run's window/options
+        # rather than a stale file. write_ofs_ctlfile only (re)writes a
+        # model ctl when it is absent, so delete any existing ones for the
+        # selected variables first. write_ofs_ctlfile writes one ctl per
+        # variable in prop.var_list.
+        prop.user_input_location = getattr(prop, 'user_input_location', False)
+        for _variable in prop.var_list:
+            _nv = name_convent(_variable)[0]
+            for _suffix in ('model.ctl', 'model_station.ctl'):
+                _old = os.path.join(
+                    prop.control_files_path,
+                    f'{prop.ofs}_{_nv}_{_suffix}')
+                if os.path.isfile(_old):
+                    try:
+                        os.remove(_old)
+                    except OSError as _ex:
+                        logger.warning(
+                            'Could not remove existing ctl %s for rebuild: '
+                            '%s', _old, _ex)
+
+        # Attach a station-drop ledger so index_nearest_station records WHY
+        # each obs station failed to match (e.g. beyond the distance
+        # cutoff). The build report reads these drop reasons back and lists
+        # the unmatched stations. One ledger spans all requested variables;
+        # each drop record carries the station ID and reason.
+        try:
+            prop.station_ledger = StationLedger(
+                ofs=getattr(prop, 'ofs', ''),
+                whichcast=getattr(prop, 'whichcast', ''),
+                filetype=getattr(prop, 'ofsfiletype', ''),
+            )
+        except (TypeError, ValueError):
+            prop.station_ledger = None
+
+        write_ofs_ctlfile(prop, model, logger)
+
+        max_dist_km = utils.get_station_match_max_dist(
+            logger, config_file=getattr(prop, 'config_file', None))
+        report_ctl_matches(
+            prop, logger, max_dist_km,
+            make_map=getattr(prop, 'build_ctl_map', True),
+            ledger=getattr(prop, 'station_ledger', None),
+        )
+        logger.info(
+            'Build-ctl-only mode complete. Review the control files in %s '
+            'before running the full assessment.',
+            prop.control_files_path,
+        )
+        return model
+
     logger.info(
         'Dispatching variable processing for: %s',
         list(prop.var_list),
     )
-
-    prop.ctl_flag = 0 #Need flag to track control file production if
-                 #user_input_location == True
 
     def _extract_variable(variable, prop_local):
         """Process a single variable — extractable for parallel dispatch."""

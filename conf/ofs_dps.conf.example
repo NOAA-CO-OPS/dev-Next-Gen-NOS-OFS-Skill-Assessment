@@ -253,6 +253,14 @@ filename_path=path/to/filename.txt
 # Scope: applies to stations-filetype runs (-t stations) only. Fields runs
 # match each station to the nearest wet grid node with no distance cutoff,
 # and STOFS stations files are matched by station name, not distance.
+#
+# Tip: to preview the obs-model station matches this cutoff produces
+# BEFORE running a full skill assessment, run get_node_cli.py with -b
+# (--Build_Ctl_Only). It writes the model control file(s) plus a
+# {ofs}_ctl_station_pairs.csv distance report and an interactive
+# {ofs}_ctl_station_pairs.html map, then stops before extracting time
+# series. Edit the control files by hand if needed, then run the full
+# assessment, which will reuse them.
 station_match_max_dist_km=4.0
 
 # NetCDF engine selection for reading model files. Three modes:
