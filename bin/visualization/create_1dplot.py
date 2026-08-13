@@ -917,6 +917,10 @@ def create_1dplot(prop, logger):
                        ['datum_list']).split(' ')
     conf_settings = utils.Utils(_conf).read_config_section('settings', logger)
     prop.static_plots = conf_settings['static_plots']
+    # Extra forecast-horizon plots (cycle time-series + CF scorecards) are
+    # opt-in via the conf; carried on prop so do_horizon_skill can honor it.
+    prop.horizon_extra_plots = conf_settings.get(
+        'horizon_extra_plots', 'False').lower() in ('true', '1', 'yes')
     use_custom_files = conf_settings.get('use_custom_filenames', 'False').lower() in ('true', '1', 'yes')
     if use_custom_files:
         pause_seconds = 5
@@ -1065,16 +1069,6 @@ def create_1dplot(prop, logger):
         else:
             logger.error('Failure checking for datum netcdf file on the NODD S3 '
                         'bucket! Datum conversions may fail. Continuing...')
-    finally:
-        # This dataset is only opened to test datum availability. Close its
-        # (h5netcdf/h5py) file handle now so it isn't finalized during
-        # interpreter shutdown after h5py is torn down (issue #94).
-        _close = getattr(vdatums, 'close', None)
-        if _close is not None:
-            try:
-                _close()
-            except Exception:  # pragma: no cover - defensive cleanup only
-                pass
 
     # Date-gate for forecast horizon functionality. The maximum allowed
     # window (in days) is configurable via 'horizon_max_days' in the
