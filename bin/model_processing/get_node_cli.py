@@ -50,10 +50,68 @@ def _run_pipeline(run_args):
     prop1.user_input_location = getattr(run_args, 'UserInput', False) or getattr(
         run_args, 'User_Input', False)
 
+    # Station owner filter, used when build-ctl-only mode auto-fetches
+    # observations. Mirrors get-station-observations: comma-separated list
+    # of providers, default all.
+    owners = getattr(run_args, 'Station_Owner', None)
+    if owners is None:
+        prop1.stationowner = 'co-ops,ndbc,usgs,chs'
+    elif isinstance(owners, list):
+        prop1.stationowner = ','.join(owners)
+    else:
+        prop1.stationowner = owners.lower()
+
+    # Build-ctl-only mode (issue #189): write the model control file(s) and
+    # a station-distance report/map, then stop before extracting time
+    # series. Lets users inspect and hand-edit obs-model matches first.
+    prop1.build_ctl_only = getattr(run_args, 'Build_Ctl_Only', False)
+    prop1.build_ctl_map = not getattr(run_args, 'No_Map', False)
+
     if 'l' in prop1.ofs[0] and prop1.datum == 'MLLW':
         prop1.datum = 'IGLD85'
 
+    # In build-ctl-only mode the model matcher needs an observation control
+    # file to match against (unless custom XY coordinates are supplied).
+    # Fetch observations first if the obs ctl is missing so the whole
+    # "build and inspect" step works from a single command.
+    if prop1.build_ctl_only and not prop1.user_input_location:
+        _ensure_obs_ctl(prop1)
+
     get_node_ofs(prop1, None)
+
+
+def _ensure_obs_ctl(prop1):
+    """Fetch observation station data if the obs control files are absent.
+
+    Build-ctl-only mode matches model nodes against the observation
+    station control files. When those are missing (e.g. a fresh working
+    directory), retrieve them first so the build step is self-contained.
+    """
+    import logging
+    import os
+
+    from ofs_skill.obs_retrieval import utils
+    from ofs_skill.obs_retrieval.get_station_observations import (
+        get_station_observations,
+    )
+
+    logger = logging.getLogger('root')
+    dir_params = utils.Utils(
+        getattr(prop1, 'config_file', None)).read_config_section(
+        'directories', logger)
+    control_files_path = os.path.join(
+        prop1.path, dir_params['control_files_dir'])
+    # Any obs ctl present is taken as "obs already fetched" -- get_node_ofs
+    # will still exit per-variable if a specific one is missing.
+    has_any = os.path.isdir(control_files_path) and any(
+        name.endswith('_station.ctl')
+        for name in os.listdir(control_files_path)
+    )
+    if has_any:
+        return
+    if not getattr(prop1, 'stationowner', ''):
+        prop1.stationowner = 'co-ops,ndbc,usgs,chs'
+    get_station_observations(prop1, None)
 
 
 def main(argv=None):
@@ -127,6 +185,26 @@ def main(argv=None):
         action='store_true',
         help='Input custom coordinates for model time series extraction? '
         'True or False (boolean)')
+    parser.add_argument(
+        '-b',
+        '--Build_Ctl_Only',
+        action='store_true',
+        help='Build/verify the model control file(s) and write an '
+        'obs-model station distance report (CSV + interactive map), then '
+        'stop before extracting time series. Lets you inspect and '
+        'hand-edit obs-model station matches before a full run.')
+    parser.add_argument(
+        '--No_Map',
+        action='store_true',
+        help='In build-ctl-only mode (-b), skip the interactive '
+        'station-pair map and only write the CSV distance report.')
+    parser.add_argument(
+        '-so', '--Station_Owner',
+        required=False,
+        default=None,
+        help='Station owner(s) to retrieve when build-ctl-only mode (-b) '
+        "auto-fetches observations. Comma-separated, from: 'co-ops', "
+        "'ndbc', 'usgs', 'chs'. Default is all providers.")
     parser.add_argument(
         '-c', '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')
