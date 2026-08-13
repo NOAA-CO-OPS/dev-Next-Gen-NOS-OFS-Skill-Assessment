@@ -110,6 +110,12 @@ class ModelProperties:
         # Extension attrs set dynamically by various CLI entrypoints.
         self.currents_bins_csv: Any = None
         self.filepath: Any = ''
+        # Build-ctl-only mode (issue #189): when True, get_node_ofs writes
+        # the model control file(s) and a station-distance report, then
+        # stops before extracting time series. build_ctl_map toggles the
+        # accompanying interactive station-pair map.
+        self.build_ctl_only: Any = False
+        self.build_ctl_map: Any = True
 
         # Path attributes
         self.control_files_path: str = ''
