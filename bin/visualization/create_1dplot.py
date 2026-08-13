@@ -862,6 +862,10 @@ def create_1dplot(prop, logger):
                        ['datum_list']).split(' ')
     conf_settings = utils.Utils(_conf).read_config_section('settings', logger)
     prop.static_plots = conf_settings['static_plots']
+    # Extra forecast-horizon plots (cycle time-series + CF scorecards) are
+    # opt-in via the conf; carried on prop so do_horizon_skill can honor it.
+    prop.horizon_extra_plots = conf_settings.get(
+        'horizon_extra_plots', 'False').lower() in ('true', '1', 'yes')
     use_custom_files = conf_settings.get('use_custom_filenames', 'False').lower() in ('true', '1', 'yes')
     if use_custom_files:
         pause_seconds = 5

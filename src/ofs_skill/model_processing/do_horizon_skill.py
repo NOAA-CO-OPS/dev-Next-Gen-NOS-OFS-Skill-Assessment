@@ -11,6 +11,7 @@ Last updated: 8/12/25
 from __future__ import annotations
 
 import copy
+import glob
 import os
 import sys
 from datetime import datetime, timedelta
@@ -167,8 +168,31 @@ def merge_obs_series_scalar(prop, logger):
     Calls horizon_skill & make_flag_images which write plots and/or tables.
 
     '''
-    doextraplots = False  # First decide if you want to make plots of all model
-    # cycle time series, and scorecard plots
+    # Whether to also make the model-cycle time-series plots and the
+    # central-frequency scorecards. Opt-in via the 'horizon_extra_plots'
+    # setting in the conf (surfaced onto prop by create_1dplot); defaults to
+    # False so a standard run only produces the RMSE / CF bar plots.
+    doextraplots = bool(getattr(prop, 'horizon_extra_plots', False))
+
+    # The scorecard CF tables (and their companion N sample-size tables) are
+    # built by appending one station row at a time (make_table). Any tables
+    # left over from a previous run would duplicate or stale rows, so clear
+    # them up front.
+    stale_patterns = [
+        f'{prop.ofs}_*_modelcycles_cf.csv',
+        f'{prop.ofs}_*_horizonbins_cf.csv',
+        f'{prop.ofs}_*_modelcycles_n.csv',
+        f'{prop.ofs}_*_horizonbins_n.csv',
+    ]
+    stale_files = []
+    for pat in stale_patterns:
+        stale_files += glob.glob(
+            os.path.join(prop.data_horizon_1d_pair_path, pat))
+    for stale in stale_files:
+        try:
+            os.remove(stale)
+        except OSError:
+            pass
 
     # Try converting start/end dates to datetime
     try:
