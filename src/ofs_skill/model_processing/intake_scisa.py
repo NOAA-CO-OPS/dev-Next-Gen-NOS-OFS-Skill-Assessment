@@ -204,7 +204,7 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         # concatenated along time and never read by anything.)
         drop_variables = [
             'Akk_bak', 'Akp_bak', 'Akt_bak', 'Akv_bak', 'Cs_r', 'Cs_w',
-            'dtfast', 'el', 'f', 'Falpha', 'Fbeta', 'Fgamma', 'FSobc_in',
+            'dstart', 'dtfast', 'el', 'f', 'Falpha', 'Fbeta', 'Fgamma', 'FSobc_in',
             'FSobc_out', 'gamma2', 'grid', 'hc', 'lat_psi', 'lon_psi',
             'Lm2CLM', 'Lm3CLM', 'LnudgeM2CLM', 'LnudgeM3CLM', 'LnudgeTCLM',
             'LsshCLM', 'LtracerCLM', 'LtracerSrc', 'LuvSrc', 'LwSrc', 'M2nudg',

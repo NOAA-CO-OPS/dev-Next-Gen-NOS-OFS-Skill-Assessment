@@ -251,7 +251,7 @@ def paired_vector(
     end_date_full: str,
     logger: Logger,
     lookback_hours: int = 6,
-) -> PairedResult | None:
+) -> tuple[list[list], pd.DataFrame] | None:
     """
     Create paired time series for vector variables.
 
