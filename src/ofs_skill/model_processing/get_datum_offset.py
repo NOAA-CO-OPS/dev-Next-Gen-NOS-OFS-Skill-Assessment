@@ -35,7 +35,7 @@ Created: Fri Jun 6 09:11:51 2025
 import os
 from datetime import datetime
 from logging import Logger
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -289,7 +289,7 @@ def report_datums(prop: Any, datum_offsets: list[list[Any]], logger: Logger) -> 
                      'Skipping this step. Exception: %s', e_x)
 
 
-def read_vdatum_from_bucket(prop: Any, logger: Logger) -> Union[xr.Dataset, int]:
+def read_vdatum_from_bucket(prop: Any, logger: Logger) -> xr.Dataset | int:
     """
     Read vertical datum conversion file from the NODD S3 bucket.
 
@@ -327,10 +327,10 @@ def read_vdatum_from_bucket(prop: Any, logger: Logger) -> Union[xr.Dataset, int]
     ... else:
     ...     print(f"Variables: {list(vdatums.data_vars)}")
     """
-    if prop.ofs in ('stofs_2d_glo'):
+    if prop.ofs in ('stofs_2d_glo','stofs_3d_pac','stofs_3d_atl'):
         # We shouldn't actually ever need to use this value, but just in case, return a
         # code that indicates no file to read for STOFS-2D-Global.
-        logger.info('STOFS-2D-Global uses coastalmodeling_vdatum conversion instead of a vdatum file on S3.')
+        logger.info('STOFS uses coastalmodeling_vdatum conversion instead of a vdatum file on S3.')
         return -9995
     else:
         s3 = s3fs.S3FileSystem(anon=True)
@@ -425,7 +425,11 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
         * Sign is inverted except for LEOFS
     - STOFS-3D models:
         * Native datum is XGEOID20B
-        * If datum='XGEOID20B', returns 0
+        * If datum='XGEOID20B' and prop.ofsfiletype == 'fields' returns 0
+        * If datum='MSL', prop.ofs == 'stofs_3d_pac', and prop.ofsfiletype == 'stations' returns 0
+        * If datum='NAVD88', prop.ofs == 'stofs_3d_atl', and prop.ofsfiletype == 'stations' returns 0
+        * No conversion file available; coastalmodeling_vdatum
+          tool is used instead.
     - STOFS-2D-Global:
         * Native datum is LMSL
         * If datum='MSL', returns 0 (no conversion needed).
@@ -575,12 +579,14 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 logger.error(f'Datum conversion error: {e_x}')
                 return -9991
         elif 'stofs' in prop.ofs:
-            logger.info('Still doing datum conversion for STOFS!')
+            logger.info('STOFS models do not use NetCDF vdatum grid files; '
+                        'datum conversion is calculated dynamically via VDatum API.')
+            datum_field = None
         else:  # Not SSCOFS or STOFS or SECOFS or GLOFS
             try:
                 datum_field = vdatums[f'{prop.datum.lower()}tomsl']
                 if prop.ofs == 'wcofs':
-                    file = os.path.join(prop.path, 'src', 'wcofs_msl.nc')
+                    file = utils.resolve_asset_path(prop.path, 'src', 'wcofs_msl.nc')
                     try:
                         ds_wcofs = xr.open_dataset(file)
                     except FileNotFoundError:

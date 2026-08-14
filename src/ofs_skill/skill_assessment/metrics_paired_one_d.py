@@ -6,16 +6,16 @@ skill assessment metrics. The output is a list with the result for each metric.
 """
 
 import math
-import os
 import warnings
 from logging import Logger
-from typing import Any, Union
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from scipy.stats import ConstantInputWarning
 
 from ofs_skill.obs_retrieval.get_station_tidal_data import get_station_tidal_data
+from ofs_skill.obs_retrieval.utils import resolve_asset_path
 from ofs_skill.skill_assessment import nos_metrics
 
 warnings.simplefilter('ignore', ConstantInputWarning)
@@ -84,7 +84,7 @@ def skill_scalar(
     station_id: str,
     prop: Any,
     logger: Logger,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """
     Calculate skill metrics for scalar variables.
 
@@ -137,7 +137,7 @@ def skill_scalar(
     """
     # Get target error range
     X1, X2 = nos_metrics.get_error_threshold(
-        name_var, os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+        name_var, resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
 
     # Preserve NaN-containing series for gap-sensitive duration metrics.
     # MDPO/MDNO need real gaps to break streaks; dropna hides them.
@@ -281,7 +281,7 @@ def skill_vector(
     name_var: str,
     prop: Any,
     logger: Logger,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """
     Calculate skill metrics for vector variables.
 
@@ -324,7 +324,7 @@ def skill_vector(
     """
     # Get target error range
     X1, X2 = nos_metrics.get_error_threshold(
-        name_var, os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+        name_var, resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
 
     # Preserve NaN-containing series for gap-sensitive duration metrics.
     df_paired_full = df_paired.copy()
@@ -441,7 +441,7 @@ def skill_vector_dir(
     name_var: str,
     prop: Any,
     logger: Logger,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """
     Calculate skill metrics for current direction.
 
@@ -483,7 +483,7 @@ def skill_vector_dir(
     """
     # Get target error range (degrees)
     X1, X2 = nos_metrics.get_error_threshold(
-        'cu_dir', os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+        'cu_dir', resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
 
     # Preserve NaN-containing series for gap-sensitive duration metrics.
     df_paired_full = df_paired.copy()
@@ -597,7 +597,7 @@ def skill_extrema(
     df_paired: pd.DataFrame,
     name_var: str,
     prop: Any,
-) -> list[Union[float, str, None]]:
+) -> list[float | str | None]:
     """Calculate amplitude + timing skill metrics for water-level extrema (HW/LW).
 
     MDPO/MDNO/WOF are intentionally omitted (they are ill-defined on an
@@ -624,7 +624,7 @@ def skill_extrema(
         TCF pass/fail; ``stdev`` slot (17) carries TCF (%); slot 18 is X1.
     """
     # X1 is the amplitude threshold (m), T1 is timing threshold (hours)
-    X1, _ = nos_metrics.get_error_threshold(name_var, os.path.join(prop.path, 'conf', 'error_ranges.csv'))
+    X1, _ = nos_metrics.get_error_threshold(name_var, resolve_asset_path(prop.path, 'conf', 'error_ranges.csv'))
     T1 = 0.5
 
     obs = df_paired['OBS']

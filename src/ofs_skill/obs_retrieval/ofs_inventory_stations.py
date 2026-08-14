@@ -148,6 +148,7 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
                            logger, config_file=None):
     """ Retrieving Inventories """
     lat1, lat2, lon1, lon2 = geo[-4], geo[-3], geo[-2], geo[-1]
+    
 
     t_c_future = None
     usgs_future = None
@@ -342,7 +343,7 @@ def ofs_inventory_stations(ofs, start_date, end_date, path, stationowner,
                         ['station_id_list']).replace(',','').split(' ')
 
     # parameter validation
-    ofs_extents_path = os.path.join(path, dir_params['ofs_extents_dir'])
+    ofs_extents_path = utils.resolve_asset_path(path, dir_params['ofs_extents_dir'])
 
     argu_list = (start_date, end_date, path, ofs, ofs_extents_path)
     parameter_validation(argu_list, logger)

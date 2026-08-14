@@ -22,6 +22,7 @@ from ofs_skill.model_processing import do_horizon_skill_utils, get_fcst_cycle
 from ofs_skill.model_processing.get_node_ofs import get_node_ofs
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.skill_assessment.get_skill import name_convent, ofs_ctlfile_extract
+from ofs_skill.utils.file_headers import series_rows_to_skip
 from ofs_skill.visualization import plot_forecast_hours
 
 
@@ -220,6 +221,7 @@ def merge_obs_series_scalar(prop, logger):
                             obs_path,
                             delim_whitespace=True,
                             header=None,
+                            skiprows=series_rows_to_skip(obs_path),
                         )
                     else:
                         logger.error(

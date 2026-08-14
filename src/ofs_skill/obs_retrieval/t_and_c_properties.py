@@ -6,7 +6,7 @@ for managing CO-OPS API interactions and data retrieval.
 """
 
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
 
 class TidesandCurrentsProperties:
@@ -39,18 +39,18 @@ class TidesandCurrentsProperties:
     def __init__(self):
         self.mdapi_url: str = ''
         self.api_url: str = ''
-        self.start_dt_0: Optional[datetime] = None
-        self.end_dt_0: Optional[datetime] = None
-        self.start_dt: Optional[datetime] = None
-        self.end_dt: Optional[datetime] = None
+        self.start_dt_0: datetime | None = None
+        self.end_dt_0: datetime | None = None
+        self.start_dt: datetime | None = None
+        self.end_dt: datetime | None = None
         self.total_date: list[Any] = []
         self.total_var: list[Any] = []
         self.total_dir: list[Any] = []
         self.station_url: str = ''
         self.station_url_2: str = ''
         self.depth: float = 0.0
-        self.depth_url: Optional[dict] = None
-        self.delta: Optional[timedelta] = None
+        self.depth_url: dict | None = None
+        self.delta: timedelta | None = None
         self.date: list[str] = []
         self.var: list[str] = []
         self.drt: list[str] = []

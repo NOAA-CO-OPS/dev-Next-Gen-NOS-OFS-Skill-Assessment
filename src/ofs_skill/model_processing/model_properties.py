@@ -5,7 +5,17 @@ This module defines the ModelProperties class which holds configuration
 and path information for OFS model operations.
 """
 
+import copy
 from typing import Any
+
+# Attributes excluded from deepcopy. ``_cached_model`` holds the loaded
+# xarray model dataset (a dask graph referencing hundreds of backing
+# files); deep-copying it is expensive and no consumer needs a private
+# copy — every access goes through ``getattr(..., None)`` and treats a
+# missing attribute as a cache miss. Without this guard, the per-station
+# ``copy.deepcopy(prop)`` in the plotting fan-out duplicated the whole
+# dataset twice per station.
+_DEEPCOPY_SKIP_ATTRS = frozenset({'_cached_model', '_cached_model_key'})
 
 
 class ModelProperties:
@@ -153,3 +163,20 @@ class ModelProperties:
     def __repr__(self) -> str:
         """String representation of ModelProperties."""
         return f"ModelProperties(ofs='{self.ofs}', datum='{self.datum}')"
+
+    def __deepcopy__(self, memo):
+        """Deep-copy all attributes except the cached model dataset.
+
+        Copies come back without ``_cached_model`` / ``_cached_model_key``;
+        consumers read those via ``getattr(..., None)`` and treat their
+        absence as a cache miss, so behavior is unchanged apart from the
+        copy no longer dragging a full dask graph along.
+        """
+        cls = self.__class__
+        clone = cls.__new__(cls)
+        memo[id(self)] = clone
+        for key, value in self.__dict__.items():
+            if key in _DEEPCOPY_SKIP_ATTRS:
+                continue
+            setattr(clone, key, copy.deepcopy(value, memo))
+        return clone

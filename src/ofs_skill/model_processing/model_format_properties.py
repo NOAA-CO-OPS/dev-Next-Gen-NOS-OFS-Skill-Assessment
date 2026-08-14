@@ -5,7 +5,7 @@ This module defines the ModelFormatProperties class which holds
 model format configuration.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class ModelFormatProperties:
@@ -38,7 +38,7 @@ class ModelFormatProperties:
         self.model_time: str = ''
         self.model_obs: str = ''
         self.model_lang: str = ''
-        self.data_model: Optional[Any] = None
+        self.data_model: Any | None = None
 
     def __repr__(self) -> str:
         """String representation of ModelFormatProperties."""
