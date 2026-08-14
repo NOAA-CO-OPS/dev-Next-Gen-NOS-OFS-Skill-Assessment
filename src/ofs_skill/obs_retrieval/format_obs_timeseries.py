@@ -12,6 +12,74 @@ import numpy as np
 import pandas as pd
 
 
+def remove_sigma_outliers(
+    timeseries: pd.DataFrame,
+    column: str = 'OBS',
+    n_sigma: float = 5.0,
+    min_points: int = 10,
+) -> pd.DataFrame:
+    """
+    Remove observations that fall outside a +/- n-sigma band about the mean.
+
+    This reproduces the outlier-rejection performed by the legacy NOS Fortran
+    skill-assessment code (``sorc/refwl.f``), which computes the mean and
+    standard deviation over the entire water level series and discards any
+    observation outside ``mean +/- 5 * std``. As in the Fortran code, the
+    filter is only applied when at least ``min_points`` valid observations are
+    present; otherwise the series is returned unchanged.
+
+    Parameters
+    ----------
+    timeseries : pd.DataFrame
+        DataFrame containing the observation column to filter.
+    column : str, optional
+        Name of the column holding observation values. Default is 'OBS'.
+    n_sigma : float, optional
+        Number of standard deviations that defines the acceptance band.
+        Default is 5.0 to match ``refwl.f``.
+    min_points : int, optional
+        Minimum number of valid (non-NaN) observations required before the
+        filter is applied. Default is 10 to match ``refwl.f``.
+
+    Returns
+    -------
+    pd.DataFrame
+        The input DataFrame with rows outside the +/- n-sigma band removed.
+        The original DataFrame is not modified.
+
+    Notes
+    -----
+    - NaN observations are ignored when computing the mean and standard
+      deviation and are preserved in the returned frame (downstream code is
+      responsible for NaN handling).
+    - The sample standard deviation (ddof=1) is used, matching the
+      ``SD = SQRT(SD/(NTMP-1))`` computation in ``refwl.f``.
+    """
+    if timeseries is None or timeseries.empty or column not in timeseries.columns:
+        return timeseries
+
+    values = pd.to_numeric(timeseries[column], errors='coerce')
+    valid = values.dropna()
+
+    # Match refwl.f: only filter when there are at least min_points obs.
+    if len(valid) < min_points:
+        return timeseries
+
+    mean = valid.mean()
+    std = valid.std(ddof=1)
+
+    # If std is zero or not finite, there is nothing to reject.
+    if not np.isfinite(std) or std == 0.0:
+        return timeseries
+
+    lower = mean - n_sigma * std
+    upper = mean + n_sigma * std
+
+    # Keep NaN rows (they are not outliers) and rows within the band.
+    within_band = values.isna() | ((values >= lower) & (values <= upper))
+    return timeseries.loc[within_band].copy()
+
+
 def format_scalar(
     timeseries: pd.DataFrame,
     start_date_full: str,

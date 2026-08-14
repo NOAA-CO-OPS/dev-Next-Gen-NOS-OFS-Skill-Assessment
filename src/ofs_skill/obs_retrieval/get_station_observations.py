@@ -113,6 +113,7 @@ from ofs_skill.obs_retrieval import (
 from ofs_skill.obs_retrieval.currents_bins_override import (
     split_virtual_currents_id,
 )
+from ofs_skill.obs_retrieval.format_obs_timeseries import remove_sigma_outliers
 from ofs_skill.obs_retrieval.retrieve_chs_station import retrieve_chs_station
 from ofs_skill.obs_retrieval.retrieve_ndbc_station import retrieve_ndbc_station
 from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
@@ -328,7 +329,8 @@ def _apply_datum_shift(
     return timeseries
 
 
-def _format_timeseries(timeseries, variable, start_date_full, end_date_full):
+def _format_timeseries(timeseries, variable, start_date_full, end_date_full,
+                       logger=None):
     """Dispatch timeseries formatting based on variable type.
 
     Parameters
@@ -341,12 +343,29 @@ def _format_timeseries(timeseries, variable, start_date_full, end_date_full):
         Full start date string (YYYYMMDD-HH:MM:SS).
     end_date_full : str
         Full end date string (YYYYMMDD-HH:MM:SS).
+    logger : logging.Logger, optional
+        Logger used to report how many outliers were removed.
 
     Returns
     -------
     list
         Formatted timeseries lines.
     """
+    if variable == 'water_level':
+        # Match the legacy NOS Fortran skill-assessment code (sorc/refwl.f),
+        # which discards water level observations outside mean +/- 5*sigma.
+        n_before = len(timeseries)
+        timeseries = remove_sigma_outliers(
+            timeseries, column='OBS', n_sigma=5.0, min_points=10
+        )
+        n_removed = n_before - len(timeseries)
+        if logger is not None and n_removed > 0:
+            logger.info(
+                'Removed %d water_level observation(s) outside the '
+                '+/- 5-sigma band (refwl.f-style outlier rejection).',
+                n_removed,
+            )
+
     if variable == 'currents':
         return vector(timeseries, start_date_full, end_date_full)
     else:
@@ -523,7 +542,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    logger=logger
                 )
             except Exception as e_x:
                 logger.error('Fail when getting COOPS %s data for '
@@ -552,7 +572,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    logger=logger
                 )
             except Exception as e_x:
                 logger.error('Fail when getting USGS '
@@ -581,7 +602,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    logger=logger
                 )
             except Exception as e_x:
                 logger.error('Fail when getting NDBC %s '
@@ -610,7 +632,8 @@ def _fetch_and_format_station(
                     )
 
                 formatted_series = _format_timeseries(
-                    timeseries, variable, start_date_full, end_date_full
+                    timeseries, variable, start_date_full, end_date_full,
+                    logger=logger
                 )
             except Exception as e_x:
                 logger.error('Fail when getting CHS %s '
