@@ -82,18 +82,20 @@ jobs:
         run: |
           echo "::add-mask::${API_USGS_PAT}"
           START_TS="$(date -u +%s)"
+          # Coverage floor is owned by ci.yml on the offline suite — unload
+          # pytest-cov so pyproject fail_under cannot apply here.
+          # Keep errexit off for the whole step, clear EXIT/ERR traps from the
+          # micromamba login shell (bash -el), and skip xdist so a green live
+          # run cannot be flipped to failure by shell/worker teardown.
           set +e
-          # Skip coverage here: this job only runs -m network (live APIs), not
-          # the full suite, so pyproject fail_under would be misleading. The
-          # coverage floor is enforced in ci.yml on the offline test set.
+          trap - EXIT ERR
           pytest \
             -m network \
-            -n auto \
             -o addopts="" \
-            --no-cov
+            -p no:cov
           STATUS=$?
-          set -e
           END_TS="$(date -u +%s)"
+          echo "pytest finished with exit=${STATUS}"
           echo "duration_sec=$((END_TS - START_TS))" >> "$GITHUB_OUTPUT"
           echo "pytest_exit=${STATUS}" >> "$GITHUB_OUTPUT"
           exit "${STATUS}"
