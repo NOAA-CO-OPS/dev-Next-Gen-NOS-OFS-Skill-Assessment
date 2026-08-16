@@ -83,12 +83,14 @@ jobs:
           echo "::add-mask::${API_USGS_PAT}"
           START_TS="$(date -u +%s)"
           set +e
+          # Skip coverage here: this job only runs -m network (live APIs), not
+          # the full suite, so pyproject fail_under would be misleading. The
+          # coverage floor is enforced in ci.yml on the offline test set.
           pytest \
             -m network \
             -n auto \
             -o addopts="" \
-            --cov=src/ofs_skill \
-            --cov-report=term-missing
+            --no-cov
           STATUS=$?
           set -e
           END_TS="$(date -u +%s)"
