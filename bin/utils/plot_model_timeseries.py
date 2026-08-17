@@ -275,14 +275,37 @@ def process_and_plot_obs(logger, _conf, inventory_file, variable, ofs_filter, da
                 try:
                     skip_rows = 0
                     has_header = False
+                    header_tokens = []
                     with open(file_path) as f:
                         for i, line in enumerate(f):
                             if 'year' in line.lower() or 'date' in line.lower():
                                 skip_rows = i
                                 has_header = True
+                                # Capture header names, stripping commas so a
+                                # comma-separated header (e.g. "Julian days, Year,
+                                # Month, ...") doesn't get mangled when the data
+                                # rows are whitespace-delimited.
+                                header_tokens = [
+                                    tok.strip().upper()
+                                    for tok in line.replace(',', ' ').split()
+                                ]
                                 break
 
+                    # A header is only usable for column mapping if it produces one
+                    # clean token per data column AND exposes the time columns we
+                    # need. Comma-in-name headers (e.g. "Julian days", "Water level
+                    # (m)") collapse to more tokens than columns, so fall back to
+                    # positional parsing in that case.
+                    usable_header = False
                     if has_header:
+                        probe = pd.read_csv(file_path, sep=r'\s+', header=None, skiprows=skip_rows + 1)
+                        n_cols = probe.shape[1]
+                        usable_header = (
+                            len(header_tokens) == n_cols
+                            and all(c in header_tokens for c in ['YEAR', 'MONTH', 'DAY'])
+                        )
+
+                    if usable_header:
                         df = pd.read_csv(file_path, sep=r'\s+', skiprows=skip_rows)
                         df.columns = df.columns.str.strip().str.upper()
 
@@ -315,8 +338,14 @@ def process_and_plot_obs(logger, _conf, inventory_file, variable, ofs_filter, da
                             dict(year=df['YEAR'], month=df['MONTH'], day=df['DAY'], hour=df['HOUR'], minute=df['MINUTE'])
                         )
                     else:
-                        # Process assuming identical format as PRD
-                        df = pd.read_csv(file_path, sep=r'\s+', header=None)
+                        # No usable header: skip any text header row(s) and parse
+                        # positionally. Column layout matches the .prd format:
+                        # <julian> <year> <month> <day> <hour> <minute> <value>[ <dir>]
+                        df = pd.read_csv(
+                            file_path, sep=r'\s+', header=None,
+                            skiprows=(skip_rows + 1) if has_header else 0
+                        )
+                        df.columns = range(df.shape[1])
                         df['DateTime'] = pd.to_datetime(
                             dict(year=df[1], month=df[2], day=df[3], hour=df[4], minute=df[5])
                         )
@@ -835,13 +864,28 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                                 logger.warning(f'Error parsing .int file {os.path.basename(file_path)}: {e}')
                                 continue
                         else:
-                            # Parse standard .prd file
+                            # Parse standard .prd file. Newer .prd files carry a text
+                            # header row (e.g. "Julian days, Year, Month, ..."); detect
+                            # and skip it so the positional parsing lines up on the
+                            # numeric columns.
                             try:
-                                df = pd.read_csv(file_path, sep=r'\s+', header=None)
+                                prd_skiprows = 0
+                                with open(file_path) as f:
+                                    first_line = f.readline()
+                                first_tok = first_line.strip().split()[0] if first_line.strip() else ''
+                                try:
+                                    float(first_tok.rstrip(','))
+                                except ValueError:
+                                    prd_skiprows = 1
+                                df = pd.read_csv(
+                                    file_path, sep=r'\s+', header=None,
+                                    skiprows=prd_skiprows
+                                )
                             except pd.errors.EmptyDataError:
                                 logger.warning(f'File {os.path.basename(file_path)} is empty! Skipping trace...')
                                 continue
 
+                            df.columns = range(df.shape[1])
                             df['DateTime'] = pd.to_datetime(
                                 dict(year=df[1], month=df[2], day=df[3], hour=df[4], minute=df[5])
                             )
@@ -1237,7 +1281,7 @@ def main(logger, _conf=None, inventory_file=None, variable=None, ofs_filter=None
                     )
 
                     # Save combined file
-                    out_name = f'{plotinfo["ofs"]}_{plotinfo["station_id"]}_{plotinfo["save_name"]}_combined_modelseries.html'
+                    out_name = f'{plotinfo["ofs"]}_{plotinfo["station_id"]}_{plotinfo["save_name"]}_modelseries.html'
                     out_file = os.path.join(save_path, out_name)
                     fig.write_html(out_file)
 
@@ -1301,7 +1345,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '-d', '--datum',
         required=False,
-        default=None,
+        default='MLLW',
         help="datum options: 'MHW', 'MHHW' \
         'MLW', 'MLLW', 'NAVD88', 'XGEOID20B', 'IGLD85', 'LWD'")
 
