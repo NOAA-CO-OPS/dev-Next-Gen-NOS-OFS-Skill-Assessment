@@ -429,6 +429,10 @@ def make_flag_images(prop, logger):
             _make_scorecard(
                 prop, logger, by=by, col_formatter=fmt, xaxis_title=xtitle,
                 file_paths=scalars, suffix=by,
+                # Added explicit left_margin and smaller title_fontsize
+                # to prevent y-axis and title clipping
+                left_margin=0.18,
+                title_fontsize=18,
             )
         # Currents: one scorecard per current station, rows = depth bins
         # sorted b01 -> largest. Split the single cu CF table into per-station
@@ -463,12 +467,12 @@ def make_flag_images(prop, logger):
                             # Currents single-station scorecards need a wider
                             # left margin (long bin labels) and a slightly
                             # smaller title so neither is clipped by the page.
-                            left_margin=0.18,
-                            title_fontsize=17,
-                            # Longer colorbar (0.625 * 1.25) so the % labels
+                            left_margin=0.25, # Increased from 0.18 to prevent long bin label clipping
+                            title_fontsize=15, # Decreased from 17 to prevent multi-line title clipping
+                            # Longer colorbar (0.625 * 1.5) so the % labels
                             # don't overlap on the single-subplot width, and
                             # nudge it up to reduce the gap to the plot.
-                            cbar_frac=0.78,
+                            cbar_frac=0.94,
                             cbar_gap=0.03,
                         )
                     finally:
