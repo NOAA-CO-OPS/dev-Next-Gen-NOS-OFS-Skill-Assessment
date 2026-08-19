@@ -29,7 +29,12 @@ conda activate ofs_dps
 cp conf/ofs_dps.conf.example conf/ofs_dps.conf
 #    ...then edit conf/ofs_dps.conf and set home=/path/to/working_directory
 
-# 3. Download model data for your OFS and date range
+# 3a. (Preferred) Ensure use_s3_fallback=True is set in conf/ofs_dps.conf, and the skill
+#     assessment routine will read and stream model files from the
+#     NODD S3 bucket on demand when local files are missing.
+ 
+# 3b. (Alternate) If you prefer to download model data locally: 
+#     Download model data for your OFS and date range
 python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -ws nowcast -t stations
 python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -ws forecast_b -t stations
 
