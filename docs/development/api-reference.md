@@ -9,7 +9,7 @@ Quick reference for programmatic use of the `ofs_skill` package.
 pip install -e .
 
 # Or install from GitHub
-pip install git+https://github.com/NOAA-CO-OPS/NOS_Shared_Cyberinfrastructure_and_Skill_Assessment.git
+pip install git+https://github.com/NOAA-CO-OPS/Next-Gen-NOS-OFS-Skill-Assessment.git
 ```
 
 ## Core Modules
@@ -22,7 +22,7 @@ Process and configure OFS model data.
 from ofs_skill.model_processing import (
     ModelProperties,           # Main configuration class
     get_model_source,          # Determine model framework (ROMS, FVCOM, etc.)
-    get_forecast_hours,        # Get forecast cycle information
+    get_fcst_hours,        # Get forecast cycle information
     get_datum_offset,          # Calculate datum offsets
     index_nearest_node,        # Find nearest model grid node
     index_nearest_depth,       # Find nearest depth level
@@ -48,9 +48,9 @@ model_type = get_model_source('ngofs2')  # Returns: 'fvcom'
 model_type = get_model_source('stofs3d') # Returns: 'schism'
 ```
 
-**get_forecast_hours()** - Get forecast cycle info:
+**get_fcst_hours()** - Get forecast cycle info:
 ```python
-fcst_length, fcst_cycles = get_forecast_hours('cbofs')
+fcst_length, fcst_cycles = get_fcst_hours('cbofs')
 # fcst_length: 48 (hours)
 # fcst_cycles: array([0, 6, 12, 18])
 ```
@@ -147,27 +147,45 @@ get_skill(props, logger)
 ```python
 from ofs_skill.skill_assessment import skill_scalar
 
-metrics = skill_scalar(model_data, obs_data)
-# Returns dictionary with:
-# - rmse: Root Mean Square Error
-# - bias: Mean bias
-# - corr: Correlation coefficient
-# - si: Scatter index
-# - n: Number of paired samples
+# df_paired holds the paired series with 'OBS' and 'OFS' columns.
+# name_var is the short variable code: 'wl', 'temp', or 'salt'.
+metrics = skill_scalar(df_paired, 'wl', station_id, props, logger)
 ```
+
+Returns a **list** of 19 positional values (not a dict):
+
+```text
+[rmse, r_value, bias, bias_perc, nan, cf, cfpf, pof, pofpf,
+ nof, nofpf, mdpo, mdpopf, mdno, mdnopf, wof, wofpf, stdev, X1]
+```
+
+| Index | Name | Meaning |
+| --- | --- | --- |
+| 0 | `rmse` | Root mean squared error |
+| 1 | `r_value` | Pearson correlation coefficient |
+| 2 | `bias` | Mean bias |
+| 3 | `bias_perc` | Mean bias as a percentage |
+| 4 | -- | Unused slot (always `numpy.nan`; holds `bias_dir` in `skill_vector`) |
+| 5-6 | `cf`, `cfpf` | Central frequency and its pass/fail flag |
+| 7-8 | `pof`, `pofpf` | Positive outlier frequency and pass/fail |
+| 9-10 | `nof`, `nofpf` | Negative outlier frequency and pass/fail |
+| 11-12 | `mdpo`, `mdpopf` | Max duration of positive outliers and pass/fail |
+| 13-14 | `mdno`, `mdnopf` | Max duration of negative outliers and pass/fail |
+| 15-16 | `wof`, `wofpf` | Worst-case outlier frequency and pass/fail |
+| 17 | `stdev` | Standard deviation of the bias |
+| 18 | `X1` | Error threshold used for the outlier metrics |
 
 **skill_vector()** - Calculate vector skill metrics:
 ```python
 from ofs_skill.skill_assessment import skill_vector
 
-metrics = skill_vector(model_u, model_v, obs_u, obs_v)
-# Returns dictionary with:
-# - rmse_speed: RMSE of speed
-# - rmse_dir: RMSE of direction
-# - bias_speed: Mean speed bias
-# - bias_dir: Mean direction bias
-# - corr: Correlation coefficient
+# df_paired holds the paired currents series; name_var is 'cu'.
+metrics = skill_vector(df_paired, 'cu', props, logger)
 ```
+
+Returns a list with the same 19-slot layout as `skill_scalar`, except that
+index 4 carries `bias_dir` (mean direction bias) instead of `nan`, and the
+speed series supplies `rmse`/`r_value`/`bias`. There is no direction RMSE.
 
 ---
 
@@ -237,7 +255,7 @@ logger.info('Skill assessment complete!')
 ```python
 from ofs_skill.model_processing import (
     get_model_source,
-    get_forecast_hours,
+    get_fcst_hours,
 )
 
 # Check what type of model an OFS uses
@@ -245,7 +263,7 @@ model_framework = get_model_source('cbofs')
 print(f"CBOFS uses {model_framework} framework")
 
 # Get forecast cycle information
-fcst_length, fcst_cycles = get_forecast_hours('cbofs')
+fcst_length, fcst_cycles = get_fcst_hours('cbofs')
 print(f"Forecast length: {fcst_length} hours")
 print(f"Forecast cycles: {fcst_cycles}")
 ```
@@ -310,11 +328,11 @@ except ValueError as e:
 ## Further Reading
 
 - **README.md** - General overview and background
-- **MIGRATION_GUIDE.md** - Migration from old import patterns
+- **development/migration-guide.md** - Migration from old import patterns
 - **tests/** - Example usage in test files
 - **bin/visualization/** - CLI script examples
 
 ## Support
 
-- GitHub Issues: https://github.com/NOAA-CO-OPS/NOS_Shared_Cyberinfrastructure_and_Skill_Assessment/issues
+- GitHub Issues: https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment/issues
 - Email: co-ops.userservices@noaa.gov

@@ -30,11 +30,12 @@ plugins:
         python:
           paths: [src]
           options:
-            # Prefer Google; silence parser warnings so incomplete legacy
-            # docstrings do not fail `mkdocs build --strict`.
+            # Google style, with parser warnings ON so malformed or
+            # incomplete docstrings fail `mkdocs build --strict` instead
+            # of silently rendering wrong.
             docstring_style: google
             docstring_options:
-              warnings: false
+              warnings: true
               warn_missing_types: false
               warn_unknown_params: false
             show_source: true

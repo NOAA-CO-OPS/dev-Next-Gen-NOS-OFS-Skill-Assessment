@@ -46,6 +46,31 @@ class ModelProperties:
         data_skill_1d_pair_path: Paired ``.int`` skill inputs.
         data_skill_1d_table_path: Skill tables.
         visuals_1d_station_path: 1D station plot outputs.
+        startdate: Run start in compact form used by file naming.
+        enddate: Run end in compact form used by file naming.
+        stationowner: Observation provider filter (e.g. ``CO-OPS``, ``USGS``).
+        user_input_location: User-supplied location/bbox override, when set.
+        horizonskill: Forecast-horizon skill mode flag.
+        var_list: Variables selected for the run.
+        filecheck: Flag controlling model-file availability checks.
+        filepath: Caller-supplied file path override, when set.
+        currents_bins_csv: Optional ADCP bin-override CSV path.
+        config_file: Path to the config file in use, when set.
+        ofs_extents_path: Directory of OFS extent shapefiles.
+        data_model_2d_json_path: 2D model JSON outputs.
+        data_observations_2d_station_path: 2D observation station outputs.
+        data_observations_2d_json_path: 2D observation JSON outputs.
+        data_skill_stats_path: Summary skill statistics outputs.
+        data_skill_2d_json_path: 2D skill JSON outputs.
+        visuals_2d_station_path: 2D station plot outputs.
+        ice_dt: Ice time-step setting.
+        dailyavg: Daily-average toggle for ice runs.
+        data_skill_ice1dpair_path: Paired 1D ice skill inputs.
+        data_model_ice_path: Ice model outputs.
+        data_observations_2d_satellite_path: 2D satellite observation outputs.
+        visuals_maps_ice_path: Ice map plot outputs.
+        visuals_1d_ice_path: 1D ice plot outputs.
+        visuals_stats_ice_path: Ice statistics plot outputs.
 
     Example:
         ```python

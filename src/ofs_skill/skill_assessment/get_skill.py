@@ -527,7 +527,7 @@ def skill(read_station_ctl_file, read_ofs_ctl_file, prop, name_var, logger):
         read_ofs_ctl_file: Parsed model control-file structure aligned to
             the same stations.
         prop: ``ModelProperties`` for paths, dates, and run settings.
-        name_var: Variable key (e.g. ``water_level``, ``currents``).
+        name_var: Short variable key (``wl``, ``temp``, ``salt``, or ``cu``).
         logger: Logger for progress and drop reasons.
 
     Returns:

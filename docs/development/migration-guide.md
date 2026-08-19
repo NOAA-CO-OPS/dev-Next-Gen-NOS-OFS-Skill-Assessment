@@ -31,7 +31,7 @@ pip install -e .
 Or install from the repository:
 
 ```bash
-pip install git+https://github.com/NOAA-CO-OPS/NOS_Shared_Cyberinfrastructure_and_Skill_Assessment.git
+pip install git+https://github.com/NOAA-CO-OPS/Next-Gen-NOS-OFS-Skill-Assessment.git
 ```
 
 ### Old Import Pattern (Deprecated)
@@ -65,7 +65,7 @@ ofs_skill/
 ├── model_processing/      # Model data processing
 │   ├── ModelProperties
 │   ├── get_model_source()
-│   ├── get_forecast_hours()
+│   ├── get_fcst_hours()
 │   └── indexing functions
 ├── obs_retrieval/         # Observation data retrieval
 │   ├── Utils
@@ -134,11 +134,11 @@ model_type = get_model_source('ngofs2') # Returns 'fvcom'
 ### Example 5: Getting forecast hours
 
 ```python
-from ofs_skill.model_processing import get_forecast_hours
+from ofs_skill.model_processing import get_fcst_hours
 import numpy as np
 
 # Get forecast cycle information
-fcst_length, fcst_cycles = get_forecast_hours('cbofs')
+fcst_length, fcst_cycles = get_fcst_hours('cbofs')
 # fcst_length = 48
 # fcst_cycles = array([0, 6, 12, 18])
 ```

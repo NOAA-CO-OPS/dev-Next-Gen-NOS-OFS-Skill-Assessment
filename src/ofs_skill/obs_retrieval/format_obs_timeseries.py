@@ -30,6 +30,14 @@ def format_scalar(
 
     Returns:
         List of fixed-width strings ready to write to an ``.obs`` file.
+        Each line is::
+
+            julian_date year month day hour minute value
+            {:13.8f}    {:4d} {:2d}  {:2d} {:2d}  {:2d}   {:9.4f}
+
+    Note:
+        Missing data is filtered before formatting: ``OBS`` values below
+        ``-999`` or above ``999`` are converted to ``NaN``.
     """
     # Parse date range
     start_dt_full = datetime.strptime(start_date_full, '%Y%m%d-%H:%M:%S')
@@ -88,6 +96,18 @@ def format_vector(
 
     Returns:
         List of fixed-width strings ready to write to an ``.obs`` file.
+        Each line is::
+
+            julian_date year month day hour minute speed direction u v
+            {:13.8f}    {:4d} {:2d}  {:2d} {:2d}  {:2d}   {:9.4f} {:9.4f} {:9.4f} {:9.4f}
+
+        where ``u = speed * sin(radians(direction))`` and
+        ``v = speed * cos(radians(direction))``.
+
+    Note:
+        Missing data is filtered before formatting: ``OBS`` (speed) and
+        ``DIR`` values below ``-999`` or above ``999`` are converted to
+        ``NaN``.
     """
     # Parse date range
     start_dt_full = datetime.strptime(start_date_full, '%Y%m%d-%H:%M:%S')
