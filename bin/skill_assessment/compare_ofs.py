@@ -157,7 +157,10 @@ def main(args):
 
         # generate scatter plots, etc.
         logger.info('=== Generating Stats Comparisons ===')
-        generate_stat_comparisons(ofs1, ofs2, args.home_path, logger)
+        generate_stat_comparisons(
+            ofs1, ofs2, args.home_path, logger,
+            make_bar_plots=args.make_bar_plots,
+        )
     finally:
         # Always restore the genuine per-OFS inventories, even on failure,
         # so subsequent (non-comparison) runs are not left with the
@@ -180,5 +183,10 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--datum', default='MLLW', help='Datum')
     parser.add_argument('-t', '--filetype', default='stations', help='OFS filetype')
     parser.add_argument('-c', '--config', help='Path to config file')
+    parser.add_argument(
+        '-b', '--make_bar_plots', action='store_true',
+        help='Also generate station-by-station grouped bar plots for each '
+             'skill statistic (off by default; scatter plots are always made).',
+    )
 
     main(parser.parse_args())
