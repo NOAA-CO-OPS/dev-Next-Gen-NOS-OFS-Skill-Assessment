@@ -1424,18 +1424,19 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, home_path, datu
 
                 if X1 > 0:
                     X2 = X1 * 2
-                    fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt, max_dt, min_dt], y=[X2, X2, -X2, -X2], fill='toself', fillcolor='rgba(255, 0, 0, 0.15)', line=dict(color='rgba(255,255,255,0)'), name=f'2x Target Error (\u00B1{X2:.2f} {unit})', hoverinfo='skip'), row=2, col=1)
+                    # List the target error before the 2x target error in the legend.
                     fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt, max_dt, min_dt], y=[X1, X1, -X1, -X1], fill='toself', fillcolor='rgba(255, 165, 0, 0.3)', line=dict(color='rgba(255,255,255,0)'), name=f'Target Error (\u00B1{X1:.2f} {unit})', hoverinfo='skip'), row=2, col=1)
+                    fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt, max_dt, min_dt], y=[X2, X2, -X2, -X2], fill='toself', fillcolor='rgba(255, 0, 0, 0.15)', line=dict(color='rgba(255,255,255,0)'), name=f'2x Target Error (\u00B1{X2:.2f} {unit})', hoverinfo='skip'), row=2, col=1)
 
                 fig_ts.add_trace(go.Scatter(x=[min_dt, max_dt], y=[0, 0], mode='lines', name='Zero Error', showlegend=False, hoverinfo='skip', line=dict(color='black', dash='dash', width=1)), row=2, col=1)
                 fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs1}'], name=f'{ofs1.upper()} Error', mode='lines', hovertemplate=err_hover, line=dict(color='#d55e00', width=1.5), opacity=0.8, showlegend=False, legendgroup=ofs1), row=2, col=1)
                 fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs2}'], name=f'{ofs2.upper()} Error', mode='lines', hovertemplate=err_hover, line=dict(color='#0072b2', width=1.5), opacity=0.8, showlegend=False, legendgroup=ofs2), row=2, col=1)
 
                 fig_ts.update_layout(
-                    title=dict(text=f'<b>Time Series Comparison: {station} - {display_var}</b>', font=dict(size=14, color='black', family='Open Sans'), y=0.97, x=0.5, xanchor='center', yanchor='top'),
+                    title=dict(text=f'<b>Time Series Comparison: {station} - {display_var}</b>', font=dict(size=14, color='black', family='Open Sans'), y=0.98, x=0.5, xanchor='center', yanchor='top'),
                     template='plotly_white', hovermode='x unified', hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
                     legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0, font=dict(size=16, color='black'), itemclick='toggle', itemdoubleclick=False),
-                    margin=dict(t=100, b=120), height=750, width=900
+                    margin=dict(t=150, b=120), height=780, width=900
                 )
                 fig_ts.update_xaxes(mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showspikes=True, spikemode='across', spikesnap='cursor', showgrid=True, tickfont=dict(family='Open Sans', color='black', size=14), minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False), tickformat='%H:%M<br>%m/%d', hoverformat='%b %d, %Y, %H:%M UTC')
                 fig_ts.update_xaxes(title_text='<br>Time (UTC)', titlefont=dict(family='Open Sans', color='black', size=18), rangeslider=dict(visible=True, thickness=0.06, bordercolor='black', borderwidth=1), row=2, col=1)
@@ -1527,8 +1528,10 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, home_path, datu
 
             plt.close(fig_scat_all)
 
-def generate_stat_comparisons(ofs1, ofs2, home_path, logger):
-    """Reads the generated skill stat CSVs and plots interactive categorical and identically scaled 1-to-1 scatters with bounded target thresholds."""
+def generate_stat_comparisons(ofs1, ofs2, home_path, logger, make_bar_plots=False):
+    """Reads the generated skill stat CSVs and plots interactive 1-to-1
+    scatters with bounded target thresholds. Grouped station-by-station
+    bar plots are only produced when ``make_bar_plots`` is True."""
     import os
 
     import pandas as pd
@@ -1637,64 +1640,65 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger):
 
                 bar_hover = f'<b>Station ID:</b> %{{x}}<br><b>Model:</b> %{{data.name}}<br><b>{stat_display}:</b> %{{y:.3f}}<extra></extra>'
 
-                # --- 1. Grouped Bar Plot (Plotly) ---
-                fig_bar = go.Figure()
-                fig_bar.add_trace(go.Bar(x=var_data['ID'], y=var_data[stat1], name=ofs1.upper(), hovertemplate=bar_hover, marker_color='#d55e00'))
-                fig_bar.add_trace(go.Bar(x=var_data['ID'], y=var_data[stat2], name=ofs2.upper(), hovertemplate=bar_hover, marker_color='#0072b2'))
+                # --- 1. Grouped Bar Plot (Plotly) - optional ---
+                if make_bar_plots:
+                    fig_bar = go.Figure()
+                    fig_bar.add_trace(go.Bar(x=var_data['ID'], y=var_data[stat1], name=ofs1.upper(), hovertemplate=bar_hover, marker_color='#d55e00'))
+                    fig_bar.add_trace(go.Bar(x=var_data['ID'], y=var_data[stat2], name=ofs2.upper(), hovertemplate=bar_hover, marker_color='#0072b2'))
 
-                # Add Threshold Lines to Bar Plot (Solid)
-                if stat_key == 'central_freq':
-                    fig_bar.add_hline(y=90, line_dash='solid', line_color='red',
-                                      annotation_text='90% Target', annotation_position='top left',
-                                      annotation_font=dict(color='red', size=13))
-                elif stat_key == 'rmse' and X1 > 0:
-                    fig_bar.add_hline(y=X1, line_dash='solid', line_color='red',
-                                      annotation_text=f'Target Error ({X1:.2f})', annotation_position='top left',
-                                      annotation_font=dict(color='red', size=13))
-                elif stat_key == 'bias' and X1 > 0:
-                    fig_bar.add_hline(y=X1, line_dash='solid', line_color='red',
-                                      annotation_text=f'+Target Error (+{X1:.2f})', annotation_position='top left',
-                                      annotation_font=dict(color='red', size=13))
-                    fig_bar.add_hline(y=-X1, line_dash='solid', line_color='red',
-                                      annotation_text=f'-Target Error (-{X1:.2f})', annotation_position='bottom left',
-                                      annotation_font=dict(color='red', size=13))
+                    # Add Threshold Lines to Bar Plot (Solid)
+                    if stat_key == 'central_freq':
+                        fig_bar.add_hline(y=90, line_dash='solid', line_color='red',
+                                          annotation_text='90% Target', annotation_position='top left',
+                                          annotation_font=dict(color='red', size=13))
+                    elif stat_key == 'rmse' and X1 > 0:
+                        fig_bar.add_hline(y=X1, line_dash='solid', line_color='red',
+                                          annotation_text=f'Target Error ({X1:.2f})', annotation_position='top left',
+                                          annotation_font=dict(color='red', size=13))
+                    elif stat_key == 'bias' and X1 > 0:
+                        fig_bar.add_hline(y=X1, line_dash='solid', line_color='red',
+                                          annotation_text=f'+Target Error (+{X1:.2f})', annotation_position='top left',
+                                          annotation_font=dict(color='red', size=13))
+                        fig_bar.add_hline(y=-X1, line_dash='solid', line_color='red',
+                                          annotation_text=f'-Target Error (-{X1:.2f})', annotation_position='bottom left',
+                                          annotation_font=dict(color='red', size=13))
 
-                fig_bar.update_layout(
-                    barmode='group',
-                    title=dict(
-                        text=f'<b>Station-by-Station {stat_display} Comparison: {display_var}</b>',
-                        font=dict(size=14, color='black', family='Open Sans'),
-                        y=0.97, x=0.5, xanchor='center', yanchor='top',
-                    ),
-                    template='plotly_white', hovermode='x unified',
-                    hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
-                    legend=dict(
-                        orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
-                        font=dict(size=16, color='black'),
-                        itemclick=False, itemdoubleclick=False
-                    ),
-                    margin=dict(t=100, b=100), height=550, width=1000
-                )
-                fig_bar.update_xaxes(
-                    title_text='Station ID',
-                    titlefont=dict(family='Open Sans', color='black', size=18),
-                    mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, tickangle=45,
-                    tickfont=dict(family='Open Sans', color='black', size=14),
-                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False)
-                )
+                    fig_bar.update_layout(
+                        barmode='group',
+                        title=dict(
+                            text=f'<b>Station-by-Station {stat_display} Comparison: {display_var}</b>',
+                            font=dict(size=14, color='black', family='Open Sans'),
+                            y=0.97, x=0.5, xanchor='center', yanchor='top',
+                        ),
+                        template='plotly_white', hovermode='x unified',
+                        hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
+                        legend=dict(
+                            orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0,
+                            font=dict(size=16, color='black'),
+                            itemclick=False, itemdoubleclick=False
+                        ),
+                        margin=dict(t=100, b=100), height=550, width=1000
+                    )
+                    fig_bar.update_xaxes(
+                        title_text='Station ID',
+                        titlefont=dict(family='Open Sans', color='black', size=18),
+                        mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, tickangle=45,
+                        tickfont=dict(family='Open Sans', color='black', size=14),
+                        minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False)
+                    )
 
-                # Update Y-Axes (Includes explicit zeroline injection for Bias)
-                fig_bar.update_yaxes(
-                    title_text=stat_display,
-                    titlefont=dict(family='Open Sans', color='black', size=17),
-                    mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showgrid=True,
-                    tickfont=dict(family='Open Sans', color='black', size=14),
-                    minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
-                    zeroline=(stat_key == 'bias'), zerolinewidth=1, zerolinecolor='black'
-                )
+                    # Update Y-Axes (Includes explicit zeroline injection for Bias)
+                    fig_bar.update_yaxes(
+                        title_text=stat_display,
+                        titlefont=dict(family='Open Sans', color='black', size=17),
+                        mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showgrid=True,
+                        tickfont=dict(family='Open Sans', color='black', size=14),
+                        minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
+                        zeroline=(stat_key == 'bias'), zerolinewidth=1, zerolinecolor='black'
+                    )
 
-                out_file_cat = os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_{file_var}_{stat_key}_stations.html')
-                fig_bar.write_html(out_file_cat)
+                    out_file_cat = os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_{file_var}_{stat_key}_stations.html')
+                    fig_bar.write_html(out_file_cat)
 
                 # --- 2. 1-to-1 Scatter (Plotly) ---
                 fig_stat_scat = go.Figure()
@@ -1715,10 +1719,12 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger):
                     min_val = min(min_val, 85) # Provide buffer below 90
                     max_val = max(max_val, 100)
                 elif stat_key == 'rmse' and X1 > 0:
-                    max_val = max(max_val, X1 * 1.1)
+                    # Ensure the 3x band is visible on both axes
+                    max_val = max(max_val, X1 * 3 * 1.1)
+                    min_val = min(min_val, 0)
                 elif stat_key == 'bias' and X1 > 0:
-                    min_val = min(min_val, -X1 * 1.1)
-                    max_val = max(max_val, X1 * 1.1)
+                    min_val = min(min_val, -X1 * 3 * 1.1)
+                    max_val = max(max_val, X1 * 3 * 1.1)
 
                 axis_range = None
                 if pd.notna(min_val) and pd.notna(max_val):
@@ -1731,7 +1737,10 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger):
                         mode='lines', name='1:1 Line', hoverinfo='skip', showlegend=False, line=dict(color='black', dash='dash')
                     ))
 
-                    # Add Bounded Threshold Lines
+                    # Add Bounded Threshold Lines. For RMSE and central
+                    # frequency the horizontal segment is drawn all the way
+                    # to the y-axis (x=axis_range[0]) so the target line is
+                    # anchored to the axis rather than floating in the plot.
                     if stat_key == 'central_freq':
                         fig_stat_scat.add_trace(go.Scatter(
                             x=[axis_range[0], 90, 90], y=[90, 90, axis_range[0]],
@@ -1739,17 +1748,28 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger):
                             line=dict(color='red', width=1.5, dash='solid')
                         ))
                     elif stat_key == 'rmse' and X1 > 0:
-                        fig_stat_scat.add_trace(go.Scatter(
-                            x=[axis_range[0], X1, X1], y=[X1, X1, axis_range[0]],
-                            mode='lines', name='Target Error', showlegend=False, hoverinfo='skip',
-                            line=dict(color='red', width=1.5, dash='solid')
-                        ))
+                        # Draw target, 2x and 3x error thresholds as nested
+                        # L-shaped red lines that reach the y-axis.
+                        for mult, dash in ((1, 'solid'), (2, 'dash'), (3, 'dot')):
+                            thr = X1 * mult
+                            fig_stat_scat.add_trace(go.Scatter(
+                                x=[axis_range[0], thr, thr], y=[thr, thr, axis_range[0]],
+                                mode='lines',
+                                name=f'{mult}x Target Error' if mult > 1 else 'Target Error',
+                                showlegend=False, hoverinfo='skip',
+                                line=dict(color='red', width=1.5, dash=dash)
+                            ))
                     elif stat_key == 'bias' and X1 > 0:
-                        fig_stat_scat.add_trace(go.Scatter(
-                            x=[-X1, X1, X1, -X1, -X1], y=[-X1, -X1, X1, X1, -X1],
-                            mode='lines', name='Target Error', showlegend=False, hoverinfo='skip',
-                            line=dict(color='red', width=1.5, dash='solid')
-                        ))
+                        # Draw target, 2x and 3x error boxes centred on zero.
+                        for mult, dash in ((1, 'solid'), (2, 'dash'), (3, 'dot')):
+                            thr = X1 * mult
+                            fig_stat_scat.add_trace(go.Scatter(
+                                x=[-thr, thr, thr, -thr, -thr], y=[-thr, -thr, thr, thr, -thr],
+                                mode='lines',
+                                name=f'{mult}x Target Error' if mult > 1 else 'Target Error',
+                                showlegend=False, hoverinfo='skip',
+                                line=dict(color='red', width=1.5, dash=dash)
+                            ))
 
                 # Top-Left Annotation
                 fig_stat_scat.add_annotation(
