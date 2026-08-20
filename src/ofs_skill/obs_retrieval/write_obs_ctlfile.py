@@ -657,23 +657,44 @@ def _process_ndbc_station(
 
         elif variable in {'water_temperature', 'salinity'}:
             data_station['DEP01'] = data_station['DEP01'].astype(float)
+            # Check if all values are NaN
+            if data_station['DEP01'].isna().all():
+                dep01_mean = 0.0
+                logger.warning('Observation %s depth value is NaN for station %s!. '
+                               'Assigning depth value of 0.0 instead...',
+                               name_var,
+                               str(id_number))
+            else:
+                # Pandas mean() skips NaNs by default
+                dep01_mean = data_station['DEP01'].mean(skipna=True)
             return [
                 (
                     f'{str(id_number)} {str(id_number)}_{name_var}_'
                     f'{ofs}_NDBC "{name}"\n  {y_value:.3f} '
                     f'{x_value:.3f} 0.0  '
-                    f'{data_station["DEP01"].mean():.2f}  '
+                    f'{dep01_mean:.2f}  '
                     f'0.0\n'
                 )
             ]
+
         elif variable == 'currents':
             data_station['DEP01'] = data_station['DEP01'].astype(float)
+            # Check if all values are NaN
+            if data_station['DEP01'].isna().all():
+                dep01_mean = 0.0
+                logger.warning('Observation %s depth value is NaN for station %s!. '
+                               'Assigning depth value of 0.0 instead...',
+                               name_var,
+                               str(id_number))
+            else:
+                # Pandas mean() skips NaNs by default
+                dep01_mean = data_station['DEP01'].mean(skipna=True)
             return [
                 (
                     f'{str(id_number)} {str(id_number)}_{name_var}_'
                     f'{ofs}_NDBC "{name}"\n  {y_value:.3f} '
                     f'{x_value:.3f} 0.0  '
-                    f'{data_station["DEP01"].mean():.2f}  '
+                    f'{dep01_mean:.2f}  '
                     f'0.0  0.00\n'
                 )
             ]
