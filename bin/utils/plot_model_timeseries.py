@@ -1337,16 +1337,16 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, home_path, datu
         short_var = var_map.get(var, var)
 
         if short_var == 'wl':
-            y_title = f'Water Level (<i>meters {datum}</i>)'
+            y_title = f'Water Level<br>(<i>meters {datum}</i>)'
             unit = 'm'
         elif short_var == 'temp':
-            y_title = 'Water Temperature (<i>\u00b0C</i>)'
+            y_title = 'Water Temperature<br>(<i>\u00b0C</i>)'
             unit = '\u00b0C'
         elif short_var == 'cu':
-            y_title = 'Current Speed (<i>knots</i>)'
+            y_title = 'Current Speed<br>(<i>knots</i>)'
             unit = 'knots'
         elif short_var == 'salt':
-            y_title = 'Salinity (<i>PSU</i>)'
+            y_title = 'Salinity<br>(<i>PSU</i>)'
             unit = 'PSU'
         else:
             y_title = display_var
@@ -1433,10 +1433,10 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, home_path, datu
                 fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs2}'], name=f'{ofs2.upper()} Error', mode='lines', hovertemplate=err_hover, line=dict(color='#0072b2', width=1.5), opacity=0.8, showlegend=False, legendgroup=ofs2), row=2, col=1)
 
                 fig_ts.update_layout(
-                    title=dict(text=f'<b>Time Series Comparison: {station} - {display_var}</b>', font=dict(size=14, color='black', family='Open Sans'), y=0.98, x=0.5, xanchor='center', yanchor='top'),
+                    title=dict(text=f'<b>Time Series Comparison: {station} - {display_var}</b>', font=dict(size=18, color='black', family='Open Sans'), y=0.98, x=0.5, xanchor='center', yanchor='top'),
                     template='plotly_white', hovermode='x unified', hoverlabel=dict(bgcolor='white', bordercolor='#cccccc', font=dict(family='Open Sans', size=13, color='#333333')),
                     legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='left', x=0, font=dict(size=16, color='black'), itemclick='toggle', itemdoubleclick=False),
-                    margin=dict(t=150, b=120), height=780, width=900
+                    margin=dict(t=120, b=120), height=780, width=900
                 )
                 fig_ts.update_xaxes(mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showspikes=True, spikemode='across', spikesnap='cursor', showgrid=True, tickfont=dict(family='Open Sans', color='black', size=14), minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False), tickformat='%H:%M<br>%m/%d', hoverformat='%b %d, %Y, %H:%M UTC')
                 fig_ts.update_xaxes(title_text='<br>Time (UTC)', titlefont=dict(family='Open Sans', color='black', size=18), rangeslider=dict(visible=True, thickness=0.06, bordercolor='black', borderwidth=1), row=2, col=1)
@@ -1708,7 +1708,9 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger, make_bar_plots=Fals
                 fig_stat_scat.add_trace(go.Scatter(
                     x=var_data[stat1], y=var_data[stat2], mode='markers',
                     customdata=var_data['ID'], hovertemplate=stat_scat_hover,
-                    name='Stations', marker=dict(size=10, color='#009E73', opacity=0.7, line=dict(color='black', width=1))
+                    name='Stations',
+                    showlegend=True,
+                    marker=dict(size=10, color='#009E73', opacity=0.7, line=dict(color='black', width=1))
                 ))
 
                 min_val = min(var_data[stat1].min(), var_data[stat2].min())
@@ -1734,7 +1736,8 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger, make_bar_plots=Fals
                     # Add 1:1 line
                     fig_stat_scat.add_trace(go.Scatter(
                         x=axis_range, y=axis_range,
-                        mode='lines', name='1:1 Line', hoverinfo='skip', showlegend=False, line=dict(color='black', dash='dash')
+                        mode='lines', name='1:1 Line', hoverinfo='skip', showlegend=False, line=dict(color='black', dash='dash',
+                                                                                                     width=1)
                     ))
 
                     # Add Bounded Threshold Lines. For RMSE and central
@@ -1743,56 +1746,90 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger, make_bar_plots=Fals
                     # anchored to the axis rather than floating in the plot.
                     if stat_key == 'central_freq':
                         fig_stat_scat.add_trace(go.Scatter(
-                            x=[axis_range[0], 90, 90], y=[90, 90, axis_range[0]],
-                            mode='lines', name='90% Target', showlegend=False, hoverinfo='skip',
+                            x=[axis_range[0]-10, 90, 90], y=[90, 90, axis_range[0]],
+                            mode='lines', name='90% Target', showlegend=True, hoverinfo='skip',
                             line=dict(color='red', width=1.5, dash='solid')
                         ))
                     elif stat_key == 'rmse' and X1 > 0:
                         # Draw target, 2x and 3x error thresholds as nested
                         # L-shaped red lines that reach the y-axis.
-                        for mult, dash in ((1, 'solid'), (2, 'dash'), (3, 'dot')):
+                        for mult, dash, color in ((1, 'solid', 'gold'), (2, 'solid', 'orange'), (3, 'solid', 'red')):
                             thr = X1 * mult
                             fig_stat_scat.add_trace(go.Scatter(
-                                x=[axis_range[0], thr, thr], y=[thr, thr, axis_range[0]],
+                                x=[axis_range[0]-10, thr, thr], y=[thr, thr, axis_range[0]-10],
                                 mode='lines',
                                 name=f'{mult}x Target Error' if mult > 1 else 'Target Error',
-                                showlegend=False, hoverinfo='skip',
-                                line=dict(color='red', width=1.5, dash=dash)
+                                showlegend=True, hoverinfo='skip',
+                                line=dict(color=color, width=1.5, dash=dash)
                             ))
                     elif stat_key == 'bias' and X1 > 0:
                         # Draw target, 2x and 3x error boxes centred on zero.
-                        for mult, dash in ((1, 'solid'), (2, 'dash'), (3, 'dot')):
+                        for mult, dash, color in ((1, 'solid', 'gold'), (2, 'solid', 'orange'), (3, 'solid', 'red')):
                             thr = X1 * mult
                             fig_stat_scat.add_trace(go.Scatter(
                                 x=[-thr, thr, thr, -thr, -thr], y=[-thr, -thr, thr, thr, -thr],
                                 mode='lines',
                                 name=f'{mult}x Target Error' if mult > 1 else 'Target Error',
-                                showlegend=False, hoverinfo='skip',
-                                line=dict(color='red', width=1.5, dash=dash)
+                                showlegend=True, hoverinfo='skip',
+                                line=dict(color=color, width=1.5, dash=dash)
                             ))
+                if stat_key != 'bias':
+                    # Top-Left Annotation
+                    fig_stat_scat.add_annotation(
+                        text=f'Higher {stat_display} for {ofs2.upper()}',
+                        xref='paper', yref='paper', x=0.02, y=0.98,
+                        xanchor='left', yanchor='top', showarrow=False,
+                        font=dict(family='Open Sans', size=15, color='black'),
+                        bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                    )
 
-                # Top-Left Annotation
-                fig_stat_scat.add_annotation(
-                    text=f'Higher {stat_display} for {ofs2.upper()}',
-                    xref='paper', yref='paper', x=0.02, y=0.98,
-                    xanchor='left', yanchor='top', showarrow=False,
-                    font=dict(family='Open Sans', size=15, color='black'),
-                    bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
-                )
-
-                # Bottom-Right Annotation
-                fig_stat_scat.add_annotation(
-                    text=f'Higher {stat_display} for {ofs1.upper()}',
-                    xref='paper', yref='paper', x=0.98, y=0.02,
-                    xanchor='right', yanchor='bottom', showarrow=False,
-                    font=dict(family='Open Sans', size=15, color='black'),
-                    bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
-                )
+                    # Bottom-Right Annotation
+                    fig_stat_scat.add_annotation(
+                        text=f'Higher {stat_display} for {ofs1.upper()}',
+                        xref='paper', yref='paper', x=0.98, y=0.02,
+                        xanchor='right', yanchor='bottom', showarrow=False,
+                        font=dict(family='Open Sans', size=15, color='black'),
+                        bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                    )
+                elif stat_key == 'bias':
+                    anno_size = 12
+                    # Top-Left Annotation
+                    fig_stat_scat.add_annotation(
+                        text=f'<i>{ofs2.upper()} overprediction,<br>{ofs1.upper()} underprediction</i>',
+                        xref='paper', yref='paper', x=0.02, y=0.98,
+                        xanchor='left', yanchor='top', showarrow=False,
+                        font=dict(family='Open Sans', size=anno_size, color='black'),
+                        bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                    )
+                    # Bottom-Right Annotation
+                    fig_stat_scat.add_annotation(
+                        text=f'<i>{ofs2.upper()} underprediction,<br>{ofs1.upper()} overprediction</i>',
+                        xref='paper', yref='paper', x=0.98, y=0.02,
+                        xanchor='right', yanchor='bottom', showarrow=False,
+                        font=dict(family='Open Sans', size=anno_size, color='black'),
+                        bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                    )
+                    # Bottom-Left Annotation
+                    fig_stat_scat.add_annotation(
+                        text=f'<i>{ofs2.upper()} underprediction,<br>{ofs1.upper()} underprediction</i>',
+                        xref='paper', yref='paper', x=0.02, y=0.02,
+                        xanchor='left', yanchor='bottom', showarrow=False,
+                        font=dict(family='Open Sans', size=anno_size, color='black'),
+                        bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                    )
+                    # Top-Right Annotation
+                    fig_stat_scat.add_annotation(
+                        text=f'<i>{ofs2.upper()} overprediction,<br>{ofs1.upper()} overprediction</i>',
+                        xref='paper', yref='paper', x=0.98, y=0.98,
+                        xanchor='right', yanchor='top', showarrow=False,
+                        font=dict(family='Open Sans', size=anno_size, color='black'),
+                        bgcolor='rgba(255, 255, 255, 0.8)', borderwidth=0
+                    )
 
                 fig_stat_scat.update_layout(
                     title=dict(
                         text=f'<b>{ofs1.upper()} vs {ofs2.upper()} {stat_display}: {display_var}</b>',
-                        font=dict(size=14, color='black', family='Open Sans'),
+                        font=dict(size=18, color='black', family='Open Sans'),
                         y=0.97, x=0.5, xanchor='center', yanchor='top',
                     ),
                     template='plotly_white', hovermode='closest',
@@ -1815,7 +1852,7 @@ def generate_stat_comparisons(ofs1, ofs2, home_path, logger, make_bar_plots=Fals
                 )
                 fig_stat_scat.update_yaxes(
                     title_text=f'{ofs2.upper()} {stat_display}', range=axis_range,
-                    titlefont=dict(family='Open Sans', color='black', size=17),
+                    titlefont=dict(family='Open Sans', color='black', size=18),
                     mirror=True, ticks='inside', showline=True, linecolor='black', linewidth=1, showgrid=True,
                     tickfont=dict(family='Open Sans', color='black', size=14),
                     minor=dict(ticklen=4, tickcolor='black', ticks='inside', showgrid=False),
