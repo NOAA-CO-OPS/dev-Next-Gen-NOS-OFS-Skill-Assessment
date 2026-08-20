@@ -1006,7 +1006,7 @@ def create_1dplot(prop, logger):
             prop.datum = 'IGLD85'
     except TypeError:
         if (vdatums == -9995) and prop.ofs.lower() in ('stofs_2d_glo','stofs_3d_atl','stofs_3d_pac'):
-            logger.info('No vdatum file for STOFS-2D-Global, as expected.')
+            logger.info('No vdatum file for %s, as expected.', prop.ofs)
         else:
             logger.error('Failure checking for datum netcdf file on the NODD S3 '
                         'bucket! Datum conversions may fail. Continuing...')
