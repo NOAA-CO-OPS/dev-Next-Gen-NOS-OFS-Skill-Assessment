@@ -3,6 +3,7 @@ Created July 2025
 
 @author: PWL
 """
+
 from __future__ import annotations
 
 import copy
@@ -27,7 +28,7 @@ sys.path.append(str(parent_dir))
 
 
 def make_table(grouped, info, prop, stat, by='modelcycles'):
-    '''
+    """
     Writes a table to file for a given statistic. Each table row is a station
     ID, and each column is either a model cycle (``by='modelcycles'``) or a
     6-hour forecast-horizon bin (``by='horizonbins'``). Two separate CSVs are
@@ -58,7 +59,7 @@ def make_table(grouped, info, prop, stat, by='modelcycles'):
     --------
     NOTHING.
     Writes a table to file.
-    '''
+    """
 
     # Get error range
     # X1, X2 = plotting_functions.get_error_range(info[0],prop,logger)
@@ -88,11 +89,11 @@ def make_table(grouped, info, prop, stat, by='modelcycles'):
 
 
 def get_yaxis_label(name_var, logger):
-    '''
+    """
     Simple function that takes a variable name (wl, salt, temp, cu) and returns
     strings that are then used for figure y-axis labels.
     Called by plotting functions below.
-    '''
+    """
     if name_var == 'wl':
         label_text = 'Water level'
     elif name_var == 'salt':
@@ -119,13 +120,14 @@ def get_yaxis_label(name_var, logger):
 
 
 def _format_cycle_label(col):
-    '''Format a model-cycle column name (YYYYMMDD-HHz-forecast) as MM/DD HH:00.'''
-    return (col.split('-')[0][4:6] + '/' + col.split('-')[0][6:8] + ' ' +
-            col.split('-')[1][0:2] + ':00')
+    """Format a model-cycle column name (YYYYMMDD-HHz-forecast) as MM/DD HH:00."""
+    return (
+        col.split('-')[0][4:6] + '/' + col.split('-')[0][6:8] + ' ' + col.split('-')[1][0:2] + ':00'
+    )
 
 
 def _format_horizonbin_label(col):
-    '''Format a forecast-horizon-bin column (an integer bin edge) as e.g. 0-6.'''
+    """Format a forecast-horizon-bin column (an integer bin edge) as e.g. 0-6."""
     try:
         top = int(float(col))
     except (TypeError, ValueError):
@@ -134,27 +136,28 @@ def _format_horizonbin_label(col):
 
 
 def _cf_scorecard_cmap():
-    '''Continuous red/green colormap + norm for the CF scorecard.
+    """Continuous red/green colormap + norm for the CF scorecard.
 
     Central frequency is a 0-100% score with a hard pass/fail break at 90%:
       * below 90%  -> red gradient (darker = worse)
       * at/above 90% -> green gradient (darker = better)
     The 90% break is placed proportionally (0.9 of the color range) so the
     colorbar can carry even 10% increments while still marking the threshold.
-    '''
+    """
     import matplotlib as mpl
     from matplotlib.colors import LinearSegmentedColormap, Normalize
+
     # Red ramp for [0, 90), green ramp for [90, 100]. The break lives at the
     # 0.9 position of the [0, 1] colormap domain (== 90 on a 0-100 Normalize).
     cmap = LinearSegmentedColormap.from_list(
         'cf_passfail',
         [
-            (0.00, '#b2182b'),   # dark red   (0%)
-            (0.45, '#f4a582'),   # light red
+            (0.00, '#b2182b'),  # dark red   (0%)
+            (0.45, '#f4a582'),  # light red
             (0.8999, '#fddbc7'),  # very light red, just below threshold
-            (0.90, '#d9f0d3'),   # very light green, at threshold
-            (0.95, '#7fbf7b'),   # medium green
-            (1.00, '#1b7837'),   # dark green (100%)
+            (0.90, '#d9f0d3'),  # very light green, at threshold
+            (0.95, '#7fbf7b'),  # medium green
+            (1.00, '#1b7837'),  # dark green (100%)
         ],
     )
     cmap.set_bad('white')  # NaN / no-data cells render white
@@ -162,12 +165,23 @@ def _cf_scorecard_cmap():
     return cmap, norm, mpl
 
 
-def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
-                    file_paths, suffix, title_prefix=None,
-                    row_sort=None, row_label_fmt=None,
-                    left_margin=0.12, title_fontsize=22,
-                    cbar_frac=0.625, cbar_gap=0.02):
-    '''
+def _make_scorecard(
+    prop,
+    logger,
+    by,
+    col_formatter,
+    xaxis_title,
+    file_paths,
+    suffix,
+    title_prefix=None,
+    row_sort=None,
+    row_label_fmt=None,
+    left_margin=0.12,
+    title_fontsize=22,
+    cbar_frac=0.625,
+    cbar_gap=0.02,
+):
+    """
     Build one matplotlib scorecard figure from the given per-variable CF
     tables. Rows are station IDs, columns are either model cycles or 6-hour
     forecast-horizon bins (per ``by``). Cells are colored by central
@@ -193,8 +207,9 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
     RETURNS:
     --------
     NOTHING. Writes a PNG to prop.visuals_horizon_path.
-    '''
+    """
     import matplotlib
+
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
@@ -221,19 +236,23 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
     per_var_w = 7.0
     per_row_h = 8.0
     fig = plt.figure(
-        figsize=(max(per_var_w * grid_cols, 9),
-                 per_row_h * grid_rows + 1.8),
+        figsize=(max(per_var_w * grid_cols, 9), per_row_h * grid_rows + 1.8),
     )
     gs = fig.add_gridspec(
-        nrows=grid_rows + 1, ncols=grid_cols,
+        nrows=grid_rows + 1,
+        ncols=grid_cols,
         height_ratios=[1] * grid_rows + [0.05],
         # Extra left/top margin so long y-labels and the suptitle are not
         # clipped by the page edge. Currents scorecards use a wider left
         # margin (passed in) because their per-station titles + bin labels
         # need more room. hspace controls the gap between the subplots and
         # the colorbar row (smaller for currents to tighten it up).
-        top=0.88, bottom=0.10, left=left_margin, right=0.96,
-        hspace=0.6, wspace=0.32,
+        top=0.88,
+        bottom=0.10,
+        left=left_margin,
+        right=0.96,
+        hspace=0.6,
+        wspace=0.32,
     )
     axes = [fig.add_subplot(gs[0, j]) for j in range(n_vars)]
     # Colorbar axis: keep the same thickness but set its length relative to
@@ -243,12 +262,14 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
     cax_full.set_axis_off()
     cb_pos = cax_full.get_position()
     cb_w = cb_pos.width * cbar_frac
-    cax = fig.add_axes([
-        cb_pos.x0 + (cb_pos.width - cb_w) / 2.0,  # centered horizontally
-        cb_pos.y0 + cbar_gap,                     # nudge up toward the plots
-        cb_w,
-        cb_pos.height,  # same thickness
-    ])
+    cax = fig.add_axes(
+        [
+            cb_pos.x0 + (cb_pos.width - cb_w) / 2.0,  # centered horizontally
+            cb_pos.y0 + cbar_gap,  # nudge up toward the plots
+            cb_w,
+            cb_pos.height,  # same thickness
+        ]
+    )
 
     mesh = None
     for j, (ax, filepath) in enumerate(zip(axes, file_paths)):
@@ -280,8 +301,10 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
                 np.arange(data.shape[1] + 1),
                 np.arange(data.shape[0] + 1),
                 data,
-                cmap=cmap, norm=norm,
-                edgecolors='white', linewidth=1.5,
+                cmap=cmap,
+                norm=norm,
+                edgecolors='white',
+                linewidth=1.5,
             )
             ax.set_title(title_var, fontsize=20, fontweight='bold')
             # X-axis: for model-cycle scorecards the label count can be large
@@ -304,9 +327,7 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
             n_rows = data.shape[0]
             y_step = int(np.ceil(n_rows / 30)) if n_rows > 30 else 1
             ax.set_yticks(np.arange(0, n_rows, y_step) + 0.5)
-            ax.set_yticklabels(
-                [row_labels[i] for i in range(0, n_rows, y_step)],
-                fontsize=12)
+            ax.set_yticklabels([row_labels[i] for i in range(0, n_rows, y_step)], fontsize=12)
             ax.set_ylabel('Station ID', fontsize=18)
             ax.set_xlabel(xaxis_title, fontsize=18)
             ax.tick_params(axis='x', labelsize=13)
@@ -315,17 +336,19 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
             ax.set_aspect('auto')
         except Exception as e_x:
             logger.error(
-                'Caught exception building %s scorecard subplot for %s! '
-                'Error: %s', by, filepath, e_x,
+                'Caught exception building %s scorecard subplot for %s! ' 'Error: %s',
+                by,
+                filepath,
+                e_x,
             )
             continue
 
-    titlestr = (f'{prop.ofs.upper()} forecast central frequency, '
-                f'{start_date_title} to {end_date_title}')
+    titlestr = (
+        f'{prop.ofs.upper()} forecast central frequency, ' f'{start_date_title} to {end_date_title}'
+    )
     if title_prefix:
         titlestr = f'{title_prefix}\n{titlestr}'
-    fig.suptitle(titlestr, fontsize=title_fontsize, fontweight='bold',
-                 y=0.975)
+    fig.suptitle(titlestr, fontsize=title_fontsize, fontweight='bold', y=0.975)
 
     if mesh is not None:
         # Sparse tick set so labels don't overlap on the (narrower) currents
@@ -333,20 +356,20 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
         # divider line reinforces the 90% break.
         cb_ticks = [0, 25, 50, 75, 90, 100]
         cbar = fig.colorbar(
-            mesh, cax=cax, orientation='horizontal',
+            mesh,
+            cax=cax,
+            orientation='horizontal',
             ticks=cb_ticks,
         )
         cbar.ax.tick_params(labelsize=15)
         cbar.ax.set_xticklabels([f'{v}%' for v in cb_ticks])
         # Emphasize the 90% acceptance threshold (red below, green at/above).
         cbar.ax.axvline(90, color='black', linewidth=2)
-        cbar.set_label(
-            'Central frequency  (pass \u2265 90%)', fontsize=18)
+        cbar.set_label('Central frequency  (pass \u2265 90%)', fontsize=18)
     else:
         cax.set_visible(False)
 
-    output_file = os.path.join(
-        prop.visuals_horizon_path, f'{prop.ofs}_cf_scorecard_{suffix}.png')
+    output_file = os.path.join(prop.visuals_horizon_path, f'{prop.ofs}_cf_scorecard_{suffix}.png')
     logger.debug('Writing file: %s', output_file)
     try:
         fig.savefig(output_file, dpi=150)
@@ -354,12 +377,11 @@ def _make_scorecard(prop, logger, by, col_formatter, xaxis_title,
         logger.error('Could not save %s scorecard! Error: %s', suffix, e_x)
     finally:
         plt.close(fig)
-    logger.info('Wrote %s central-frequency scorecard for %s.',
-                suffix, prop.ofs)
+    logger.info('Wrote %s central-frequency scorecard for %s.', suffix, prop.ofs)
 
 
 def make_flag_images(prop, logger):
-    '''
+    """
     Plotting function that writes 'scorecard' (flag) plots based on pass/fail
     acceptance criteria for central-frequency statistics, rendered with
     matplotlib. Each figure has one subplot per assessed variable with
@@ -390,11 +412,12 @@ def make_flag_images(prop, logger):
     --------
     NOTHING.
     Writes scorecard plots to file.
-    '''
+    """
+
     def _tables(by):
-        return sorted(glob.glob(os.path.join(
-            prop.data_horizon_1d_pair_path,
-            f'{prop.ofs}_*_{by}_cf.csv')))
+        return sorted(
+            glob.glob(os.path.join(prop.data_horizon_1d_pair_path, f'{prop.ofs}_*_{by}_cf.csv'))
+        )
 
     def _is_currents(fp):
         # CF filenames are '{ofs}_{namevar}_{by}_cf.csv'; currents -> 'cu'.
@@ -412,13 +435,11 @@ def make_flag_images(prop, logger):
 
     for by, fmt, xtitle in (
         ('modelcycles', _format_cycle_label, 'Model cycle'),
-        ('horizonbins', _format_horizonbin_label,
-         'Forecast horizon (hours)'),
+        ('horizonbins', _format_horizonbin_label, 'Forecast horizon (hours)'),
     ):
         all_tables = _tables(by)
         if not all_tables:
-            logger.info('No %s CF tables found for %s scorecard; skipping.',
-                        by, prop.ofs)
+            logger.info('No %s CF tables found for %s scorecard; skipping.', by, prop.ofs)
             continue
         currents = [f for f in all_tables if _is_currents(f)]
         scalars = [f for f in all_tables if not _is_currents(f)]
@@ -427,8 +448,13 @@ def make_flag_images(prop, logger):
         # as a single row of subplots (1 x n).
         if scalars:
             _make_scorecard(
-                prop, logger, by=by, col_formatter=fmt, xaxis_title=xtitle,
-                file_paths=scalars, suffix=by,
+                prop,
+                logger,
+                by=by,
+                col_formatter=fmt,
+                xaxis_title=xtitle,
+                file_paths=scalars,
+                suffix=by,
                 # Added explicit left_margin and smaller title_fontsize
                 # to prevent y-axis and title clipping
                 left_margin=0.18,
@@ -442,8 +468,7 @@ def make_flag_images(prop, logger):
             try:
                 cu_df = pd.read_csv(cu_table)
             except Exception as e_x:
-                logger.error('Could not read currents CF table %s! Error: %s',
-                             cu_table, e_x)
+                logger.error('Could not read currents CF table %s! Error: %s', cu_table, e_x)
                 cu_df = None
             if cu_df is not None and 'ID' in cu_df.columns:
                 stations = sorted({_station_of(i) for i in cu_df['ID']})
@@ -454,21 +479,25 @@ def make_flag_images(prop, logger):
                     # Write a temp per-station CF table so _make_scorecard can
                     # consume it with the same filename convention (var='cu').
                     tmp_path = os.path.join(
-                        prop.data_horizon_1d_pair_path,
-                        f'{prop.ofs}_cu_{station}_{by}_cf.csv')
+                        prop.data_horizon_1d_pair_path, f'{prop.ofs}_cu_{station}_{by}_cf.csv'
+                    )
                     try:
                         sub.to_csv(tmp_path, index=False)
                         _make_scorecard(
-                            prop, logger, by=by, col_formatter=fmt,
-                            xaxis_title=xtitle, file_paths=[tmp_path],
+                            prop,
+                            logger,
+                            by=by,
+                            col_formatter=fmt,
+                            xaxis_title=xtitle,
+                            file_paths=[tmp_path],
                             suffix=f'currents_{station}_{by}',
                             title_prefix=f'Current station {station}',
                             row_sort=_bin_key,
                             # Currents single-station scorecards need a wider
                             # left margin (long bin labels) and a slightly
                             # smaller title so neither is clipped by the page.
-                            left_margin=0.25, # Increased from 0.18 to prevent long bin label clipping
-                            title_fontsize=15, # Decreased from 17 to prevent multi-line title clipping
+                            left_margin=0.25,  # Increased from 0.18 to prevent long bin label clipping
+                            title_fontsize=15,  # Decreased from 17 to prevent multi-line title clipping
                             # Longer colorbar (0.625 * 1.5) so the % labels
                             # don't overlap on the single-subplot width, and
                             # nudge it up to reduce the gap to the plot.
@@ -484,9 +513,8 @@ def make_flag_images(prop, logger):
                             pass
 
 
-
 def make_horizonbin_plots(df_all, info, prop, logger):
-    '''
+    """
     Here we make bar subplots for each OFS station with 2 rows and 1 column.
     The first row is a bar plot showing RMSE and mean error (y axis) across
     6-hour forecast horizon bins (x axis), with each variable's target error
@@ -515,7 +543,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
     --------
     NOTHING.
     Writes a plot to file.
-    '''
+    """
 
     # Get error range
     error_range, _ = plotting_functions.get_error_range(info[0], prop, logger)
@@ -545,11 +573,12 @@ def make_horizonbin_plots(df_all, info, prop, logger):
             df_filt_mc.groupby(
                 'model_cycle',
             )['square_error'].mean(),
-        ), decimals=2,
+        ),
+        decimals=2,
     )
     error_hours_cycle = np.round(
-        df_filt_mc.groupby('model_cycle')['error'].
-        mean(), decimals=2,
+        df_filt_mc.groupby('model_cycle')['error'].mean(),
+        decimals=2,
     )
 
     # r_hours = df_all.groupby('hour_bins')[['OBS','OFS']].corr().iloc[0::2,-1]
@@ -559,31 +588,34 @@ def make_horizonbin_plots(df_all, info, prop, logger):
     # std_obs_hours = df_all.groupby('hour_bins')['OBS'].std()
     # Plots
     # Make hour bin (x axis) labels
-    barlabels = []
-    bins = np.insert(rmse_hours.index, 0, 0)
-    for i in range(len(bins)-1):
-        barstring = str(bins[i]) + '-' + str(bins[i+1])
-        barlabels.append(barstring)
+    barlabels = [_format_horizonbin_label(top) for top in rmse_hours.index]
     # Make model cycle bin (x axis) labels
     model_cycles = sorted(df_filt_mc['model_cycle'].unique())
     cyclelabels = []
     for i in range(len(model_cycles)):
-        cyclestr = model_cycles[i].split('-')[0][4:6] + '/' + \
-            model_cycles[i].split('-')[0][6:8] + ' ' + \
-            model_cycles[i].split('-')[1][0:2] + ':00'
+        cyclestr = (
+            model_cycles[i].split('-')[0][4:6]
+            + '/'
+            + model_cycles[i].split('-')[0][6:8]
+            + ' '
+            + model_cycles[i].split('-')[1][0:2]
+            + ':00'
+        )
         cyclelabels.append(cyclestr)
 
     # Create lists for looping
     xlabels = [barlabels, cyclelabels]
     ydatahours = [np.array(rmse_hours), np.array(error_hours)]
     ydatacycles = [np.array(rmse_hours_cycle), np.array(error_hours_cycle)]
-    #colorramps = ['deep', 'dense']
+    # colorramps = ['deep', 'dense']
     # Figure set-up
-    figheight=700
-    figwidth=800
+    figheight = 700
+    figwidth = 800
     nrows = 2
     fig = make_subplots(
-        rows=nrows, cols=1, vertical_spacing=0.2,
+        rows=nrows,
+        cols=1,
+        vertical_spacing=0.2,
         # shared_xaxes=True
     )
     showlegend = [True, False]
@@ -623,7 +655,9 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                     marker_line_width=1.5,
                     textposition='outside',
                     showlegend=showlegend[i],
-                ), row=i+1, col=1,
+                ),
+                row=i + 1,
+                col=1,
             )
             fig.add_trace(
                 go.Bar(
@@ -635,50 +669,61 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                     marker_line_width=1.5,
                     # line=dict(color='magenta'),
                     showlegend=showlegend[i],
-                ), row=i+1, col=1,
+                ),
+                row=i + 1,
+                col=1,
             )
             if ydata[1] is None:
                 fig.add_annotation(
                     text='<b>Not enough data points to calculate RMSE!</b>',
-                    xref='x domain', yref='y domain',
+                    xref='x domain',
+                    yref='y domain',
                     font={'size': 14, 'color': 'red'},
-                    x=0, y=0.0,
+                    x=0,
+                    y=0.0,
                     showarrow=False,
-                    row=i+1, col=1,
+                    row=i + 1,
+                    col=1,
                 )
                 logger.info(
-                    'Added low data points warning label to plot '
-                    'for station %s', info[2],
+                    'Added low data points warning label to plot ' 'for station %s',
+                    info[2],
                 )
             fig.add_hline(
-                y=error_range, line_color='darkorange',
+                y=error_range,
+                line_color='darkorange',
                 line_width=1.25,
                 line_dash='dash',
                 annotation_text='<b>Target error range</b>',
                 annotation_position='top left',
                 annotation_font_color='black',
                 annotation_font_size=13,
-                row=i+1, col=1,
+                row=i + 1,
+                col=1,
             )
             fig.add_hline(
-                y=-error_range, line_color='darkorange',
+                y=-error_range,
+                line_color='darkorange',
                 line_width=1.25,
                 line_dash='dash',
                 annotation_text='<b>Target error range</b>',
                 annotation_position='bottom right',
                 annotation_font_color='black',
                 annotation_font_size=13,
-                row=i+1, col=1,
+                row=i + 1,
+                col=1,
             )
             fig.add_hline(
-                y=0, line_color='black',
+                y=0,
+                line_color='black',
                 line_width=1,
-                row=i+1, col=1,
+                row=i + 1,
+                col=1,
             )
         except Exception as e_x:
             logger.error(
-                'Caught exception in make_horizonbin_plots loop! '
-                'Error: %s. Skipping plot!', e_x,
+                'Caught exception in make_horizonbin_plots loop! ' 'Error: %s. Skipping plot!',
+                e_x,
             )
             return
     try:
@@ -692,7 +737,9 @@ def make_horizonbin_plots(df_all, info, prop, logger):
             # titlefont_family='Open Sans',
         )
         fig.update_yaxes(
-            showline=True, linewidth=1, linecolor='black',
+            showline=True,
+            linewidth=1,
+            linecolor='black',
             mirror=True,
         )
         # Rotate tick labels 45 degrees on BOTH subplot x-axes (horizon bins
@@ -710,13 +757,15 @@ def make_horizonbin_plots(df_all, info, prop, logger):
             title_text='Forecast horizon (hours)',
             title_font={'size': 16, 'color': 'black', 'family': 'Open Sans'},
             # titlefont_family='Open Sans',
-            row=1, col=1,
+            row=1,
+            col=1,
         )
         fig.update_xaxes(
             title_text='Model cycle',
             title_font={'size': 16, 'color': 'black', 'family': 'Open Sans'},
             # titlefont_family='Open Sans',
-            row=2, col=1,
+            row=2,
+            col=1,
         )
         # Update layout
         prop111 = copy.deepcopy(prop)
@@ -741,15 +790,17 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 'text': figtitle,
                 'font': dict(size=14, color='black', family='Open Sans'),
                 'y': 0.97,
-                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top',
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top',
             },
             yaxis1={
                 'tickfont': dict(size=16),
-                'range': [-error_range*2, error_range*2],
+                'range': [-error_range * 2, error_range * 2],
             },
             yaxis2={
                 'tickfont': dict(size=16),
-                'range': [-error_range*2, error_range*2],
+                'range': [-error_range * 2, error_range * 2],
             },
             transition_ordering='traces first',
             dragmode='zoom',
@@ -770,30 +821,26 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 ),
             },
         )
-        output_file = (
-            f'{prop.visuals_horizon_path}/{prop.ofs}_'
-            f'{info[2]}_{info[7]}_rmse_bars'
-            )
+        output_file = f'{prop.visuals_horizon_path}/{prop.ofs}_' f'{info[2]}_{info[7]}_rmse_bars'
         fig_config = {
-        'toImageButtonOptions': {
-            'format': 'png',
-            'filename': output_file.split('/')[-1],
-            'height': figheight,
-            'width': figwidth,
-            'scale': 1
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': output_file.split('/')[-1],
+                'height': figheight,
+                'width': figwidth,
+                'scale': 1,
             }
         }
         logger.debug(f'Writing file: {output_file}')
-        fig.write_html(output_file+'.html',config=fig_config)
+        fig.write_html(output_file + '.html', config=fig_config)
         logger.debug(f'Finished writing file: {output_file}')
         if prop.static_plots:
             xydata = [xlabels, [ydatahours[0], ydatacycles[0]]]
-            make_static_plots.bar_plots(xydata, info, yaxistitle,
-                                        prop, logger)
+            make_static_plots.bar_plots(xydata, info, yaxistitle, prop, logger)
     except Exception as e_x:
         logger.error(
-            'Caught exception in make_horizonbin_plots formatting! '
-            'Error: %s. Skipping plot!', e_x,
+            'Caught exception in make_horizonbin_plots formatting! ' 'Error: %s. Skipping plot!',
+            e_x,
         )
         return
     # logger.info("Wrote bar plot for %s from make_horizonbin_plots",
@@ -801,7 +848,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
 
 
 def make_horizonbin_freq_plots(df_all, info, prop, logger):
-    '''
+    """
     Here we make bar subplots for each OFS station with 2 rows and 1 column.
     The first row is a bar plot showing central frequency (y axis) across
     6-hour forecast horizon bins (x axis), with the 90% acceptance criteria
@@ -830,7 +877,7 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
     --------
     NOTHING.
     Writes a plot to file.
-    '''
+    """
     # Get error range
     error_range, _ = plotting_functions.get_error_range(info[0], prop, logger)
 
@@ -844,18 +891,24 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
 
     # Stats
     cf_hours = np.round(
-        100*(
-            df_filt_hb.groupby('hour_bins')['error'].
-            apply(lambda x: ((x <= error_range) & (x >= -error_range)).sum())
-        ) /
-        df_filt_hb.groupby('hour_bins')['error'].count(), decimals=2,
+        100
+        * (
+            df_filt_hb.groupby('hour_bins')['error'].apply(
+                lambda x: ((x <= error_range) & (x >= -error_range)).sum()
+            )
+        )
+        / df_filt_hb.groupby('hour_bins')['error'].count(),
+        decimals=2,
     )
     cf_hours_cycle = np.round(
-        100*(
-            df_filt_mc.groupby('model_cycle')['error'].
-            apply(lambda x: ((x <= error_range) & (x >= -error_range)).sum())
-        ) /
-        df_filt_mc.groupby('model_cycle')['error'].count(), decimals=2,
+        100
+        * (
+            df_filt_mc.groupby('model_cycle')['error'].apply(
+                lambda x: ((x <= error_range) & (x >= -error_range)).sum()
+            )
+        )
+        / df_filt_mc.groupby('model_cycle')['error'].count(),
+        decimals=2,
     )
     # Make tables: one keyed by model cycle, one by 6-hour forecast-horizon
     # bin. Both feed the two scorecard flavours in make_flag_images.
@@ -863,28 +916,29 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
     make_table(cf_hours, info, prop, 'cf', by='horizonbins')
     # Plots
     # Make hour bin (x axis) labels
-    barlabels = []
-    bins = np.insert(cf_hours.index, 0, 0)
-    for i in range(len(bins)-1):
-        barstring = str(bins[i]) + '-' + str(bins[i+1])
-        barlabels.append(barstring)
+    barlabels = [_format_horizonbin_label(top) for top in cf_hours.index]
     # Make model cycle bin (x axis) labels
     model_cycles = sorted(df_filt_mc['model_cycle'].unique())
     cyclelabels = []
     for i in range(len(model_cycles)):
-        cyclestr = model_cycles[i].split('-')[0][4:6] + '/' + \
-            model_cycles[i].split('-')[0][6:8] + ' ' + \
-            model_cycles[i].split('-')[1][0:2] + ':00'
+        cyclestr = (
+            model_cycles[i].split('-')[0][4:6]
+            + '/'
+            + model_cycles[i].split('-')[0][6:8]
+            + ' '
+            + model_cycles[i].split('-')[1][0:2]
+            + ':00'
+        )
         cyclelabels.append(cyclestr)
 
     # Create lists for looping
     xlabels = [barlabels, cyclelabels]
     ydatahours = [np.array(cf_hours)]
     ydatacycles = [np.array(cf_hours_cycle)]
-    #colorramps = ['deep', 'dense']
+    # colorramps = ['deep', 'dense']
     # Figure set-up
-    figheight=700
-    figwidth=800
+    figheight = 700
+    figwidth = 800
     nrows = 2
     fig = make_subplots(rows=nrows, cols=1, vertical_spacing=0.2)
     showlegend = [False, False]
@@ -895,7 +949,7 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
                 ydata = ydatahours
             else:
                 ydata = ydatacycles
-            #n_colors = len(ydata[0])
+            # n_colors = len(ydata[0])
             # colors = px.colors.sample_colorscale(
             #     colorramps[i], [n/(n_colors - 1) for n in range(n_colors)],
             # )
@@ -911,40 +965,49 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
                     marker_line_width=0.75,
                     textposition='outside',
                     showlegend=showlegend[i],
-                ), row=i+1, col=1,
+                ),
+                row=i + 1,
+                col=1,
             )
             if ydata[0] is None:
                 fig.add_annotation(
                     text='<b>Not enough data points to calculate stats!</b>',
-                    xref='x domain', yref='y domain',
+                    xref='x domain',
+                    yref='y domain',
                     font={'size': 14, 'color': 'red'},
-                    x=0, y=0.0,
+                    x=0,
+                    y=0.0,
                     showarrow=False,
-                    row=i+1, col=1,
+                    row=i + 1,
+                    col=1,
                 )
                 logger.error(
-                    'Added low data points warning label to plot '
-                    'for station %s', info[2],
+                    'Added low data points warning label to plot ' 'for station %s',
+                    info[2],
                 )
             fig.add_hline(
-                y=90, line_color='darkred',
+                y=90,
+                line_color='darkred',
                 line_width=1.25,
                 line_dash='dash',
                 annotation_text='<b>90% acceptance criteria</b>',
                 annotation_position='top left',
                 annotation_font_color='black',
                 annotation_font_size=13,
-                row=i+1, col=1,
+                row=i + 1,
+                col=1,
             )
             fig.add_hline(
-                y=0, line_color='black',
+                y=0,
+                line_color='black',
                 line_width=1,
-                row=i+1, col=1,
+                row=i + 1,
+                col=1,
             )
         except Exception as e_x:
             logger.error(
-                'Caught exception in make_horizonbin_freq_plots loop! '
-                'Error: %s. Skipping plot!', e_x,
+                'Caught exception in make_horizonbin_freq_plots loop! ' 'Error: %s. Skipping plot!',
+                e_x,
             )
             return
     try:
@@ -957,7 +1020,9 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
             # titlefont_family='Open Sans',
         )
         fig.update_yaxes(
-            showline=True, linewidth=1, linecolor='black',
+            showline=True,
+            linewidth=1,
+            linecolor='black',
             mirror=True,
         )
         fig.update_xaxes(
@@ -972,13 +1037,15 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
             title_text='Forecast horizon (hours)',
             title_font={'size': 16, 'color': 'black', 'family': 'Open Sans'},
             # titlefont_family='Open Sans',
-            row=1, col=1,
+            row=1,
+            col=1,
         )
         fig.update_xaxes(
             title_text='Model cycle',
             title_font={'size': 16, 'color': 'black', 'family': 'Open Sans'},
             # titlefont_family='Open Sans',
-            row=2, col=1,
+            row=2,
+            col=1,
         )
         # update layout
         prop111 = copy.deepcopy(prop)
@@ -1003,7 +1070,9 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
                 'text': figtitle,
                 'font': dict(size=14, color='black', family='Open Sans'),
                 'y': 0.97,
-                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top',
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top',
             },
             yaxis1={
                 'tickfont': dict(size=16),
@@ -1017,7 +1086,7 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
             dragmode='zoom',
             hovermode='x unified',
             height=figheight,
-            width=figheight,
+            width=figwidth,
             template='plotly_white',
             # barmode='group',
             # Generous top margin so multi-line titles (esp. currents) do not
@@ -1031,30 +1100,27 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
                 ),
             },
         )
-        output_file = (
-            f'{prop.visuals_horizon_path}/{prop.ofs}_'
-            f'{info[2]}_{info[7]}_cfreq_bars'
-            )
+        output_file = f'{prop.visuals_horizon_path}/{prop.ofs}_' f'{info[2]}_{info[7]}_cfreq_bars'
         fig_config = {
-        'toImageButtonOptions': {
-            'format': 'png',
-            'filename': output_file.split('/')[-1],
-            'height': figheight,
-            'width': figwidth,
-            'scale': 1
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': output_file.split('/')[-1],
+                'height': figheight,
+                'width': figwidth,
+                'scale': 1,
             }
         }
         logger.debug(f'Writing file: {output_file}')
-        fig.write_html(output_file+'.html',config=fig_config)
+        fig.write_html(output_file + '.html', config=fig_config)
         if prop.static_plots:
             xydata = [xlabels, [ydatahours[0], ydatacycles[0]]]
-            make_static_plots.bar_plots(xydata, info, yaxistitle,
-                                        prop, logger)
+            make_static_plots.bar_plots(xydata, info, yaxistitle, prop, logger)
         logger.debug(f'Finished writing file: {output_file}')
     except Exception as e_x:
         logger.error(
             'Caught exception in make_horizonbin_freq_plots '
-            'formatting! Error: %s. Skipping plot!', e_x,
+            'formatting! Error: %s. Skipping plot!',
+            e_x,
         )
         return
     # logger.info("Wrote bar plot for %s from make_horizonbin_freq_plots",
@@ -1062,7 +1128,7 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
 
 
 def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
-    '''
+    """
     Here we make subplots (2x1) time series of observations and all model
     cycles for each OFS station. First row is a time series of obs and model
     data. Second row is a time series of error (model minus obs) for each
@@ -1094,7 +1160,7 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
     --------
     NOTHING.
     Writes a plot to file.
-    '''
+    """
 
     # Get error range
     error_range, _ = plotting_functions.get_error_range(info[0], prop, logger)
@@ -1108,13 +1174,16 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
     figheight = 600
     nrows = 2
     fig = make_subplots(
-        rows=nrows, cols=1, vertical_spacing=0.055,
+        rows=nrows,
+        cols=1,
+        vertical_spacing=0.055,
         # subplot_titles=(prop.whichcasts),
         shared_xaxes=True,
     )
     n_colors = len(forecast_cols_sort)
     colors = px.colors.sample_colorscale(
-        'Turbo', [n/(n_colors - 1) for n in range(n_colors)],
+        'Turbo',
+        [n / (n_colors - 1) for n in range(n_colors)],
     )
     # Track which trace belongs to which model cycle so the dropdown can
     # toggle visibility. Index 0 is always the (always-visible) obs trace.
@@ -1132,16 +1201,24 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
                 # Show only the y-value, rounded to 2 decimals, consistently
                 # across every trace (no date/time header).
                 hovertemplate='%{y:.2f}<extra></extra>',
-            ), row=1, col=1,
+            ),
+            row=1,
+            col=1,
         )
 
         # Next add all model + error time series
         trace_idx = 1  # obs is trace 0
         for i, fcst_col in enumerate(forecast_cols_sort):
-            trace_name = fcst_col.split('-')[0][4:6] + '/' + \
-                fcst_col.split('-')[0][6:] + '/' + \
-                fcst_col.split('-')[0][0:4] + ' ' + \
-                fcst_col.split('-')[1][0:2] + 'Z'
+            trace_name = (
+                fcst_col.split('-')[0][4:6]
+                + '/'
+                + fcst_col.split('-')[0][6:]
+                + '/'
+                + fcst_col.split('-')[0][0:4]
+                + ' '
+                + fcst_col.split('-')[1][0:2]
+                + 'Z'
+            )
             df_filt = df_all[df_all['model_cycle'] == fcst_col]
             fig.add_trace(
                 go.Scatter(
@@ -1152,7 +1229,9 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
                     name=trace_name,
                     line={'color': colors[i], 'width': 1.25},
                     hovertemplate='%{y:.2f}<extra></extra>',
-                ), row=1, col=1,
+                ),
+                row=1,
+                col=1,
             )
             cycle_trace_map[i].append(trace_idx)
             trace_idx += 1
@@ -1164,40 +1243,48 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
                     name=trace_name,
                     line={'color': colors[i], 'width': 1.25},
                     hovertemplate='%{y:.2f}<extra></extra>',
-                ), row=2, col=1,
+                ),
+                row=2,
+                col=1,
             )
             cycle_trace_map[i].append(trace_idx)
             trace_idx += 1
     except Exception as e_x:
         logger.error(
-            'Caught exception in make_timeseries_plots loop!'
-            'Skipping plot. Error: %s', e_x,
+            'Caught exception in make_timeseries_plots loop!' 'Skipping plot. Error: %s',
+            e_x,
         )
     try:
         # add target error ranges
         fig.add_hline(
-            y=0, line={'width': 1},
-            row=2, col=1,
+            y=0,
+            line={'width': 1},
+            row=2,
+            col=1,
         )
         fig.add_hline(
-            y=error_range, line_color='red',
+            y=error_range,
+            line_color='red',
             line_width=1,
             line_dash='dash',
             annotation_text='Target error range',
             annotation_position='top left',
             annotation_font_color='black',
             annotation_font_size=12,
-            row=2, col=1,
+            row=2,
+            col=1,
         )
         fig.add_hline(
-            y=-error_range, line_color='red',
+            y=-error_range,
+            line_color='red',
             line_width=1,
             line_dash='dash',
             annotation_text='Target error range',
             annotation_position='bottom right',
             annotation_font_color='black',
             annotation_font_size=12,
-            row=2, col=1,
+            row=2,
+            col=1,
         )
         # Set figure properties
         yaxis_label, unit_label = get_yaxis_label(info[0], logger)
@@ -1215,16 +1302,21 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
         fig.update_yaxes(
             title_text=value_title,
             # range=[0, 100],
-            row=1, col=1,
+            row=1,
+            col=1,
         )
         fig.update_yaxes(
             title_text=error_title,
-            range=[-error_range*3, error_range*3],
-            row=2, col=1,
+            range=[-error_range * 3, error_range * 3],
+            row=2,
+            col=1,
         )
         fig.update_yaxes(
-            showline=True, linewidth=1, linecolor='black',
-            mirror=True, title_font={'size': 14, 'color': 'black'},
+            showline=True,
+            linewidth=1,
+            linecolor='black',
+            mirror=True,
+            title_font={'size': 14, 'color': 'black'},
             title_standoff=8,
         )
         fig.update_xaxes(
@@ -1266,15 +1358,23 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
             }
         ]
         for i, fcst_col in enumerate(forecast_cols_sort):
-            cyclestr = fcst_col.split('-')[0][4:6] + '/' + \
-                fcst_col.split('-')[0][6:8] + '/' + \
-                fcst_col.split('-')[0][0:4] + ' ' + \
-                fcst_col.split('-')[1][0:2] + 'Z'
-            buttons.append({
-                'label': cyclestr,
-                'method': 'update',
-                'args': [{'visible': _vis_mask(i)}],
-            })
+            cyclestr = (
+                fcst_col.split('-')[0][4:6]
+                + '/'
+                + fcst_col.split('-')[0][6:8]
+                + '/'
+                + fcst_col.split('-')[0][0:4]
+                + ' '
+                + fcst_col.split('-')[1][0:2]
+                + 'Z'
+            )
+            buttons.append(
+                {
+                    'label': cyclestr,
+                    'method': 'update',
+                    'args': [{'visible': _vis_mask(i)}],
+                }
+            )
 
         # update layout
         prop111 = copy.deepcopy(prop)
@@ -1313,35 +1413,43 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
                 'text': figtitle,
                 'font': dict(size=14, color='black', family='Open Sans'),
                 'y': title_y,
-                'x': 0.5, 'xanchor': 'center', 'yanchor': 'top',
+                'x': 0.5,
+                'xanchor': 'center',
+                'yanchor': 'top',
             },
-            updatemenus=[{
-                'buttons': buttons,
-                'direction': 'down',
-                'showactive': True,
-                'x': 1.0,
-                'xanchor': 'right',
-                'y': menu_y,
-                'yanchor': 'middle',
-                'pad': {'r': 5, 't': 5},
-                'bgcolor': 'white',
-                'bordercolor': 'black',
-                'borderwidth': 1,
-                'font': {'size': 12, 'color': 'black',
-                         'family': 'Open Sans'},
-            }],
-            annotations=[{
-                'text': 'Model cycle:',
-                'showarrow': False,
-                'x': 0.78, 'xref': 'paper', 'xanchor': 'right',
-                'y': menu_y, 'yref': 'paper', 'yanchor': 'middle',
-                'font': {'size': 15, 'color': 'black',
-                         'family': 'Open Sans'},
-            }],
+            updatemenus=[
+                {
+                    'buttons': buttons,
+                    'direction': 'down',
+                    'showactive': True,
+                    'x': 1.0,
+                    'xanchor': 'right',
+                    'y': menu_y,
+                    'yanchor': 'middle',
+                    'pad': {'r': 5, 't': 5},
+                    'bgcolor': 'white',
+                    'bordercolor': 'black',
+                    'borderwidth': 1,
+                    'font': {'size': 12, 'color': 'black', 'family': 'Open Sans'},
+                }
+            ],
+            annotations=[
+                {
+                    'text': 'Model cycle:',
+                    'showarrow': False,
+                    'x': 0.78,
+                    'xref': 'paper',
+                    'xanchor': 'right',
+                    'y': menu_y,
+                    'yref': 'paper',
+                    'yanchor': 'middle',
+                    'font': {'size': 15, 'color': 'black', 'family': 'Open Sans'},
+                }
+            ],
             yaxis1={'tickfont': dict(size=16)},
             yaxis2={
                 'tickfont': dict(size=16),
-                'range': [-error_range*2, error_range*2],
+                'range': [-error_range * 2, error_range * 2],
             },
             transition_ordering='traces first',
             dragmode='zoom',
@@ -1357,25 +1465,22 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
                 'bgcolor': 'rgba(0,0,0,0)',
             },
         )
-        output_file = (
-            f'{prop.visuals_horizon_path}/{prop.ofs}_'
-            f'{info[2]}_{info[7]}_cycle_series'
-            )
+        output_file = f'{prop.visuals_horizon_path}/{prop.ofs}_' f'{info[2]}_{info[7]}_cycle_series'
         fig_config = {
-        'toImageButtonOptions': {
-            'format': 'png',
-            'filename': output_file.split('/')[-1],
-            'height': figheight,
-            'width': figwidth,
-            'scale': 1
+            'toImageButtonOptions': {
+                'format': 'png',
+                'filename': output_file.split('/')[-1],
+                'height': figheight,
+                'width': figwidth,
+                'scale': 1,
             }
         }
         logger.debug(f'Writing file: {output_file}')
-        fig.write_html(output_file+'.html',config=fig_config)
+        fig.write_html(output_file + '.html', config=fig_config)
         logger.debug(f'Finished writing file: {output_file}')
     except Exception as e_x:
         logger.error(
-            'Caught exception in make_timeseries_plots '
-            'formatting! Error: %s. Skipping plot!', e_x,
+            'Caught exception in make_timeseries_plots ' 'formatting! Error: %s. Skipping plot!',
+            e_x,
         )
         return
