@@ -1068,6 +1068,13 @@ def create_1dplot(prop, logger):
 
     logger.info('Parameter validation complete!')
     logger.info('Making directory tree...')
+
+    # First check netcdf_dir
+    if 'stofs' not in prop.ofs and dir_params['netcdf_dir'] != 'netcdf':
+        logger.error('Set `netcdf_dir=netcdf` in your conf file and retry. '
+                     'It is set incorrectly.')
+        sys.exit(-1)
+
     prop.control_files_path = os.path.join(
         prop.path, dir_params['control_files_dir'])
     os.makedirs(prop.control_files_path, exist_ok=True)

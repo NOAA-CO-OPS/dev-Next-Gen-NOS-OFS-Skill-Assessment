@@ -381,8 +381,11 @@ def _process_coops_station(
                 ):
                     ldatum = _normalize_vdatum_name(datum).lower()
                     dummyval = 10
+                    datum_found_temp = datum_found
+                    if datum_found_temp.upper() == 'MSL':
+                        datum_found_temp = 'lmsl'
                     _, _, z = vdatum_resilient.convert(
-                        str(datum_found).lower(),
+                        str(datum_found_temp).lower(),
                         ldatum,
                         y_value,
                         x_value,
