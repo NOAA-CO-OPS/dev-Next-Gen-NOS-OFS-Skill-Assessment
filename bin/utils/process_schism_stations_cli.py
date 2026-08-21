@@ -390,9 +390,10 @@ def process_schism_stations(prop, logger):
     parameter_validation(prop, dir_params, logger)
 
     # Path for saving netcdfs
-    prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
-    )
+    prop.model_path = os.path.join(dir_params['model_historical_dir'], prop.ofs)
+
+    if 'stofs' not in prop.ofs:
+        prop.model_path = os.path.join(prop.model_path, dir_params['netcdf_dir'])
     prop.model_path = Path(prop.model_path).as_posix()
 
     # -----> Done with set-up
