@@ -2,14 +2,14 @@
 
 Reproduces the reported failure mode: a user runs the pipeline for one date
 window, then re-runs for a different window (or different station-owner /
-datum) in the SAME working directory without deleting ``./data`` and
-``./control_files``. Before the cache-manifest guard, the second run reused
+datum) in the SAME working directory without deleting ./data and
+./control_files. Before the cache-manifest guard, the second run reused
 the first run's control files verbatim -- pinning the wrong station/node set
 -- and produced incorrect results.
 
-These tests drive ``cache_manifest.ensure_fresh`` the same way the real
-gates do (``write_obs_ctlfile``, ``write_ofs_ctlfile``,
-``get_station_observations``, ``get_skill``, ``create_1dplot``) and assert
+These tests drive cache_manifest.ensure_fresh the same way the real
+gates do (write_obs_ctlfile, write_ofs_ctlfile,
+get_station_observations, get_skill, create_1dplot) and assert
 that a parameter change forces regeneration while an identical rerun reuses.
 """
 
@@ -33,11 +33,11 @@ def _prop(**overrides):
     return SimpleNamespace(**base)
 
 
-def _build_ctl(path, signature, contents='node depth ... id shift\n'):
+def _build_ctl(path, signature, base_dir, contents='node depth ... id shift\n'):
     """Mimic a gate writing a ctl and stamping its signature."""
     with open(path, 'w', encoding='utf-8') as handle:
         handle.write(contents)
-    cm.record_artifact(path, signature)
+    cm.record_artifact(path, signature, base_dir)
 
 
 def test_second_window_regenerates_stale_ctl(tmp_path):
@@ -47,7 +47,7 @@ def test_second_window_regenerates_stale_ctl(tmp_path):
     # --- Run A: window 2026-06-01..02 ---
     prop_a = _prop()
     sig_a = cm.run_signature(prop_a, variable='water_level')
-    _build_ctl(ctl, sig_a, contents='RUN_A_STATIONS\n')
+    _build_ctl(ctl, sig_a, str(tmp_path), contents='RUN_A_STATIONS\n')
 
     # Same-parameter rerun reuses verbatim (fast path, no regeneration).
     assert cm.ensure_fresh(ctl, sig_a, str(tmp_path), 'obs ctl') is True
@@ -65,7 +65,7 @@ def test_second_window_regenerates_stale_ctl(tmp_path):
     assert not os.path.exists(ctl)
 
     # Caller rebuilds for window B and stamps the new signature.
-    _build_ctl(ctl, sig_b, contents='RUN_B_STATIONS\n')
+    _build_ctl(ctl, sig_b, str(tmp_path), contents='RUN_B_STATIONS\n')
     assert cm.ensure_fresh(ctl, sig_b, str(tmp_path), 'obs ctl') is True
     with open(ctl, encoding='utf-8') as handle:
         assert 'RUN_B_STATIONS' in handle.read()
@@ -76,7 +76,7 @@ def test_stationowner_change_regenerates(tmp_path):
     ctl = str(tmp_path / 'cbofs_wl_station.ctl')
     sig_all = cm.run_signature(
         _prop(stationowner='co-ops,ndbc,usgs,chs'), variable='water_level')
-    _build_ctl(ctl, sig_all, contents='ALL_PROVIDERS\n')
+    _build_ctl(ctl, sig_all, str(tmp_path), contents='ALL_PROVIDERS\n')
 
     sig_coops = cm.run_signature(
         _prop(stationowner='co-ops'), variable='water_level')
@@ -100,7 +100,7 @@ def test_inventory_regenerates_on_window_change(tmp_path):
     sig_a = inv_sig('20260601', '20260602', 'co-ops,ndbc')
     with open(inv, 'w', encoding='utf-8') as handle:
         handle.write('ID,X,Y,Source,Name\n8638610,-76,37,CO-OPS,x\n')
-    cm.record_artifact(inv, sig_a)
+    cm.record_artifact(inv, sig_a, str(tmp_path))
     assert cm.ensure_fresh(inv, sig_a, str(tmp_path), 'inventory') is True
 
     sig_b = inv_sig('20260701', '20260702', 'co-ops,ndbc')
@@ -122,7 +122,7 @@ def test_prd_int_regenerate_on_datum_change(tmp_path):
     for path, sig in ((prd, prd_sig), (intf, int_sig)):
         with open(path, 'w', encoding='utf-8') as handle:
             handle.write('DNUM YEAR MONTH DAY HOUR MINUTE VAL\n')
-        cm.record_artifact(path, sig)
+        cm.record_artifact(path, sig, str(tmp_path))
 
     # Same params -> reuse.
     assert cm.artifact_is_fresh(prd, prd_sig) is True
@@ -150,7 +150,7 @@ def test_identical_rerun_reuses_all(tmp_path):
     }
     for name, sig in paths.items():
         p = str(tmp_path / name)
-        _build_ctl(p, sig)
+        _build_ctl(p, sig, str(tmp_path))
     # Second run, same params: everything fresh, nothing tallied stale.
     for name, sig in paths.items():
         p = str(tmp_path / name)

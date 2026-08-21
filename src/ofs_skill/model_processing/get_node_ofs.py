@@ -1858,6 +1858,7 @@ def get_node_ofs(prop, logger, model_dataset=None):
                             prop_local, variable=variable,
                             extra={'whichcast': prop_local.whichcast,
                                    'forecast_hr': prop_local.forecast_hr}),
+                        prop.data_model_1d_node_path,
                         logger)
                 elif (prop_local.horizonskill and os.path.isfile(
                         f'{prop_local.data_model_1d_node_path}/'
@@ -1933,6 +1934,7 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         cache_manifest.run_signature(
                             prop_local, variable=variable,
                             extra={'whichcast': prop_local.whichcast}),
+                        prop.data_model_1d_node_path,
                         logger)
 
                 return (datum_offset, model_station)

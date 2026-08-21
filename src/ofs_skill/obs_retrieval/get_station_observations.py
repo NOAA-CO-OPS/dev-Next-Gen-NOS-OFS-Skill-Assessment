@@ -654,7 +654,7 @@ def _fetch_and_format_station(
                 # this file and a changed-parameter run treats it as stale.
                 if obs_signature is not None:
                     cache_manifest.record_artifact(
-                        obs_path, obs_signature, logger)
+                        obs_path, obs_signature, data_observations_1d_station_path, logger)
                 return station_id
             else:
                 logger.info('Formatted %s time series '
@@ -846,6 +846,7 @@ def _process_variable_obs(
                     cache_manifest.record_artifact(
                         other_path,
                         cache_manifest.run_signature(prop, variable=other_var),
+                        prop.control_files_path,
                         logger)
 
     logger.info('Downloading data found in the station ctl files')

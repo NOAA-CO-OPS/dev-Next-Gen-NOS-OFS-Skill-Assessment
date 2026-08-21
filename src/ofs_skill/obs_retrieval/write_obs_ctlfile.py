@@ -1157,7 +1157,7 @@ def write_obs_ctlfile(
     # Record the signature for the (possibly freshly built) inventory so a
     # same-parameter rerun reuses it and a changed-parameter run rebuilds it.
     cache_manifest.record_artifact(
-        inventory_path, inventory_signature, logger)
+        inventory_path, inventory_signature, control_files_path, logger)
 
     logger.info('Downloading data from the Inventory file!')
 

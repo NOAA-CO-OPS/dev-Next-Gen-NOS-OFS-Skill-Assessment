@@ -1000,7 +1000,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                     variable,
                 )
                 cache_manifest.record_artifact(
-                    model_ctl_path, ctl_signature, logger)
+                    model_ctl_path, ctl_signature, prop.control_files_path, logger)
             else:
                 logger.info('Observation ctl file is blank for %s. '
                             'Model ctl file will also be blank', name_var)
@@ -1021,7 +1021,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                     ) as output:
                         pass
                 cache_manifest.record_artifact(
-                    model_ctl_path, ctl_signature, logger)
+                    model_ctl_path, ctl_signature, prop.control_files_path, logger)
         else:
             logger.info(
                 'Model Control File (%s_%s_model.ctl) found in %s. If you '

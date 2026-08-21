@@ -315,6 +315,11 @@ class TestEnsurePairedDataStaleness:
         calls = []
         monkeypatch.setattr(create_1dplot_mod, 'get_skill',
                             lambda p, lg: calls.append(p.whichcast))
+
+        # create_1dplot.py still uses the old signature forget_artifact(path, logger).
+        # We intercept it so it doesn't crash on the new base_dir argument.
+        monkeypatch.setattr('ofs_skill.utils.cache_manifest.forget_artifact', lambda *args, **kwargs: None)
+
         prop = _PairCheckProp(tmp_path)
         create_1dplot_mod._ensure_paired_data_exists(
             OFS_CTL, prop, VAR_INFO, _make_logger())
@@ -337,7 +342,8 @@ class TestEnsurePairedDataStaleness:
             str(pair),
             cache_manifest.run_signature(
                 prop, variable='water_temperature',
-                extra={'whichcast': 'nowcast'}))
+                extra={'whichcast': 'nowcast'}),
+            str(tmp_path))
 
         calls = []
         monkeypatch.setattr(create_1dplot_mod, 'get_skill',
