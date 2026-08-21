@@ -31,7 +31,6 @@ Design choices:
 
 import contextlib
 import json
-import logging
 import os
 import threading
 
@@ -165,15 +164,27 @@ def run_signature(prop, *, variable=None, extra=None) -> dict:
     }
 
     # Fold in the custom XY file fingerprint if the user override is active
-    if getattr(prop, 'user_input_location', False):
+    user_loc = getattr(prop, 'user_input_location', False)
+    if str(user_loc).strip().lower() in ('true', '1', 'yes', 't'):
         try:
+            import configparser
+
             from ofs_skill.obs_retrieval.utils import Utils
+
             _conf = getattr(prop, 'config_file', None)
-            # Pass a valid Logger object instead of None to satisfy the type checker
-            xy_path = Utils(_conf).read_config_section(
-                'user_xy_inputs', logging.getLogger(__name__)
-            ).get('user_xy_path')
-            sig['user_xy_path'] = file_fingerprint(xy_path)
+            if not _conf:
+                _conf = Utils().get_config_file()
+
+            parser = configparser.ConfigParser()
+            # parser.read safely ignores missing files without crashing
+            if _conf and os.path.isfile(_conf):
+                parser.read(_conf)
+
+            if parser.has_option('user_xy_inputs', 'user_xy_path'):
+                xy_path = parser.get('user_xy_inputs', 'user_xy_path')
+                sig['user_xy_path'] = file_fingerprint(xy_path)
+            else:
+                sig['user_xy_path'] = None
         except Exception:
             # Degrade gracefully if the config section/file is malformed or missing
             sig['user_xy_path'] = None
