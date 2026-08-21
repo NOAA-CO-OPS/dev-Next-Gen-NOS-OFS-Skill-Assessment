@@ -1,8 +1,8 @@
 """Unit tests for the per-directory cache manifest (stale-cache guard).
 
-The 1D pipeline caches artifacts (``*.ctl``, ``inventory_all_{ofs}.csv``,
-``*.obs``, ``*.prd``, ``*_pair.int``) under filenames that do not encode the
-assessment window or station-selection options. ``cache_manifest`` records
+The 1D pipeline caches artifacts (*.ctl, inventory_all_{ofs}.csv,
+*.obs, *.prd, *_pair.int) under filenames that do not encode the
+assessment window or station-selection options. cache_manifest records
 the run parameters each artifact was built for in a per-directory index and
 lets the reuse gates detect a parameter change and regenerate instead of
 serving stale files. These tests exercise the manifest primitives directly
@@ -84,7 +84,7 @@ class TestArtifactFreshness:
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
         sig = cm.run_signature(_prop())
-        cm.record_artifact(path, sig)
+        cm.record_artifact(path, sig, str(tmp_path))
         assert cm.artifact_is_fresh(path, sig) is True
 
     def test_legacy_file_without_entry_not_fresh(self, tmp_path):
@@ -96,14 +96,14 @@ class TestArtifactFreshness:
     def test_changed_params_not_fresh(self, tmp_path):
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
-        cm.record_artifact(path, cm.run_signature(_prop()))
+        cm.record_artifact(path, cm.run_signature(_prop()), str(tmp_path))
         newsig = cm.run_signature(_prop(end_date_full='2026-07-01T00:00:00Z'))
         assert cm.artifact_is_fresh(path, newsig) is False
 
     def test_index_lives_in_directory(self, tmp_path):
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
-        cm.record_artifact(path, cm.run_signature(_prop()))
+        cm.record_artifact(path, cm.run_signature(_prop()), str(tmp_path))
         assert (tmp_path / cm.MANIFEST_FILENAME).is_file()
 
     def test_write_leaves_no_temp_file(self, tmp_path):
@@ -111,7 +111,7 @@ class TestArtifactFreshness:
         # temp artifact behind on success.
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
-        cm.record_artifact(path, cm.run_signature(_prop()))
+        cm.record_artifact(path, cm.run_signature(_prop()), str(tmp_path))
         leftovers = [p.name for p in tmp_path.iterdir()
                      if p.name.startswith(cm.MANIFEST_FILENAME)
                      and p.name != cm.MANIFEST_FILENAME]
@@ -126,15 +126,15 @@ class TestArtifactFreshness:
         _touch(p2)
         sig1 = cm.run_signature(_prop(), variable='water_level')
         sig2 = cm.run_signature(_prop(), variable='water_temperature')
-        cm.record_artifact(p1, sig1)
-        cm.record_artifact(p2, sig2)
+        cm.record_artifact(p1, sig1, str(tmp_path))
+        cm.record_artifact(p2, sig2, str(tmp_path))
         assert cm.artifact_is_fresh(p1, sig1) is True
         assert cm.artifact_is_fresh(p2, sig2) is True
 
     def test_corrupt_index_fails_open(self, tmp_path):
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
-        cm.record_artifact(path, cm.run_signature(_prop()))
+        cm.record_artifact(path, cm.run_signature(_prop()), str(tmp_path))
         # Corrupt the index -> everything reads as stale (safe regeneration).
         _touch(str(tmp_path / cm.MANIFEST_FILENAME), 'not json{{{')
         assert cm.artifact_is_fresh(path, cm.run_signature(_prop())) is False
@@ -143,8 +143,8 @@ class TestArtifactFreshness:
         path = str(tmp_path / 'cbofs_wl_station.ctl')
         _touch(path)
         sig = cm.run_signature(_prop())
-        cm.record_artifact(path, sig)
-        cm.forget_artifact(path)
+        cm.record_artifact(path, sig, str(tmp_path))
+        cm.forget_artifact(path, str(tmp_path))
         assert cm.artifact_is_fresh(path, sig) is False
 
 
@@ -162,14 +162,14 @@ class TestEnsureFresh:
         path = str(tmp_path / 'x_wl_station.ctl')
         _touch(path)
         sig = cm.run_signature(_prop())
-        cm.record_artifact(path, sig)
+        cm.record_artifact(path, sig, str(tmp_path))
         assert cm.ensure_fresh(path, sig, str(tmp_path), 'ctl') is True
 
     def test_stale_deletes_and_tallies(self, tmp_path):
         cm.reset_stale_counter()
         path = str(tmp_path / 'x_wl_station.ctl')
         _touch(path)
-        cm.record_artifact(path, cm.run_signature(_prop()))
+        cm.record_artifact(path, cm.run_signature(_prop()), str(tmp_path))
         newsig = cm.run_signature(_prop(datum='NAVD88'))
         result = cm.ensure_fresh(path, newsig, str(tmp_path), 'ctl')
         assert result is False
@@ -184,7 +184,7 @@ class TestEnsureFresh:
         inside.mkdir()
         outside = tmp_path / 'outside.ctl'
         _touch(str(outside))
-        cm.record_artifact(str(outside), cm.run_signature(_prop()))
+        cm.record_artifact(str(outside), cm.run_signature(_prop()), str(tmp_path))
         newsig = cm.run_signature(_prop(datum='NAVD88'))
         result = cm.ensure_fresh(
             str(outside), newsig, str(inside), 'ctl')

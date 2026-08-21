@@ -31,11 +31,14 @@ Design choices:
 
 import contextlib
 import json
+import logging
 import os
 import threading
-from typing import Optional
 
-from ofs_skill.utils.timeseries_coverage import remove_stale_artifact
+from ofs_skill.utils.timeseries_coverage import (
+    is_within_directory,
+    remove_stale_artifact,
+)
 
 # Index filename dropped into each artifact directory. Leading dot keeps it
 # out of the way of the pattern-based output globs (``*.obs`` etc.).
@@ -100,7 +103,7 @@ def _normalize(value):
     """
     if value is None:
         return None
-    if isinstance(value, (list, tuple, set)):
+    if isinstance(value, list | tuple | set):
         return sorted(str(v).strip().lower() for v in value if str(v).strip())
     text = str(value).strip()
     # A multi-token owner/variable string (e.g. ``'co-ops,ndbc'`` or
@@ -111,8 +114,20 @@ def _normalize(value):
         return sorted(t.lower() for t in tokens)
     return text
 
+def _normalize_date(value):
+    """Canonicalize date strings to ISO format for consistent signature matching.
 
-def file_fingerprint(path: Optional[str]) -> Optional[list]:
+    Tolerates the YYYYMMDD-HH:MM:SS format leaked by check_model_files.
+    """
+    if value is None:
+        return None
+    text = str(value).strip().upper()
+    if len(text) == 17 and text[8] == '-':
+        return f'{text[:4]}-{text[4:6]}-{text[6:8]}T{text[9:]}Z'
+    return text
+
+
+def file_fingerprint(path: str | None) -> list | None:
     """Return ``[path, mtime_ns, size]`` for a file, or None.
 
     Used to fold an external input file (e.g. the currents-bins override
@@ -139,14 +154,30 @@ def run_signature(prop, *, variable=None, extra=None) -> dict:
     """
     sig = {
         'ofs': _normalize(getattr(prop, 'ofs', None)),
-        'start_date_full': _normalize(getattr(prop, 'start_date_full', None)),
-        'end_date_full': _normalize(getattr(prop, 'end_date_full', None)),
+        'start_date_full': _normalize_date(getattr(prop, 'start_date_full', None)),
+        'end_date_full': _normalize_date(getattr(prop, 'end_date_full', None)),
         'ofsfiletype': _normalize(getattr(prop, 'ofsfiletype', None)),
         'datum': _normalize(getattr(prop, 'datum', None)),
         'stationowner': _normalize(getattr(prop, 'stationowner', None)),
         'currents_bins_csv': file_fingerprint(
             getattr(prop, 'currents_bins_csv', None)),
+        'user_input_location': _normalize(getattr(prop, 'user_input_location', False)),
     }
+
+    # Fold in the custom XY file fingerprint if the user override is active
+    if getattr(prop, 'user_input_location', False):
+        try:
+            from ofs_skill.obs_retrieval.utils import Utils
+            _conf = getattr(prop, 'config_file', None)
+            # Pass a valid Logger object instead of None to satisfy the type checker
+            xy_path = Utils(_conf).read_config_section(
+                'user_xy_inputs', logging.getLogger(__name__)
+            ).get('user_xy_path')
+            sig['user_xy_path'] = file_fingerprint(xy_path)
+        except Exception:
+            # Degrade gracefully if the config section/file is malformed or missing
+            sig['user_xy_path'] = None
+
     if variable is not None:
         sig['variable'] = _normalize(variable)
     if extra:
@@ -154,7 +185,6 @@ def run_signature(prop, *, variable=None, extra=None) -> dict:
             sig[key] = file_fingerprint(value) if key.endswith('_file') \
                 else _normalize(value)
     return sig
-
 
 def _index_path(directory: str) -> str:
     return os.path.join(directory, MANIFEST_FILENAME)
@@ -221,12 +251,20 @@ def artifact_is_fresh(artifact_path: str, signature: dict) -> bool:
     return recorded == signature
 
 
-def record_artifact(artifact_path: str, signature: dict, logger=None) -> None:
+def record_artifact(artifact_path: str, signature: dict, base_dir: str, logger=None) -> None:
     """Store ``signature`` for a freshly (re)generated artifact.
 
     Called right after a gate writes the artifact so a later same-parameter
     run reuses it. Keyed by basename within the file's own directory index.
     """
+    if not is_within_directory(artifact_path, base_dir):
+        if logger is not None:
+            logger.error(
+                'Security error: Artifact path %s escapes base directory %s',
+                artifact_path, base_dir
+            )
+        return
+
     directory = os.path.dirname(artifact_path) or '.'
     key = os.path.basename(artifact_path)
     with _manifest_lock:
@@ -236,8 +274,11 @@ def record_artifact(artifact_path: str, signature: dict, logger=None) -> None:
         _write_index(directory, index, logger)
 
 
-def forget_artifact(artifact_path: str, logger=None) -> None:
+def forget_artifact(artifact_path: str, base_dir: str, logger=None) -> None:
     """Drop an artifact's manifest entry (e.g. after deleting the file)."""
+    if not is_within_directory(artifact_path, base_dir):
+        return
+
     directory = os.path.dirname(artifact_path) or '.'
     key = os.path.basename(artifact_path)
     with _manifest_lock:
@@ -269,6 +310,6 @@ def ensure_fresh(artifact_path, signature, base_dir, kind, logger=None):
             'run and is likely left over from an earlier run. Deleting it '
             'so it is regenerated.', artifact_path)
     if remove_stale_artifact(artifact_path, base_dir, logger):
-        forget_artifact(artifact_path, logger)
+        forget_artifact(artifact_path, base_dir, logger)
         note_stale(kind)
     return False

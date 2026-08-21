@@ -444,6 +444,7 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
             cache_manifest.run_signature(
                 prop, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
                 extra={'whichcast': getattr(prop, 'whichcast', None)}),
+            prop.data_skill_1d_pair_path,
             logger)
 
         # Water-level extrema (HW/LW) independent detection + ±3h pairing
@@ -864,7 +865,8 @@ def get_skill(prop, logger):
                                 obs_path,
                                 p.data_observations_1d_station_path,
                                 logger_):
-                            cache_manifest.forget_artifact(obs_path, logger_)
+                            cache_manifest.forget_artifact(obs_path, p.data_observations_1d_station_path,
+                                                           logger_)
                             needs_fetch = True
                     elif stale_params:
                         # Same window length but built under different
@@ -879,7 +881,9 @@ def get_skill(prop, logger):
                                 obs_path,
                                 p.data_observations_1d_station_path,
                                 logger_):
-                            cache_manifest.forget_artifact(obs_path, logger_)
+                            cache_manifest.forget_artifact(obs_path,
+                                                           p.data_observations_1d_station_path,
+                                                           logger_)
                             cache_manifest.note_stale('obs')
                             needs_fetch = True
                     else:
@@ -940,7 +944,9 @@ def get_skill(prop, logger):
                         prd_path, run_window[0], run_window[1])
                     if remove_stale_artifact(
                             prd_path, p.data_model_1d_node_path, logger_):
-                        cache_manifest.forget_artifact(prd_path, logger_)
+                        cache_manifest.forget_artifact(prd_path,
+                                                       prop.data_model_1d_node_path,
+                                                       logger_)
                         needs_model = True
                 elif stale_params:
                     # Same window length but built under different
@@ -951,7 +957,9 @@ def get_skill(prop, logger):
                         'and re-extracting model data.', prd_path)
                     if remove_stale_artifact(
                             prd_path, p.data_model_1d_node_path, logger_):
-                        cache_manifest.forget_artifact(prd_path, logger_)
+                        cache_manifest.forget_artifact(prd_path,
+                                                       prop.data_model_1d_node_path,
+                                                       logger_)
                         cache_manifest.note_stale('prd')
                         needs_model = True
             else:
@@ -997,6 +1005,12 @@ def get_skill(prop, logger):
                     p.ofs, variable)
         ctl_path = os.path.join(p.control_files_path,str(p.ofs+'_'+\
                                 name_var+'_station.ctl'))
+
+        obs_ctl_signature = cache_manifest.run_signature(p, variable=variable)
+        cache_manifest.ensure_fresh(
+            ctl_path, obs_ctl_signature, p.control_files_path,
+            'obs ctl', logger)
+
         if os.path.isfile(ctl_path) is False:
             logger.info(
                 'Station ctl file not found. Creating station '

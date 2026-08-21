@@ -69,6 +69,7 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
     control = tmp_path / 'control_files'
     control.mkdir()
     # Mentor inventory is CO-OPS-only; USGS path uses a one-row synthetic inventory.
+    inv_path = control / 'inventory_all_cbofs.csv'
     pd.DataFrame({
         'ID': ['01646500'],
         'X': [-77.04],
@@ -79,7 +80,25 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
         'has_temp': [True],
         'has_salt': [False],
         'has_cu': [False],
-    }).to_csv(control / 'inventory_all_cbofs.csv', index=False)
+    }).to_csv(inv_path, index=False)
+
+    # The new inventory gate deletes pre-manifest files as stale (a deliberate and
+    # defensible design choice for real working dirs). We must stamp our seeded
+    # inventory here so the pipeline reuses it rather than regenerating it.
+    from types import SimpleNamespace
+
+    from ofs_skill.utils import cache_manifest
+
+    prop = SimpleNamespace(
+        ofs='cbofs',
+        start_date_full='20240101',
+        end_date_full='20240102',
+        datum='MLLW',
+        stationowner=['usgs']
+    )
+    # Generate the signature matching what write_obs_ctlfile expects for an inventory
+    inv_sig = cache_manifest.run_signature(prop, extra={'inventory': True})
+    cache_manifest.record_artifact(str(inv_path), inv_sig, str(control), logger)
 
     obs = make_usgs_obs_dataframe(periods=8, value=14.0)
 

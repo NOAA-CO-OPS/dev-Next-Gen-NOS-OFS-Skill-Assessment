@@ -320,7 +320,7 @@ def ofs_ctlfile_read(prop, name_var, logger):
         if not cache_manifest.artifact_is_fresh(filename, ctl_sig):
             if remove_stale_artifact(
                     filename, prop.control_files_path, logger):
-                cache_manifest.forget_artifact(filename, logger)
+                cache_manifest.forget_artifact(filename, prop.control_files_path, logger)
                 cache_manifest.note_stale('model ctl')
             for i in prop.whichcasts:
                 prop.whichcast = i.lower()
@@ -672,7 +672,7 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
                     pair_file, run_window[0], run_window[1])
                 remove_stale_artifact(
                     pair_file, prop.data_skill_1d_pair_path, logger)
-                cache_manifest.forget_artifact(pair_file, logger)
+                cache_manifest.forget_artifact(pair_file, prop.data_skill_1d_pair_path, logger)
             # Even a window-covering pair file may have been built under
             # different datum/station-owner/bins parameters. The manifest
             # catches that; delete and regenerate on a signature mismatch.
@@ -689,7 +689,7 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
                         pair_file)
                     if remove_stale_artifact(
                             pair_file, prop.data_skill_1d_pair_path, logger):
-                        cache_manifest.forget_artifact(pair_file, logger)
+                        cache_manifest.forget_artifact(pair_file, prop.data_skill_1d_pair_path, logger)
                         cache_manifest.note_stale('paired')
             if not os.path.isfile(pair_file):
                 if (prop.ofsfiletype == 'fields'
