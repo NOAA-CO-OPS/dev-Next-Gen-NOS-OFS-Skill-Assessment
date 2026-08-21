@@ -231,8 +231,9 @@ def check_model_files(prop: Any, logger: Logger) -> None:
         # Directory params
         _conf = getattr(prop, 'config_file', None)
         dir_params = utils.Utils(_conf).read_config_section('directories', logger)
-        prop.model_save_path = os.path.join(dir_params['model_historical_dir'],
-                                            prop.ofs, dir_params['netcdf_dir'])
+        prop.model_path = os.path.join(dir_params['model_historical_dir'], prop.ofs)
+        if 'stofs' not in prop.ofs:
+            prop.model_path = os.path.join(prop.model_path, dir_params['netcdf_dir'])
 
         # First make list of what files SHOULD be in the directories
         try:
@@ -274,9 +275,11 @@ def check_model_files(prop: Any, logger: Logger) -> None:
             logger.error('Unable to check if model files are present.')
             return
 
-        prop.model_path = os.path.join(dir_params['model_historical_dir'],
-                                       prop.ofs, dir_params['netcdf_dir'])
+        prop.model_path = os.path.join(dir_params['model_historical_dir'], prop.ofs)
+        if 'stofs' not in prop.ofs:
+            prop.model_path = os.path.join(prop.model_path, dir_params['netcdf_dir'])
         prop.model_path = Path(prop.model_path).as_posix()
+
         dir_list = list_of_dir(prop, logger)
         try:
             file_actual_path_list = list_of_files(prop, dir_list, logger)
