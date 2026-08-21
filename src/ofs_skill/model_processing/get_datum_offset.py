@@ -701,7 +701,7 @@ def _apply_datum_offset(prop: Any, node: int, model: xr.Dataset,
                 if prop.ofs == 'stofs_3d_atl':
                     nativedatum = 'navd88'
                 elif prop.ofs == 'stofs_3d_pac':
-                    nativedatum = 'msl'
+                    nativedatum = 'lmsl'
                 elif prop.ofs == 'loofs2':
                     nativedatum = 'LWD'
                 dummyval = 10.0
