@@ -69,6 +69,7 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
     control = tmp_path / 'control_files'
     control.mkdir()
     # Mentor inventory is CO-OPS-only; USGS path uses a one-row synthetic inventory.
+    inv_path = control / 'inventory_all_cbofs.csv'
     pd.DataFrame({
         'ID': ['01646500'],
         'X': [-77.04],
@@ -79,11 +80,26 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
         'has_temp': [True],
         'has_salt': [False],
         'has_cu': [False],
-    }).to_csv(control / 'inventory_all_cbofs.csv', index=False)
+    }).to_csv(inv_path, index=False)
 
     obs = make_usgs_obs_dataframe(periods=8, value=14.0)
 
+    # The new inventory gate deletes pre-manifest files as stale. We patch
+    # ensure_fresh to unconditionally treat our synthetic inventory as fresh so
+    # the pipeline reuses it instead of deleting it and trying (and failing) to
+    # rebuild it with un-mocked USGS inventory APIs.
+    from ofs_skill.utils import cache_manifest
+    original_ensure_fresh = cache_manifest.ensure_fresh
+
+    def mock_ensure_fresh(artifact_path, signature, base_dir, kind, logger=None):
+        if 'inventory' in str(kind).lower() or str(artifact_path).endswith('.csv'):
+            return True
+        return original_ensure_fresh(artifact_path, signature, base_dir, kind, logger)
+
     with patch(
+        'ofs_skill.obs_retrieval.write_obs_ctlfile.cache_manifest.ensure_fresh',
+        side_effect=mock_ensure_fresh,
+    ), patch(
         'ofs_skill.obs_retrieval.write_obs_ctlfile.retrieve_usgs_station',
         return_value=obs,
     ), mock_usgs_searvey():

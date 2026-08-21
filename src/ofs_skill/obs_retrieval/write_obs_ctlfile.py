@@ -51,6 +51,7 @@ from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
     retrieve_t_and_c_station,
 )
 from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 
 _COOPS_MAX_WORKERS = 6
@@ -1071,6 +1072,24 @@ def write_obs_ctlfile(
     )
     os.makedirs(data_observations_1d_station_path, exist_ok=True)
 
+    # The station inventory depends on the OFS, the assessment window, and
+    # the station-owner selection, none of which are encoded in its
+    # filename. Delete an inventory left from a run with different
+    # parameters so the reader below rebuilds it instead of reusing the
+    # wrong station set (issue: stale cache reuse across runs).
+    inventory_path = f'{control_files_path}/inventory_all_{ofs}.csv'
+    inventory_signature = {
+        'ofs': cache_manifest._normalize(ofs),
+        'start_date': cache_manifest._normalize(start_date),
+        'end_date': cache_manifest._normalize(end_date),
+        'stationowner': cache_manifest._normalize(stationowner),
+        'currents_bins_csv': cache_manifest.file_fingerprint(
+            currents_bins_csv),
+    }
+    cache_manifest.ensure_fresh(
+        inventory_path, inventory_signature, control_files_path,
+        'inventory', logger)
+
     try:
         dtypes = {
             'ID': 'object',
@@ -1133,6 +1152,11 @@ def write_obs_ctlfile(
         except Exception as ex:
             logger.error(f'Error when creating inventory files: {ex}')
             raise Exception('Error when creating inventory files') from ex
+
+    # Record the signature for the (possibly freshly built) inventory so a
+    # same-parameter rerun reuses it and a changed-parameter run rebuilds it.
+    cache_manifest.record_artifact(
+        inventory_path, inventory_signature, control_files_path, logger)
 
     logger.info('Downloading data from the Inventory file!')
 

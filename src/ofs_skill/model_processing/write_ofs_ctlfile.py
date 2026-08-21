@@ -37,6 +37,7 @@ import numpy as np
 import ofs_skill.model_processing.indexing as indexing
 from ofs_skill.obs_retrieval import utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import MODEL_CTL_HEADER, OBS_CTL_HEADER
 
 # Public alias for the shape-normalising static-coord helper. Keeps the
@@ -416,6 +417,22 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
         elif variable == 'currents':
             name_var = 'cu'
 
+        # The model ctl encodes the station/node pairing for THIS run's
+        # window + options; its filename does not. Delete a ctl left from a
+        # run with different parameters so it is rebuilt (issue: stale cache
+        # reuse across runs). ``model_ctl_path`` is the file this iteration
+        # would read/write.
+        if prop.ofsfiletype == 'fields':
+            model_ctl_path = (f'{prop.control_files_path}/{prop.ofs}_'
+                              f'{name_var}_model.ctl')
+        else:
+            model_ctl_path = (f'{prop.control_files_path}/{prop.ofs}_'
+                              f'{name_var}_model_station.ctl')
+        ctl_signature = cache_manifest.run_signature(prop, variable=variable)
+        cache_manifest.ensure_fresh(
+            model_ctl_path, ctl_signature, prop.control_files_path,
+            'model ctl', logger)
+
         if (
             (os.path.isfile(
                 f'{prop.control_files_path}/{prop.ofs}_'
@@ -784,6 +801,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                     'Model Control File for %s created successfully',
                     variable,
                 )
+                cache_manifest.record_artifact(
+                    model_ctl_path, ctl_signature, prop.control_files_path, logger)
             else:
                 logger.info('Observation ctl file is blank for %s. '
                             'Model ctl file will also be blank', name_var)
@@ -803,6 +822,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                         encoding='utf-8',
                     ) as output:
                         pass
+                cache_manifest.record_artifact(
+                    model_ctl_path, ctl_signature, prop.control_files_path, logger)
         else:
             logger.info(
                 'Model Control File (%s_%s_model.ctl) found in %s. If you '
