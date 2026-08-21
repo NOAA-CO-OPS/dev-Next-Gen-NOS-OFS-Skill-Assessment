@@ -792,15 +792,18 @@ def get_model_data(prop, logger):
 
     # Directory & path set-up -->
     # Root path for saving files
-    prop.model_save_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir'],
-    )
+    prop.model_save_path = os.path.join(dir_params['model_historical_dir'], prop.ofs)
+    if 'stofs' not in prop.ofs:
+        prop.model_save_path = os.path.join(prop.model_save_path, dir_params['netcdf_dir'])
     prop.model_save_path = Path(prop.model_save_path).as_posix()
+
     # Path to files on the NODD
-    prop.model_nodd_path = os.path.join(
-        prop.ofs, dir_params['netcdf_dir'],
-    )
+    prop.model_nodd_path = os.path.join(prop.ofs)
+    if 'stofs' not in prop.ofs:
+        prop.model_nodd_path = os.path.join(prop.model_nodd_path,
+                                            dir_params['netcdf_dir'])
     prop.model_nodd_path = Path(prop.model_nodd_path).as_posix()
+
     logger.info('Successfully set up paths.')
 
     # Directories, file lists, and URLs -- oh my
