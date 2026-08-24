@@ -32,6 +32,22 @@ import tempfile
 from ofs_skill.utils.file_headers import SERIES_HEADER_PREFIX
 from ofs_skill.utils.timeseries_coverage import row_datetime
 
+# Hours of already-retrieved data a continuation run re-fetches before
+# the seam. CO-OPS and USGS publish preliminary values in near real time
+# and revise them later, so the tail of a previous run is exactly the
+# part most likely to have changed; re-fetching a day of it lets the
+# revised values replace what is on disk. It also gives the seam check
+# real overlap to measure instead of a single boundary sample.
+DEFAULT_CONTINUE_OVERLAP_HOURS = 24.0
+
+# How far either side of the seam the gap check looks, and how wide a
+# step it tolerates there. Six hours matches the nowcast cycle spacing
+# that STALENESS_TOLERANCE is already sized against; anything wider at
+# the join means the tail did not actually meet the head, and the
+# artifact is regenerated instead.
+SEAM_CHECK_WINDOW_HOURS = 12.0
+MAX_SEAM_GAP_HOURS = 6.0
+
 
 def read_series_file(path):
     """Split a ``.obs``/``.prd`` file into ``(header, data_lines)``.

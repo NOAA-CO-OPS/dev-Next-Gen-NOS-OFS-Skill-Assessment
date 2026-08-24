@@ -12,7 +12,7 @@ import logging.config
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -32,7 +32,12 @@ from ofs_skill.skill_assessment import format_paired_one_d, metrics_paired_one_d
 from ofs_skill.skill_assessment.make_skill_maps import make_skill_maps
 from ofs_skill.tidal_analysis.extremes import extract_water_level_extrema
 from ofs_skill.utils.file_headers import series_rows_to_skip, strip_model_ctl_header
+from ofs_skill.utils.series_continuation import DEFAULT_CONTINUE_OVERLAP_HOURS
 from ofs_skill.utils.timeseries_coverage import (
+    COVERS,
+    PREFIX,
+    classify_coverage,
+    continuation_start,
     covers_run_window,
     parse_run_window,
     remove_stale_artifact,
@@ -845,26 +850,56 @@ def get_skill(prop, logger):
     # USGS, and NDBC based on the station data source
 
     def _ensure_obs_files(read_station_ctl_file, p, name_var, logger_):
-        """Check for missing or stale .obs files, download if needed.
+        """Check for missing, stale or extendable .obs files; fetch if needed.
 
         Obs filenames do not encode the run window, and the obs module
         skips stations whose .obs file already exists -- so a file left
         over from an earlier run window would be reused verbatim. Delete
         stale files first, then fetch once so all missing files are
         recreated for the current window.
+
+        Under ``--Continue_Run`` a third outcome joins the two: a file
+        that starts early enough but stops short of the window end is
+        kept and recorded in a continuation plan, so the obs module
+        fetches only its missing tail and merges that in. The plan is
+        returned to the fetch call rather than stashed on ``p`` -- these
+        gates run on shallow copies in a worker pool, so anything written
+        back onto ``p`` here would be discarded.
         """
         run_window = parse_run_window(p, logger_)
+        continue_run = getattr(p, 'continue_run', False) and run_window
+        overlap = timedelta(
+            hours=float(getattr(p, 'continue_overlap_hours',
+                                DEFAULT_CONTINUE_OVERLAP_HOURS)))
         needs_fetch = False
+        continuation = {}
         for i in range(0, len(read_station_ctl_file[0])):
             obs_path = os.path.join(p.data_observations_1d_station_path,
                     str(read_station_ctl_file[0][i][0]+'_'+p.ofs+'_'+\
                         name_var+'_station.obs'))
             if os.path.isfile(obs_path):
                 if os.path.getsize(obs_path) > 0:
-                    if (run_window is not None
-                            and not covers_run_window(
-                                obs_path, run_window[0], run_window[1],
-                                logger=logger_)):
+                    verdict = (
+                        classify_coverage(obs_path, run_window[0],
+                                          run_window[1], logger=logger_)
+                        if run_window is not None else COVERS)
+                    if verdict == PREFIX and continue_run:
+                        tail_start = continuation_start(
+                            obs_path, run_window[0], run_window[1],
+                            overlap, logger=logger_)
+                        if tail_start is not None:
+                            logger_.info(
+                                'Continuation run: %s covers the start of '
+                                'the window but ends early; fetching only '
+                                '%s onward and merging it in.',
+                                obs_path, tail_start)
+                            continuation[os.path.normpath(obs_path)] = \
+                                tail_start
+                            needs_fetch = True
+                            continue
+                    if verdict == COVERS:
+                        logger_.info('%s found', obs_path)
+                    else:
                         logger_.warning(
                             '%s does not cover the run window %s to %s '
                             'and is likely left over from an earlier '
@@ -876,16 +911,104 @@ def get_skill(prop, logger):
                                 p.data_observations_1d_station_path,
                                 logger_):
                             needs_fetch = True
-                    else:
-                        logger_.info('%s found', obs_path)
                 else:
+                    # A 0-byte file records "this station had no data",
+                    # not a window, so there is no prefix to extend --
+                    # it goes down the normal path either way.
                     logger_.error('%s is empty', obs_path)
             else:
                 logger_.error(
                     '%s is missing, calling Obs Module', obs_path)
                 needs_fetch = True
         if needs_fetch:
-            get_station_observations(p, logger_)
+            get_station_observations(
+                p, logger_, continuation=continuation or None)
+
+    def _prd_paths(read_ofs_ctl_file, p, name_var):
+        """Every per-station .prd path this variable/cast should produce."""
+        paths = []
+        for i in range(0, len(read_ofs_ctl_file[-1])):
+            if p.whichcast == 'forecast_a':
+                paths.append(
+                    f'{p.data_model_1d_node_path}/'
+                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
+                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
+                    f'{p.forecast_hr}_{p.ofsfiletype}_model.prd'
+                )
+            else:
+                paths.append(
+                    f'{p.data_model_1d_node_path}/'
+                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
+                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
+                    f'{p.ofsfiletype}_model.prd'
+                )
+        return paths
+
+    def _try_prd_continuation(prd_paths, p, logger_, run_window):
+        """Extract only the model span missing from the existing .prd files.
+
+        Returns ``True`` when every file now covers the run window, so
+        the caller can skip the full extraction entirely.
+
+        Continuation is attempted only when *all* expected files are
+        present and classify as PREFIX, and when they agree closely
+        enough on where they stop that one shared extraction window
+        serves all of them. That is the case this feature exists for --
+        extending a completed run -- and it keeps the model file list,
+        which is chosen once for the whole dataset load, unambiguous.
+        Anything else falls through to the pre-existing behavior.
+        """
+        overlap = timedelta(
+            hours=float(getattr(p, 'continue_overlap_hours',
+                                DEFAULT_CONTINUE_OVERLAP_HOURS)))
+        tail_starts = []
+        for path in prd_paths:
+            if not os.path.isfile(path) or os.path.getsize(path) == 0:
+                logger_.info(
+                    'Continuation run: %s is missing or empty, so the '
+                    'model data is extracted over the full window.', path)
+                return False
+            tail_start = continuation_start(
+                path, run_window[0], run_window[1], overlap, logger=logger_)
+            if tail_start is None:
+                logger_.info(
+                    'Continuation run: %s does not extend cleanly into '
+                    'the requested window, so the model data is extracted '
+                    'over the full window.', path)
+                return False
+            tail_starts.append(tail_start)
+
+        if not tail_starts:
+            return False
+
+        # One dataset load serves every station, so the extraction has to
+        # start early enough for the station that is furthest behind.
+        tail_start = min(tail_starts)
+        logger_.info(
+            'Continuation run: extending %d .prd file(s) from %s instead '
+            'of re-extracting from %s.',
+            len(prd_paths), tail_start, run_window[0])
+
+        tail_prop = copy.copy(p)
+        tail_prop.start_date_full = tail_start.strftime('%Y-%m-%dT%H:%M:%SZ')
+        tail_prop.continuation_prd_merge = True
+        # The cached dataset was loaded for a different window, and
+        # _set_cached_model closes whatever it replaces -- hand the tail
+        # extraction a clean load of its own.
+        get_node_ofs(tail_prop, logger_, model_dataset=None)
+
+        for path in prd_paths:
+            if not os.path.isfile(path) or not covers_run_window(
+                    path, run_window[0], run_window[1], logger=logger_):
+                logger_.warning(
+                    'Continuation run: %s still does not cover %s to %s '
+                    'after the tail extraction; falling back to a full '
+                    're-extraction.', path, run_window[0], run_window[1])
+                return False
+        logger_.info(
+            'Continuation run: all %d .prd file(s) now cover the run '
+            'window.', len(prd_paths))
+        return True
 
     def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
                           cached_model=None):
@@ -896,24 +1019,25 @@ def get_skill(prop, logger):
         window, so files left over from an earlier run would be reused
         verbatim. Delete stale files first, then extract once so all
         missing files are recreated for the current window.
+
+        Under ``--Continue_Run`` a cheaper path is tried first: when
+        every file is present and merely stops short of the window end,
+        only the missing model span is extracted and merged in. That
+        attempt is verified against the run window afterwards, and
+        anything short of complete success falls through to the full
+        extraction below -- so continuation can only ever save time, not
+        change the result.
         """
         run_window = parse_run_window(p, logger_)
+        prd_paths = _prd_paths(read_ofs_ctl_file, p, name_var)
+        if (getattr(p, 'continue_run', False) and run_window is not None
+                and prd_paths
+                and _try_prd_continuation(prd_paths, p, logger_,
+                                          run_window)):
+            return cached_model
+
         needs_model = False
-        for i in range(0, len(read_ofs_ctl_file[-1])):
-            if p.whichcast == 'forecast_a':
-                prd_path = (
-                    f'{p.data_model_1d_node_path}/'
-                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
-                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
-                    f'{p.forecast_hr}_{p.ofsfiletype}_model.prd'
-                )
-            else:
-                prd_path = (
-                    f'{p.data_model_1d_node_path}/'
-                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
-                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
-                    f'{p.ofsfiletype}_model.prd'
-                )
+        for prd_path in prd_paths:
             if os.path.isfile(prd_path):
                 if (run_window is not None
                         and not covers_run_window(
