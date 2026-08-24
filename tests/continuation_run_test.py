@@ -499,10 +499,14 @@ class TestEnsureObsFiles:
         path = tmp_path / '8638901_cbofs_wl_station.obs'
         _write_series(path, WINDOW_START, 15 * 24)
         calls = {}
+
+        def _fake_fetch(prop, log, continuation=None):
+            calls.setdefault('plan', continuation)
+            # Stand in for the tail fetch plus its merge.
+            _write_series(path, WINDOW_START, 46 * 24 + 1)
+
         monkeypatch.setattr(
-            get_skill_mod, 'get_station_observations',
-            lambda prop, log, continuation=None: calls.update(
-                plan=continuation))
+            get_skill_mod, 'get_station_observations', _fake_fetch)
 
         get_skill_mod._ensure_obs_files(
             _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
@@ -511,6 +515,35 @@ class TestEnsureObsFiles:
         assert path.exists()
         assert list(calls['plan']) == [str(path)]
         assert calls['plan'][str(path)] < WINDOW_END
+
+    def test_unextendable_file_is_refetched_in_the_same_run(
+            self, tmp_path, monkeypatch):
+        """A refused merge must not leave a short series for pairing.
+
+        The tail fetch leaves the file alone whenever it cannot merge
+        safely, so the gate checks again afterwards and regenerates the
+        stragglers over the full window rather than letting this run pair
+        against a truncated series.
+        """
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        plans = []
+
+        def _fake_fetch(prop, log, continuation=None):
+            plans.append(continuation)
+            if continuation is None:  # the full-window retry
+                _write_series(path, WINDOW_START, 46 * 24 + 1)
+
+        monkeypatch.setattr(
+            get_skill_mod, 'get_station_observations', _fake_fetch)
+
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert len(plans) == 2
+        assert plans[0] is not None and plans[1] is None
+        assert covers_run_window(path, WINDOW_START, WINDOW_END, now=NOW)
 
     def test_prefix_without_flag_is_deleted(self, tmp_path, monkeypatch):
         """Without --Continue_Run the same file is regenerated as before."""

@@ -725,9 +725,44 @@ def _ensure_obs_files(read_station_ctl_file, p, name_var, logger_):
             logger_.error(
                 '%s is missing, calling Obs Module', obs_path)
             needs_fetch = True
-    if needs_fetch:
-        get_station_observations(
-            p, logger_, continuation=continuation or None)
+    if not needs_fetch:
+        return
+    get_station_observations(
+        p, logger_, continuation=continuation or None)
+    if continuation:
+        _retry_unextended_obs(continuation, p, logger_, run_window)
+
+
+def _retry_unextended_obs(continuation, p, logger_, run_window):
+    """Re-fetch, over the full window, any .obs the tail pass could not extend.
+
+    A tail fetch declines to touch the file whenever the merge cannot be
+    trusted -- the provider returned nothing, the datum or ADCP bin could
+    not be pinned, timestamps collide, there is a hole at the seam. That
+    leaves the file still short of the window, and nothing downstream in
+    *this* run would notice: pairing would quietly use the truncated
+    series. So check the plan's files once more and regenerate the
+    stragglers the ordinary way before moving on.
+    """
+    stragglers = [
+        path for path in continuation
+        if os.path.isfile(path) and os.path.getsize(path) > 0
+        and not covers_run_window(path, run_window[0], run_window[1],
+                                  logger=logger_)
+    ]
+    if not stragglers:
+        return
+    logger_.warning(
+        'Continuation run: %d observation file(s) could not be extended; '
+        're-fetching them over the full window.', len(stragglers))
+    removed = False
+    for path in stragglers:
+        if remove_stale_artifact(
+                path, p.data_observations_1d_station_path, logger_):
+            removed = True
+    if removed:
+        get_station_observations(p, logger_)
+
 
 def _prd_paths(read_ofs_ctl_file, p, name_var):
     """Every per-station .prd path this variable/cast should produce."""
