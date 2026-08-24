@@ -784,7 +784,8 @@ def _prd_paths(read_ofs_ctl_file, p, name_var):
             )
     return paths
 
-def _try_prd_continuation(prd_paths, p, logger_, run_window):
+def _try_prd_continuation(prd_paths, p, logger_, run_window,
+                          variable=None):
     """Extract only the model span missing from the existing .prd files.
 
     Returns ``True`` when every file now covers the run window, so
@@ -832,6 +833,16 @@ def _try_prd_continuation(prd_paths, p, logger_, run_window):
     tail_prop = copy.copy(p)
     tail_prop.start_date_full = tail_start.strftime('%Y-%m-%dT%H:%M:%SZ')
     tail_prop.continuation_prd_merge = True
+    # Anything chosen by the run's start date -- the SECOFS model-zero
+    # correction column, today -- must key on the window, not on the
+    # seam, or the head and tail of one series end up on two different
+    # vertical references.
+    tail_prop.datum_reference_date = p.start_date_full
+    # Extract only the variable whose files this gate just verified.
+    # get_node_ofs otherwise walks the whole var_list in merge mode,
+    # touching .prd files no coverage check has looked at.
+    if variable is not None:
+        tail_prop.var_list = [variable]
     # The cached dataset was loaded for a different window, and
     # _set_cached_model closes whatever it replaces -- hand the tail
     # extraction a clean load of its own.
@@ -851,7 +862,7 @@ def _try_prd_continuation(prd_paths, p, logger_, run_window):
     return True
 
 def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
-                      cached_model=None):
+                      cached_model=None, variable=None):
     """Check for missing or stale .prd files, extract if needed.
     Returns the (possibly updated) cached model dataset.
 
@@ -873,7 +884,7 @@ def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
     if (getattr(p, 'continue_run', False) and run_window is not None
             and prd_paths
             and _try_prd_continuation(prd_paths, p, logger_,
-                                      run_window)):
+                                      run_window, variable)):
         return cached_model
 
     needs_model = False
@@ -1181,7 +1192,8 @@ def get_skill(prop, logger):
                     copy.copy(p), name_var, logger)
                 prd_future = executor.submit(
                     _ensure_prd_files, read_ofs_ctl_file,
-                    copy.copy(p), name_var, logger, cached_model)
+                    copy.copy(p), name_var, logger, cached_model,
+                    variable)
                 obs_future.result()
                 cached_model = prd_future.result()
                 _set_cached_model(p, cached_model)
@@ -1189,7 +1201,8 @@ def get_skill(prop, logger):
             # Sequential: check obs files, then prd files
             _ensure_obs_files(read_station_ctl_file, p, name_var, logger)
             cached_model = _ensure_prd_files(
-                read_ofs_ctl_file, p, name_var, logger, cached_model)
+                read_ofs_ctl_file, p, name_var, logger, cached_model,
+                variable)
             _set_cached_model(p, cached_model)
 
         if read_ofs_ctl_file is not None:

@@ -95,6 +95,7 @@ from ofs_skill.skill_assessment.get_skill import get_skill
 from ofs_skill.utils.series_continuation import DEFAULT_CONTINUE_OVERLAP_HOURS
 from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
+    created_this_run,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -635,7 +636,14 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
             # than only the ones that fail the coverage check) is what
             # makes the result identical to a from-scratch run instead
             # of merely close to it.
-            if continue_run and os.path.isfile(pair_file):
+            if (continue_run and os.path.isfile(pair_file)
+                    and not created_this_run(pair_file)):
+                # Only pairs left over from the earlier, shorter run.
+                # This function runs once per variable while get_skill
+                # re-pairs every variable, so without the
+                # created_this_run guard each variable would delete the
+                # pairs the previous variable's get_skill just wrote and
+                # force another full re-pair.
                 logger.info(
                     'Continuation run: removing %s so pairing and skill '
                     'are recomputed over the extended series.', pair_file)

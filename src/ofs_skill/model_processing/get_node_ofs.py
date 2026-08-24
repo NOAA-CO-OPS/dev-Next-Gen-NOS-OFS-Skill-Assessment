@@ -46,11 +46,7 @@ from ofs_skill.utils.series_continuation import (
     SEAM_CHECK_WINDOW_HOURS,
     merge_and_write,
 )
-from ofs_skill.utils.timeseries_coverage import (
-    covers_run_window,
-    parse_run_window,
-    row_datetime,
-)
+from ofs_skill.utils.timeseries_coverage import covers_run_window, parse_run_window
 
 logger = logging.getLogger(__name__)
 
@@ -1426,7 +1422,19 @@ def _merge_filename_key(filepath, serieskey, logger):
     return combined.sort_index()
 
 
-def _write_prd(path, formatted_series, name_var, prop_local, logger):
+# get_datum_offset signals every failure mode (missing vdatum file,
+# unreachable bucket, unconvertible point) with a large negative
+# sentinel, and format_waterlevel then writes the series unshifted. The
+# guards there are `> -999` / `-999 < x < 999`, so this mirrors them.
+def _datum_offset_applied(datum_offset):
+    """True if this station's water levels actually got a datum shift."""
+    if datum_offset is None:
+        return None
+    return -999 < float(datum_offset) < 999
+
+
+def _write_prd(path, formatted_series, name_var, prop_local, logger,
+               datum_offset=None):
     """Write one station's model series, extending it in continuation mode.
 
     Outside a continuation run this is the plain truncate-and-write the
@@ -1435,14 +1443,26 @@ def _write_prd(path, formatted_series, name_var, prop_local, logger):
     rows already on disk. A refused merge leaves the file untouched and
     logs why; the coverage gate in ``_ensure_prd_files`` then sees the
     file still short of the window and re-extracts it in full.
+
+    ``datum_offset`` guards the water-level case: the tail run resolves
+    the vertical datum independently of the run that wrote the head, and
+    that lookup can fail (unreachable vdatum bucket, missing file) in
+    which case the rows are written unshifted. Splicing unshifted rows
+    onto shifted ones would put a step of tens of centimeters in the
+    middle of the series with nothing in the file to show for it, so the
+    merge is refused instead.
     """
     if getattr(prop_local, 'continuation_prd_merge', False):
-        seam = (row_datetime(formatted_series[0])
-                if formatted_series else None)
+        if _datum_offset_applied(datum_offset) is False:
+            logger.warning(
+                'Continuation run: the vertical datum could not be '
+                'resolved for %s, so the newly extracted rows are '
+                'unshifted and cannot be joined to the existing series. '
+                'Leaving the file for a full re-extraction.', path)
+            return
         if merge_and_write(
                 path, formatted_series, series_header(name_var), logger,
                 max_seam_gap_seconds=MAX_SEAM_GAP_HOURS * 3600,
-                seam=seam,
                 seam_window=timedelta(hours=SEAM_CHECK_WINDOW_HOURS)):
             return
         logger.warning(
@@ -1902,7 +1922,8 @@ def get_node_ofs(prop, logger, model_dataset=None):
                     # format is not cast-dependent; omitted for empty
                     # series to keep blank files 0 bytes.
                     _write_prd(prd_path, formatted_series,
-                               name_conventions[0], prop_local, logger)
+                               name_conventions[0], prop_local, logger,
+                               datum_offset)
                 elif (prop_local.horizonskill and os.path.isfile(
                         f'{prop_local.data_model_1d_node_path}/'
                         f'{ofs_ctlfile[-1][i]}_{prop_local.ofs}_{name_conventions[0]}_'
@@ -1952,7 +1973,8 @@ def get_node_ofs(prop, logger, model_dataset=None):
                     # stay 0 bytes so the getsize() blank-file checks
                     # downstream keep working.
                     _write_prd(prd_path, formatted_series,
-                               name_conventions[0], prop_local, logger)
+                               name_conventions[0], prop_local, logger,
+                               datum_offset)
 
                 return (datum_offset, model_station)
 

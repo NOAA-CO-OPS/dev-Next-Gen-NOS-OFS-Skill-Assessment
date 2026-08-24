@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import stat
 import tempfile
 
 from ofs_skill.utils.file_headers import SERIES_HEADER_PREFIX
@@ -165,15 +166,31 @@ def write_series_file(path, header, lines):
     the blank-file contract the ``getsize() > 0`` checks depend on.
     """
     directory = os.path.dirname(path) or '.'
+    try:
+        existing_mode = stat.S_IMODE(os.stat(path).st_mode)
+    except OSError:
+        existing_mode = None
+    # Leading dot so a temp file left behind by a hard kill is hidden and
+    # cannot be mistaken for a data file by the directory scans.
     handle = tempfile.NamedTemporaryFile(
         mode='w', encoding='utf-8', dir=directory,
-        prefix=os.path.basename(path) + '.', suffix='.part', delete=False)
+        prefix='.' + os.path.basename(path) + '.', suffix='.part',
+        delete=False)
     try:
         with handle as output:
             if lines and header:
                 output.write(header)
             for line in lines:
                 output.write(str(line) + '\n')
+        # NamedTemporaryFile creates 0600 regardless of umask, and
+        # os.replace carries the temp file's mode to the destination --
+        # so without this the extended artifact becomes unreadable to
+        # everyone but its owner, unlike every other file the pipeline
+        # writes.
+        if existing_mode is not None:
+            os.chmod(handle.name, existing_mode)
+        else:
+            os.chmod(handle.name, 0o666 & ~_current_umask())
         os.replace(handle.name, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -181,8 +198,15 @@ def write_series_file(path, header, lines):
         raise
 
 
+def _current_umask():
+    """Read the process umask without leaving it changed."""
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
 def merge_and_write(path, new_lines, header, logger=None,
-                    max_seam_gap_seconds=None, seam=None, seam_window=None):
+                    max_seam_gap_seconds=None, seam_window=None):
     """Merge ``new_lines`` into the series at ``path`` and rewrite it.
 
     Returns ``True`` when the file was extended. Returns ``False`` -- and
@@ -203,12 +227,22 @@ def merge_and_write(path, new_lines, header, logger=None,
         return False
 
     existing_header, existing_lines = read_series_file(path)
-    if existing_lines is None:
+    if not existing_lines:
+        # Either unreadable, or a 0-byte file recording "this station had
+        # no data". Neither is a prefix to build on, and writing here
+        # would turn a blank artifact into a header-plus-tail file --
+        # breaking the 0-byte contract the getsize() checks rely on.
         if logger is not None:
             logger.warning(
-                'Could not read %s for continuation merge; falling back '
-                'to a full rewrite.', path)
+                'Nothing to extend in %s (missing, empty or unreadable); '
+                'falling back to a full rewrite.', path)
         return False
+
+    # Anchor the gap check on the join itself -- the last row already on
+    # disk. The tail deliberately starts an overlap earlier than that, so
+    # anchoring on the tail's first row would place the window on data
+    # that is merely being replaced and never look at the join at all.
+    seam = row_datetime(existing_lines[-1])
 
     merged = merge_series_lines(existing_lines, new_lines)
     if merged is None:

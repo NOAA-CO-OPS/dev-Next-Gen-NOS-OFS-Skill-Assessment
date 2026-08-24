@@ -29,6 +29,8 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import os
+import stat
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -110,6 +112,12 @@ def _logger():
     return logging.getLogger('continuation_test')
 
 
+def _backdate(path, hours=48):
+    """Age a file so created_this_run() sees it as a previous run's."""
+    old = os.path.getmtime(path) - hours * 3600
+    os.utime(path, (old, old))
+
+
 # --------------------------------------------------------------------
 # classify_coverage
 # --------------------------------------------------------------------
@@ -161,6 +169,18 @@ class TestClassifyCoverage:
         _write_series(path, WINDOW_START - timedelta(days=2), 10 * 24)
         assert classify_coverage(
             path, WINDOW_START, WINDOW_END, now=NOW) == PREFIX
+
+    def test_late_head_within_tolerance_is_stale_not_prefix(self, tmp_path):
+        """A head that starts late may be reused, but never extended.
+
+        Starting inside the tolerance is close enough to accept the file
+        as-is (that is what COVERS means), but appending a tail to it
+        would bake the missing head into the result.
+        """
+        path = tmp_path / 'latehead.obs'
+        _write_series(path, WINDOW_START + timedelta(hours=6), 15 * 24)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == STALE
 
     def test_tolerance_edge_still_covers(self, tmp_path):
         """Ending within the tolerance of the window end is COVERS."""
@@ -362,6 +382,19 @@ class TestWriteSeriesFile:
         write_series_file(path, SERIES_HEADER, _rows(WINDOW_START, 3))
         assert [p.name for p in tmp_path.iterdir()] == ['out.obs']
 
+    def test_preserves_file_permissions(self, tmp_path):
+        """The rewrite must not narrow the artifact's mode.
+
+        NamedTemporaryFile creates 0600 regardless of umask and
+        os.replace carries that to the destination, so without an
+        explicit chmod an extended file becomes owner-only.
+        """
+        path = tmp_path / 'perm.obs'
+        _write_series(path, WINDOW_START, 4)
+        os.chmod(path, 0o644)
+        write_series_file(path, SERIES_HEADER, _rows(WINDOW_START, 6))
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
+
     def test_headerless_file_stays_headerless(self, tmp_path):
         """Legacy files without a header round-trip unchanged."""
         path = tmp_path / 'legacy.obs'
@@ -411,11 +444,10 @@ class TestMergeAndWrite:
         path = tmp_path / 'series.obs'
         _write_series(path, WINDOW_START, 10)
         before = path.read_bytes()
-        seam = WINDOW_START + timedelta(hours=9)
-        tail = _rows(seam + timedelta(hours=6), 10)
+        tail = _rows(WINDOW_START + timedelta(hours=15), 10)
         assert merge_and_write(
             path, tail, SERIES_HEADER, _logger(),
-            max_seam_gap_seconds=2 * 3600, seam=seam,
+            max_seam_gap_seconds=2 * 3600,
             seam_window=timedelta(hours=12)) is False
         assert path.read_bytes() == before
 
@@ -423,11 +455,10 @@ class TestMergeAndWrite:
         """A seam step no wider than the model interval is accepted."""
         path = tmp_path / 'series.obs'
         _write_series(path, WINDOW_START, 10)
-        seam = WINDOW_START + timedelta(hours=9)
-        tail = _rows(seam + timedelta(hours=1), 10)
+        tail = _rows(WINDOW_START + timedelta(hours=10), 10)
         assert merge_and_write(
             path, tail, SERIES_HEADER, _logger(),
-            max_seam_gap_seconds=2 * 3600, seam=seam,
+            max_seam_gap_seconds=2 * 3600,
             seam_window=timedelta(hours=12)) is True
 
     def test_duplicate_rows_refuse_merge(self, tmp_path):
@@ -440,6 +471,37 @@ class TestMergeAndWrite:
         assert merge_and_write(
             path, _rows(WINDOW_START + timedelta(hours=3), 3),
             SERIES_HEADER, _logger()) is False
+        assert path.read_bytes() == before
+
+    def test_zero_byte_file_refuses_merge(self, tmp_path):
+        """A blank artifact must stay blank, not become header-plus-tail.
+
+        0 bytes records "this station had no data", and the getsize()
+        checks throughout the pipeline depend on it staying that way.
+        """
+        path = tmp_path / 'blank.obs'
+        path.write_text('', encoding='utf-8')
+        assert merge_and_write(
+            path, _rows(WINDOW_START, 3), SERIES_HEADER, _logger()) is False
+        assert path.stat().st_size == 0
+
+    def test_seam_check_looks_at_the_join_not_the_overlap(self, tmp_path):
+        """The gap check must be anchored on the last row already on disk.
+
+        The tail deliberately starts an overlap before the join, so
+        anchoring on the tail's first row would put the check window on
+        rows that are merely being replaced and never look at the join.
+        """
+        path = tmp_path / 'series.obs'
+        _write_series(path, WINDOW_START, 24)
+        # Tail overlaps the last 6 h of the file, then jumps a day.
+        tail = (_rows(WINDOW_START + timedelta(hours=17), 6)
+                + _rows(WINDOW_START + timedelta(hours=47), 6))
+        before = path.read_bytes()
+        assert merge_and_write(
+            path, tail, SERIES_HEADER, _logger(),
+            max_seam_gap_seconds=6 * 3600,
+            seam_window=timedelta(hours=12)) is False
         assert path.read_bytes() == before
 
     def test_missing_file_refuses_merge(self, tmp_path):
@@ -699,14 +761,15 @@ class TestEnsurePrdFiles:
 
 
 class TestPairInvalidation:
-    """.int files are always rebuilt in a continuation run."""
+    """.int files from the earlier run are rebuilt in a continuation run."""
 
     def test_pair_files_removed_under_flag(self, tmp_path, monkeypatch,
                                            create_1dplot_mod):
-        """Every existing pair file is dropped so skill is recomputed."""
+        """A pair file from the earlier run is dropped so skill is recomputed."""
         pair = (tmp_path
                 / 'cbofs_wl_8638901_45_nowcast_stations_pair.int')
         _write_series(pair, WINDOW_START, 46 * 24 + 1)
+        _backdate(pair)
         prop = _GateProp(tmp_path, continue_run=True)
         prop.data_skill_1d_pair_path = str(tmp_path)
         prop.whichcasts = ['nowcast']
@@ -720,6 +783,33 @@ class TestPairInvalidation:
             _logger())
 
         assert not pair.exists()
+
+    def test_pair_written_by_this_run_is_kept(self, tmp_path, monkeypatch,
+                                              create_1dplot_mod):
+        """A pair this run already rebuilt must not be deleted again.
+
+        The pre-check runs once per variable while get_skill re-pairs
+        every variable, so deleting unconditionally would make each
+        variable throw away the previous one's work and re-pair the lot.
+        """
+        pair = (tmp_path
+                / 'cbofs_wl_8638901_45_nowcast_stations_pair.int')
+        _write_series(pair, WINDOW_START, 46 * 24 + 1)
+        prop = _GateProp(tmp_path, continue_run=True)
+        prop.data_skill_1d_pair_path = str(tmp_path)
+        prop.whichcasts = ['nowcast']
+        prop.start_date_full_before = prop.start_date_full
+        prop.end_date_full_before = prop.end_date_full
+        calls = []
+        monkeypatch.setattr(create_1dplot_mod, 'get_skill',
+                            lambda *a, **k: calls.append(1))
+
+        create_1dplot_mod._ensure_paired_data_exists(
+            _model_ctl(['8638901'], [45]), prop, ('water_level', 'wl'),
+            _logger())
+
+        assert pair.exists()
+        assert calls == []
 
     def test_covering_pair_kept_without_flag(self, tmp_path, monkeypatch,
                                              create_1dplot_mod):
@@ -751,7 +841,7 @@ class TestTailFetchWindow:
             _tail_fetch_window,
         )
         assert _tail_fetch_window(
-            None, '20260212', '20260404', '20260215-00:00:00',
+            None, 'CO-OPS', '20260212', '20260404', '20260215-00:00:00',
             '20260401-00:00:00') == ('20260212', '20260215-00:00:00')
 
     def test_tail_start_keeps_the_three_day_padding(self):
@@ -760,9 +850,26 @@ class TestTailFetchWindow:
             _tail_fetch_window,
         )
         assert _tail_fetch_window(
-            datetime(2026, 3, 1, 6, 0), '20260212', '20260404',
+            datetime(2026, 3, 1, 6, 0), 'CO-OPS', '20260212', '20260404',
             '20260215-00:00:00', '20260401-00:00:00') == (
                 '20260226', '20260301-06:00:00')
+
+    def test_window_dependent_providers_keep_the_full_window(self):
+        """USGS/NDBC/CHS resolve their series from the queried span.
+
+        A short tail window could land on a different parameter code,
+        sensor or datamode than the run that wrote the head, so those
+        stations are re-fetched over the whole window and only the merge
+        is reused.
+        """
+        from ofs_skill.obs_retrieval.get_station_observations import (
+            _tail_fetch_window,
+        )
+        for source in ('USGS', 'NDBC', 'CHS'):
+            assert _tail_fetch_window(
+                datetime(2026, 3, 1, 6, 0), source, '20260212', '20260404',
+                '20260215-00:00:00', '20260401-00:00:00') == (
+                    '20260212', '20260215-00:00:00')
 
 
 

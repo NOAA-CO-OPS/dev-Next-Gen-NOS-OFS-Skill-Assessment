@@ -29,6 +29,7 @@ the two never disagree.
 
 import contextlib
 import os
+import time
 from datetime import UTC, datetime, timedelta
 
 # How far a cached artifact's data may stop short of the reachable run
@@ -39,6 +40,14 @@ from datetime import UTC, datetime, timedelta
 # very start or end of the window will regenerate on every run; gaps in
 # the middle of the window are never penalized.
 STALENESS_TOLERANCE = timedelta(hours=12)
+
+# Captured when this module is first imported, which happens during
+# pipeline startup -- before any artifact this run produces is written.
+# ``created_this_run`` uses it to tell "left over from an earlier run"
+# apart from "this run just made it". The slack absorbs coarse
+# filesystem mtime resolution.
+_PROCESS_START_TS = time.time()
+_MTIME_SLACK_SECONDS = 2.0
 
 # Coverage verdicts returned by ``classify_coverage``.
 #   COVERS -- the artifact spans the reachable run window; reuse as-is.
@@ -167,7 +176,13 @@ def classify_coverage(path, start_dt, end_dt, *, logger=None, now=None,
         # name. Regenerate.
         return STALE
     if last < effective_end - tolerance:
-        return PREFIX
+        # Short of the end. Extending is only sound if the file really is
+        # the head of this series -- i.e. it already reaches back to the
+        # window start. A head that begins inside the tolerance is close
+        # enough to *reuse* as-is (that is what COVERS means, and this
+        # keeps covers_run_window unchanged), but appending to it would
+        # bake the missing head into the result, so regenerate instead.
+        return PREFIX if first <= start_dt else STALE
     return COVERS
 
 
@@ -199,6 +214,25 @@ def continuation_start(path, start_dt, end_dt, overlap, *, logger=None,
     if last is None:  # pragma: no cover - PREFIX implies a parseable row
         return None
     return max(start_dt, last - overlap)
+
+
+def created_this_run(path):
+    """True if ``path``'s mtime says the current process wrote it.
+
+    A file this run produced is by definition not left over from an
+    earlier one, whatever window it covers. Callers that would otherwise
+    delete and rebuild it use this to avoid throwing away work they just
+    did -- which matters most when a per-variable loop revisits the same
+    directory several times in one run.
+
+    Returns False when the file is missing or unreadable, so callers fall
+    through to their normal handling.
+    """
+    try:
+        return (os.path.getmtime(path)
+                >= _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
+    except OSError:
+        return False
 
 
 def is_within_directory(path, directory):

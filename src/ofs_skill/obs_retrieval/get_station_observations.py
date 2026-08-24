@@ -129,7 +129,6 @@ from ofs_skill.utils.series_continuation import (
     SEAM_CHECK_WINDOW_HOURS,
     merge_and_write,
 )
-from ofs_skill.utils.timeseries_coverage import row_datetime as _row_datetime
 
 # Import directly from module to avoid circular import
 
@@ -367,17 +366,36 @@ def _format_timeseries(timeseries, variable, start_date_full, end_date_full):
         return scalar(timeseries, start_date_full, end_date_full)
 
 
-def _tail_fetch_window(tail_start, start_date, end_date, start_date_full,
-                       end_date_full):
+# Providers whose retrieval is fully pinned by the observation control
+# file, so asking for a short tail window returns the same series the
+# full window would have returned for those timestamps.
+#
+# The others are deliberately excluded. USGS picks its parameter code and
+# sensor from whatever the queried span happens to contain (and queries
+# by a `period` day count derived from that span); NDBC scans datamodes
+# for the first non-empty one; CHS resolves its series the same way. A
+# short tail window can therefore resolve a *different* instrument than
+# the run that wrote the head, and nothing in the .obs records which one
+# produced a row. Those stations still get merged - they just get their
+# tail from a full-window fetch, so the resolution cannot drift.
+_TAIL_NARROWABLE_SOURCES = frozenset({'TC', 'TAC', 'COOPS', 'CO-OPS'})
+
+
+def _tail_fetch_window(tail_start, source, start_date, end_date,
+                       start_date_full, end_date_full):
     """Narrow a station's retrieval window to a continuation tail.
 
-    Returns ``(start_date, start_date_full)`` for the fetch. With no
-    ``tail_start`` the caller's full-window values come back unchanged.
+    Returns ``(start_date, start_date_full)`` for the fetch. The caller's
+    full-window values come back unchanged when there is no
+    ``tail_start``, or when ``source`` resolves its series from the
+    queried window rather than from the control file -- see
+    ``_TAIL_NARROWABLE_SOURCES``.
+
     The coarse ``start_date`` keeps the same 3-day retrieval padding the
     full-window path applies, so providers that query by day boundary
     still return the whole tail.
     """
-    if tail_start is None:
+    if tail_start is None or source not in _TAIL_NARROWABLE_SOURCES:
         return start_date, start_date_full
     padded = tail_start - timedelta(days=3)
     return padded.strftime('%Y%m%d'), tail_start.strftime('%Y%m%d-%H:%M:%S')
@@ -709,8 +727,6 @@ def _fetch_and_format_station(
                             obs_path, formatted_series,
                             series_header(name_var), logger,
                             max_seam_gap_seconds=MAX_SEAM_GAP_HOURS * 3600,
-                            seam=_row_datetime(formatted_series[0])
-                            if formatted_series else None,
                             seam_window=timedelta(
                                 hours=SEAM_CHECK_WINDOW_HOURS)):
                         return station_id
@@ -997,8 +1013,8 @@ def _process_variable_obs(
                         # over its missing tail only; every other station
                         # keeps the original all-or-nothing behavior.
                         fetch_dates = _tail_fetch_window(
-                            tail_start, start_date, end_date,
-                            start_date_full, end_date_full)
+                            tail_start, station_info[3], start_date,
+                            end_date, start_date_full, end_date_full)
                         future = executor.submit(
                             _fetch_and_format_station,
                             station_info,
