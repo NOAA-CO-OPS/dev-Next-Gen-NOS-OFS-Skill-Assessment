@@ -286,7 +286,18 @@ def _station_metadata(read_station_ctl_file, read_ofs_ctl_file, obs_idx, ofs_idx
     return {
         'station_id': read_station_ctl_file[0][obs_idx][0],
         'node': read_ofs_ctl_file[1][ofs_idx],
-        'obs_depth': read_station_ctl_file[1][obs_idx][-2],
+        # Every obs ctl writer emits the water depth as the 4th coord
+        # token. Scalar-variable coord lines have 5 tokens so [-2] used
+        # to land on it by coincidence, but CO-OPS ADCP currents lines
+        # carry 7 tokens ([-2] read height_from_bottom, making
+        # obs_water_depth constant across a station's bins) and
+        # NDBC/USGS/CHS currents lines carry 6 ([-2] read a literal
+        # 0.0). Issue #200. A malformed short row degrades to a blank
+        # depth rather than dropping the station via IndexError.
+        'obs_depth': (
+            read_station_ctl_file[1][obs_idx][3]
+            if len(read_station_ctl_file[1][obs_idx]) > 3 else ''
+        ),
         'mod_depth': read_ofs_ctl_file[-2][ofs_idx],
         'X': str(float(read_station_ctl_file[1][obs_idx][1])),
         'Y': read_station_ctl_file[1][obs_idx][0],

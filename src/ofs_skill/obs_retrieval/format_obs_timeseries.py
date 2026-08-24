@@ -50,9 +50,12 @@ def format_scalar(
     )
     timeseries = timeseries.loc[mask].copy()
 
-    # Calculate Julian date
+    # Calculate Julian date. Round at the precision the fixed-width
+    # writer emits (8 decimals): the historical round(4) quantized to an
+    # 8.64 s grid, which made strictly 6-minute series show elapsed-day
+    # steps wobbling between 0.0041 and 0.0043 (issue #200).
     julian = pd.array(timeseries['DateTime']).to_julian_date()
-    julian = julian.round(4)
+    julian = julian.round(8)
 
     # Extract date components
     year = pd.to_datetime(timeseries['DateTime']).dt.strftime('%Y').to_numpy()
@@ -120,9 +123,12 @@ def format_vector(
     )
     timeseries = timeseries.loc[mask].copy()
 
-    # Calculate Julian date
+    # Calculate Julian date. Round at the precision the fixed-width
+    # writer emits (8 decimals): the historical round(4) quantized to an
+    # 8.64 s grid, which made strictly 6-minute series show elapsed-day
+    # steps wobbling between 0.0041 and 0.0043 (issue #200).
     julian = pd.array(timeseries['DateTime']).to_julian_date()
-    julian = julian.round(4)
+    julian = julian.round(8)
 
     # Extract date components
     year = pd.to_datetime(timeseries['DateTime']).dt.strftime('%Y').to_numpy()

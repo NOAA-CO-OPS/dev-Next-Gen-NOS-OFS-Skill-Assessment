@@ -38,11 +38,15 @@ def pandas_merge(filepath, df, datecycle, prop):
     dataframe.
     datecycle: column name string with date and model cycle of series
     to be merged.
-    logger : logging interface.
+    prop: ModelProperties object (``prop.datecycles`` lists the model
+    cycle columns to keep from the existing dataframe).
 
     Returns
     -------
-    df: merged dataframe with existing & new model cycle series.
+    df: merged dataframe with existing & new model cycle series, merged
+    on the integer date-component columns; the julian column is taken
+    from the new cycle series (rows only present in the existing
+    dataframe carry NaN julian).
 
     '''
     # Existing dataframe with previously merged model cycle series
@@ -67,10 +71,16 @@ def pandas_merge(filepath, df, datecycle, prop):
     # This is especially relevant to server/cron runs!
     if datecycle in prd.columns:
         prd.drop(columns=datecycle, inplace=True)
+    # Merge on the integer date components only. The float julian
+    # column used to be part of the key, so a cached CSV written with
+    # a different julian rounding than the fresh series (e.g. before
+    # the issue #200 precision fix) duplicated every row on the outer
+    # merge. The fresh series' julian column is carried through.
+    if 'julian' in prd.columns:
+        prd.drop(columns='julian', inplace=True)
     df = pd.merge(
         prd, df,
         on=[
-            'julian',
             'year',
             'month',
             'day',
