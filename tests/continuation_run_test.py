@@ -1,0 +1,437 @@
+"""
+Tests for continuation runs (issue #211).
+
+A continuation run passes the full assessment window plus
+``--Continue_Run`` and extends the artifacts it already has instead of
+regenerating them: an existing ``.obs``/``.prd`` that starts at the
+window start but stops short of the end gets only its missing tail
+fetched or extracted, merged in at the seam. Everything downstream
+(``.int``, skill CSVs, plots) is recomputed over the full series.
+
+The safety property under test throughout is that continuation is only
+ever an optimization: every case it cannot handle confidently -- a file
+that starts too late, duplicate timestamps, a hole at the seam, an empty
+tail -- must fall back to the pre-existing full-regeneration path rather
+than write a spliced series.
+
+Covers:
+- the three-state classifier ``classify_coverage`` and the
+  ``covers_run_window`` wrapper built on it,
+- ``continuation_start`` (where a tail fetch resumes),
+- the text-level merge in ``ofs_skill.utils.series_continuation``
+  (dedup, ordering, seam gap, atomic write, blank-file contract),
+- the reuse gates ``_ensure_obs_files`` / ``_ensure_prd_files``,
+- ``.int`` invalidation in ``_ensure_paired_data_exists``.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta
+
+import pytest
+
+from ofs_skill.utils.series_continuation import (
+    max_step_seconds,
+    merge_and_write,
+    merge_series_lines,
+    read_series_file,
+    write_series_file,
+)
+from ofs_skill.utils.timeseries_coverage import (
+    COVERS,
+    PREFIX,
+    STALE,
+    classify_coverage,
+    continuation_start,
+    covers_run_window,
+)
+
+WINDOW_START = datetime(2026, 2, 15, 0, 0)
+WINDOW_END = datetime(2026, 4, 1, 0, 0)
+# Fixed "now" so no test reads the wall clock.
+NOW = datetime(2026, 4, 2, 0, 0)
+
+SERIES_HEADER = 'Julian days, Year, Month, Day, Hours, Minutes, Water level (m)\n'
+
+
+def _row(stamp, value=1.2345):
+    """One fixed-width scalar series row, as the writers emit them."""
+    julian = 2460000.0 + stamp.timestamp() / 86400.0
+    return (f'{julian:13.8f} {stamp.year:4d} {stamp.month:2d} '
+            f'{stamp.day:2d} {stamp.hour:2d} {stamp.minute:2d} '
+            f'{value:9.4f}')
+
+
+def _rows(start, count, step=timedelta(hours=1), value=1.2345):
+    """A run of ``count`` rows at ``step`` spacing."""
+    return [_row(start + i * step, value) for i in range(count)]
+
+
+def _write_series(path, start, count, step=timedelta(hours=1), header=True,
+                  value=1.2345):
+    """Write a ``.obs``-shaped file covering ``count`` steps from start."""
+    lines = _rows(start, count, step, value)
+    path.write_text(
+        (SERIES_HEADER if header else '') + '\n'.join(lines) + '\n',
+        encoding='utf-8')
+    return lines
+
+
+def _logger():
+    """Plain logger for helpers that take one."""
+    return logging.getLogger('continuation_test')
+
+
+# --------------------------------------------------------------------
+# classify_coverage
+# --------------------------------------------------------------------
+
+class TestClassifyCoverage:
+    """The three-state coverage verdict."""
+
+    def test_full_window_covers(self, tmp_path):
+        """A file spanning the whole window is COVERS."""
+        path = tmp_path / 'full.obs'
+        _write_series(path, WINDOW_START, 45 * 24 + 1)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == COVERS
+
+    def test_short_tail_is_prefix(self, tmp_path):
+        """A file starting on time but ending early is PREFIX."""
+        path = tmp_path / 'prefix.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == PREFIX
+
+    def test_late_start_is_stale(self, tmp_path):
+        """A file whose head is missing cannot be extended."""
+        path = tmp_path / 'late.obs'
+        _write_series(path, WINDOW_START + timedelta(days=10), 40 * 24)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == STALE
+
+    def test_disjoint_earlier_window_is_stale(self, tmp_path):
+        """A file from a wholly earlier window is STALE, not PREFIX.
+
+        It starts early enough, but it ends before the window even
+        begins -- #202's disjoint case. There is no prefix to build on,
+        so extending it would splice two unrelated spans together.
+        """
+        path = tmp_path / 'disjoint.obs'
+        _write_series(path, WINDOW_START - timedelta(days=30), 24)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == STALE
+
+    def test_overlapping_earlier_window_is_prefix(self, tmp_path):
+        """A file that starts early but reaches into the window extends.
+
+        The rows before the window start are harmless -- pairing crops
+        to the window -- and the overlap proves the file is the head of
+        the same series.
+        """
+        path = tmp_path / 'early.obs'
+        _write_series(path, WINDOW_START - timedelta(days=2), 10 * 24)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == PREFIX
+
+    def test_tolerance_edge_still_covers(self, tmp_path):
+        """Ending within the tolerance of the window end is COVERS."""
+        path = tmp_path / 'edge.obs'
+        _write_series(path, WINDOW_START, 45 * 24 - 6)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == COVERS
+
+    def test_future_window_clamped_to_now(self, tmp_path):
+        """A forecast window reaching past now never marks a file short.
+
+        The file stops at *now* because that is all the data that can
+        exist; the window running 30 days further into the future must
+        not make it look like a prefix in need of extending.
+        """
+        path = tmp_path / 'fcst.obs'
+        _write_series(path, WINDOW_START, 46 * 24 + 1)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END + timedelta(days=30),
+            now=NOW) == COVERS
+
+    def test_unreadable_file_fails_open(self, tmp_path):
+        """An undecodable file is COVERS so existing error paths run."""
+        path = tmp_path / 'binary.obs'
+        path.write_bytes(b'\xff\xfe\x00\x01')
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == COVERS
+
+    def test_empty_file_fails_open(self, tmp_path):
+        """A 0-byte artifact carries no window and must not be extended."""
+        path = tmp_path / 'blank.obs'
+        path.write_text('', encoding='utf-8')
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == COVERS
+
+    def test_short_window_fails_open(self, tmp_path):
+        """Windows shorter than the tolerance cannot be judged."""
+        path = tmp_path / 'tiny.obs'
+        _write_series(path, WINDOW_START, 2)
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_START + timedelta(hours=6),
+            now=NOW) == COVERS
+
+    def test_covers_run_window_matches_classifier(self, tmp_path):
+        """The boolean wrapper is exactly the COVERS case."""
+        for name, start, count in (
+                ('a', WINDOW_START, 45 * 24 + 1),
+                ('b', WINDOW_START, 15 * 24),
+                ('c', WINDOW_START + timedelta(days=10), 40 * 24)):
+            path = tmp_path / f'{name}.obs'
+            _write_series(path, start, count)
+            verdict = classify_coverage(
+                path, WINDOW_START, WINDOW_END, now=NOW)
+            assert covers_run_window(
+                path, WINDOW_START, WINDOW_END, now=NOW) == (verdict == COVERS)
+
+
+class TestContinuationStart:
+    """Where a tail fetch resumes."""
+
+    def test_resumes_before_last_row(self, tmp_path):
+        """The tail starts one overlap before the last row on disk."""
+        path = tmp_path / 'prefix.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        last = WINDOW_START + timedelta(hours=15 * 24 - 1)
+        assert continuation_start(
+            path, WINDOW_START, WINDOW_END, timedelta(hours=24),
+            now=NOW) == last - timedelta(hours=24)
+
+    def test_clamped_to_window_start(self, tmp_path):
+        """A huge overlap cannot back the tail up past the window start."""
+        path = tmp_path / 'prefix.obs'
+        _write_series(path, WINDOW_START, 24)
+        assert continuation_start(
+            path, WINDOW_START, WINDOW_END, timedelta(days=365),
+            now=NOW) == WINDOW_START
+
+    def test_none_when_not_prefix(self, tmp_path):
+        """A COVERS file has no tail to fetch."""
+        path = tmp_path / 'full.obs'
+        _write_series(path, WINDOW_START, 45 * 24 + 1)
+        assert continuation_start(
+            path, WINDOW_START, WINDOW_END, timedelta(hours=24),
+            now=NOW) is None
+
+    def test_none_when_stale(self, tmp_path):
+        """A STALE file must be regenerated, not extended."""
+        path = tmp_path / 'late.obs'
+        _write_series(path, WINDOW_START + timedelta(days=10), 40 * 24)
+        assert continuation_start(
+            path, WINDOW_START, WINDOW_END, timedelta(hours=24),
+            now=NOW) is None
+
+
+# --------------------------------------------------------------------
+# merge
+# --------------------------------------------------------------------
+
+class TestMergeSeriesLines:
+    """The text-level append/dedup."""
+
+    def test_appends_disjoint_tail(self):
+        """Non-overlapping tail rows are appended in order."""
+        head = _rows(WINDOW_START, 24)
+        tail = _rows(WINDOW_START + timedelta(hours=24), 24)
+        merged, stats = merge_series_lines(head, tail)
+        assert merged == head + tail
+        assert (stats['kept'], stats['replaced'], stats['added']) == (24, 0, 24)
+
+    def test_overlap_is_replaced_by_new_rows(self):
+        """A re-fetched timestamp keeps the newly produced value."""
+        head = _rows(WINDOW_START, 24, value=1.0)
+        tail = _rows(WINDOW_START + timedelta(hours=12), 24, value=2.0)
+        merged, stats = merge_series_lines(head, tail)
+        assert len(merged) == 36
+        assert stats['replaced'] == 12
+        assert merged[12].endswith(f'{2.0:9.4f}')
+        assert merged[11].endswith(f'{1.0:9.4f}')
+
+    def test_output_is_sorted(self):
+        """Unsorted provider output is ordered by timestamp."""
+        head = list(reversed(_rows(WINDOW_START, 6)))
+        merged, _ = merge_series_lines(head, [])
+        assert merged == _rows(WINDOW_START, 6)
+
+    def test_duplicate_existing_timestamps_refuse(self):
+        """A file with repeated timestamps cannot be merged safely."""
+        head = _rows(WINDOW_START, 3) + _rows(WINDOW_START, 1)
+        assert merge_series_lines(head, _rows(
+            WINDOW_START + timedelta(hours=3), 3)) is None
+
+    def test_duplicate_new_timestamps_refuse(self):
+        """The same guard applies to the freshly produced tail."""
+        tail = _rows(WINDOW_START + timedelta(hours=3), 3) * 2
+        assert merge_series_lines(_rows(WINDOW_START, 3), tail) is None
+
+    def test_nan_rows_round_trip_unchanged(self):
+        """Missing-data rows are carried across verbatim."""
+        nan_row = _row(WINDOW_START, float('nan'))
+        merged, _ = merge_series_lines([nan_row], [])
+        assert merged == [nan_row]
+        assert merged[0].endswith('      nan')
+
+    def test_blank_and_garbage_lines_are_counted_not_kept(self):
+        """Unparseable rows are dropped and reported, never emitted."""
+        head = _rows(WINDOW_START, 3) + ['', 'not a data row at all']
+        merged, stats = merge_series_lines(head, [])
+        assert merged == _rows(WINDOW_START, 3)
+        assert stats['unparseable'] == 1
+
+
+class TestMaxStepSeconds:
+    """Seam gap detection."""
+
+    def test_regular_series_reports_step(self):
+        """A gapless hourly series reports one hour."""
+        assert max_step_seconds(_rows(WINDOW_START, 10)) == 3600.0
+
+    def test_gap_is_detected_near_seam(self):
+        """A hole where head meets tail is visible in the seam window."""
+        seam = WINDOW_START + timedelta(hours=10)
+        lines = (_rows(WINDOW_START, 10)
+                 + _rows(seam + timedelta(hours=5), 10))
+        assert max_step_seconds(
+            lines, around=seam, window=timedelta(hours=12)) == 6 * 3600.0
+
+    def test_gap_far_from_seam_is_ignored(self):
+        """Mid-series gaps predate the continuation and are not its fault."""
+        seam = WINDOW_START + timedelta(days=10)
+        lines = (_rows(WINDOW_START, 5)
+                 + _rows(WINDOW_START + timedelta(days=2), 5))
+        assert max_step_seconds(
+            lines, around=seam, window=timedelta(hours=12)) == 0.0
+
+    def test_single_row_has_no_step(self):
+        """Fewer than two rows in range means no measurable gap."""
+        assert max_step_seconds(_rows(WINDOW_START, 1)) == 0.0
+
+
+class TestWriteSeriesFile:
+    """The atomic writer and the blank-file contract."""
+
+    def test_round_trips_header_and_rows(self, tmp_path):
+        """A written file reads back with the same header and rows."""
+        path = tmp_path / 'out.obs'
+        lines = _rows(WINDOW_START, 5)
+        write_series_file(path, SERIES_HEADER, lines)
+        assert read_series_file(path) == (SERIES_HEADER, lines)
+
+    def test_empty_lines_write_zero_bytes(self, tmp_path):
+        """No data means a 0-byte file, header included."""
+        path = tmp_path / 'blank.obs'
+        write_series_file(path, SERIES_HEADER, [])
+        assert path.stat().st_size == 0
+
+    def test_leaves_no_temp_files_behind(self, tmp_path):
+        """The temp file is renamed into place, not left in the dir."""
+        path = tmp_path / 'out.obs'
+        write_series_file(path, SERIES_HEADER, _rows(WINDOW_START, 3))
+        assert [p.name for p in tmp_path.iterdir()] == ['out.obs']
+
+    def test_headerless_file_stays_headerless(self, tmp_path):
+        """Legacy files without a header round-trip unchanged."""
+        path = tmp_path / 'legacy.obs'
+        lines = _write_series(path, WINDOW_START, 4, header=False)
+        header, data = read_series_file(path)
+        assert header is None
+        assert data == lines
+
+
+class TestMergeAndWrite:
+    """The end-to-end merge used by the .obs/.prd write sites."""
+
+    def test_extends_file_in_place(self, tmp_path):
+        """A prefix file gains its tail and keeps its head."""
+        path = tmp_path / 'series.obs'
+        head = _write_series(path, WINDOW_START, 24)
+        tail = _rows(WINDOW_START + timedelta(hours=20), 12)
+        assert merge_and_write(path, tail, SERIES_HEADER, _logger()) is True
+        _, data = read_series_file(path)
+        assert data == head[:20] + tail
+
+    def test_result_matches_a_fresh_full_window_write(self, tmp_path):
+        """Extending equals writing the whole window from scratch.
+
+        This is the acceptance criterion in #211: with stable sources,
+        head-plus-tail must be byte-identical to a from-scratch run.
+        """
+        extended = tmp_path / 'extended.obs'
+        fresh = tmp_path / 'fresh.obs'
+        _write_series(extended, WINDOW_START, 24)
+        merge_and_write(
+            extended, _rows(WINDOW_START + timedelta(hours=20), 28),
+            SERIES_HEADER, _logger())
+        write_series_file(fresh, SERIES_HEADER, _rows(WINDOW_START, 48))
+        assert extended.read_bytes() == fresh.read_bytes()
+
+    def test_empty_tail_leaves_file_untouched(self, tmp_path):
+        """A tail fetch that found nothing must never truncate a good file."""
+        path = tmp_path / 'series.obs'
+        _write_series(path, WINDOW_START, 24)
+        before = path.read_bytes()
+        assert merge_and_write(path, [], SERIES_HEADER, _logger()) is False
+        assert path.read_bytes() == before
+
+    def test_seam_gap_refuses_merge(self, tmp_path):
+        """A hole at the seam falls back to regeneration."""
+        path = tmp_path / 'series.obs'
+        _write_series(path, WINDOW_START, 10)
+        before = path.read_bytes()
+        seam = WINDOW_START + timedelta(hours=9)
+        tail = _rows(seam + timedelta(hours=6), 10)
+        assert merge_and_write(
+            path, tail, SERIES_HEADER, _logger(),
+            max_seam_gap_seconds=2 * 3600, seam=seam,
+            seam_window=timedelta(hours=12)) is False
+        assert path.read_bytes() == before
+
+    def test_seam_within_limit_merges(self, tmp_path):
+        """A seam step no wider than the model interval is accepted."""
+        path = tmp_path / 'series.obs'
+        _write_series(path, WINDOW_START, 10)
+        seam = WINDOW_START + timedelta(hours=9)
+        tail = _rows(seam + timedelta(hours=1), 10)
+        assert merge_and_write(
+            path, tail, SERIES_HEADER, _logger(),
+            max_seam_gap_seconds=2 * 3600, seam=seam,
+            seam_window=timedelta(hours=12)) is True
+
+    def test_duplicate_rows_refuse_merge(self, tmp_path):
+        """An existing file with repeated timestamps is left alone."""
+        path = tmp_path / 'dupes.obs'
+        rows = _rows(WINDOW_START, 3) + _rows(WINDOW_START, 1)
+        path.write_text(
+            SERIES_HEADER + '\n'.join(rows) + '\n', encoding='utf-8')
+        before = path.read_bytes()
+        assert merge_and_write(
+            path, _rows(WINDOW_START + timedelta(hours=3), 3),
+            SERIES_HEADER, _logger()) is False
+        assert path.read_bytes() == before
+
+    def test_missing_file_refuses_merge(self, tmp_path):
+        """No file to extend means the caller writes a fresh one."""
+        assert merge_and_write(
+            tmp_path / 'absent.obs', _rows(WINDOW_START, 3),
+            SERIES_HEADER, _logger()) is False
+
+    def test_legacy_headerless_file_gains_header(self, tmp_path):
+        """Extending a pre-header file brings it up to the current format."""
+        path = tmp_path / 'legacy.obs'
+        _write_series(path, WINDOW_START, 6, header=False)
+        assert merge_and_write(
+            path, _rows(WINDOW_START + timedelta(hours=6), 6),
+            SERIES_HEADER, _logger()) is True
+        header, data = read_series_file(path)
+        assert header == SERIES_HEADER
+        assert len(data) == 12
+
+
+if __name__ == '__main__':  # pragma: no cover - manual invocation
+    pytest.main([__file__])

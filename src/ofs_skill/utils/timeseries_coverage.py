@@ -17,6 +17,14 @@ and ``create_1dplot`` detect stale artifacts and trigger regeneration
 instead. ``remove_stale_artifact`` is the shared deletion path: it refuses
 targets that resolve outside the artifact directory and tolerates a
 concurrent run having already deleted the file.
+
+``classify_coverage`` splits the "not usable as-is" case in two: an
+artifact that merely *stops short* of the window start where it should
+(``PREFIX``) can be extended by a continuation run (``--Continue_Run``,
+issue #211) instead of being thrown away, while one that starts too late
+or is outright disjoint (``STALE``) can only be regenerated.
+``covers_run_window`` is the ``COVERS`` case of the same classifier, so
+the two never disagree.
 """
 
 import contextlib
@@ -31,6 +39,16 @@ from datetime import UTC, datetime, timedelta
 # very start or end of the window will regenerate on every run; gaps in
 # the middle of the window are never penalized.
 STALENESS_TOLERANCE = timedelta(hours=12)
+
+# Coverage verdicts returned by ``classify_coverage``.
+#   COVERS -- the artifact spans the reachable run window; reuse as-is.
+#   PREFIX -- it starts early enough but ends short; a continuation run
+#             can fetch/extract the missing tail and merge it in.
+#   STALE  -- it starts too late, or is disjoint from the window; the
+#             only safe move is to delete and regenerate.
+COVERS = 'covers'
+PREFIX = 'prefix'
+STALE = 'stale'
 
 
 def _parse_date(raw):
@@ -64,7 +82,7 @@ def parse_run_window(prop, logger=None):
     return None
 
 
-def _row_datetime(line):
+def row_datetime(line):
     """Timestamp of one whitespace-separated data row, or None.
 
     ``.obs``, ``.prd``, and ``*_pair.int`` files all carry
@@ -93,7 +111,7 @@ def read_first_last_timestamps(path):
     try:
         with open(path, encoding='utf-8') as file_handle:
             for line in file_handle:
-                stamp = _row_datetime(line)
+                stamp = row_datetime(line)
                 if stamp is None:
                     continue
                 if first is None:
@@ -104,23 +122,27 @@ def read_first_last_timestamps(path):
     return first, last
 
 
-def covers_run_window(path, start_dt, end_dt, *, logger=None, now=None):
-    """True unless the file's data demonstrably stops short of the window.
+def classify_coverage(path, start_dt, end_dt, *, logger=None, now=None,
+                      tolerance=STALENESS_TOLERANCE):
+    """Classify a cached artifact's coverage of the run window.
 
-    A cached artifact is stale when its first timestamp begins more than
-    ``STALENESS_TOLERANCE`` after the window start, or its last timestamp
-    ends more than that before ``min(end_dt, now)``. Clamping the end to
-    *now* means windows extending into the future (forecast runs) never
-    penalize a fresh file for data that cannot exist yet, and comparing
-    against the window ends rather than an overlap fraction catches
-    rolling-window reuse (a file from yesterday's overlapping window
-    always ends ~24 h short) without deleting files that merely have
-    mid-window gaps.
+    Returns one of :data:`COVERS`, :data:`PREFIX`, or :data:`STALE`.
 
-    Fails open (returns True) when the file cannot be parsed, so
+    The window end is clamped to *now* so a run extending into the future
+    (forecast casts) never penalizes a fresh file for data that cannot
+    exist yet. Comparing against the window ends rather than an overlap
+    fraction catches rolling-window reuse -- a file from yesterday's
+    overlapping window always ends ~24 h short -- without condemning
+    files that merely have mid-window gaps.
+
+    ``PREFIX`` is the continuation case: the file starts early enough to
+    be the head of the requested series but stops short of the end, so
+    only ``[last_row, end]`` is missing.
+
+    Fails open (returns ``COVERS``) when the file cannot be parsed, so
     unreadable files keep flowing through the pre-existing error handling
-    instead of being regenerated on every run, and when the reachable part
-    of the window is shorter than the tolerance (too little data can
+    instead of being regenerated on every run, and when the reachable
+    part of the window is shorter than ``tolerance`` (too little data can
     exist to judge either way).
     """
     first, last = read_first_last_timestamps(path)
@@ -129,17 +151,54 @@ def covers_run_window(path, start_dt, end_dt, *, logger=None, now=None):
             logger.warning(
                 'Could not read timestamps from %s; '
                 'skipping staleness check for this file.', path)
-        return True
+        return COVERS
     if now is None:
         now = datetime.now(UTC).replace(tzinfo=None)
     effective_end = min(end_dt, now)
-    if effective_end - start_dt <= STALENESS_TOLERANCE:
-        return True
-    if first > start_dt + STALENESS_TOLERANCE:
-        return False
-    if last < effective_end - STALENESS_TOLERANCE:
-        return False
-    return True
+    if effective_end - start_dt <= tolerance:
+        return COVERS
+    if first > start_dt + tolerance:
+        # Starts after the window start: the head of the series is
+        # missing, so appending a tail would leave a hole. Regenerate.
+        return STALE
+    if last < start_dt:
+        # Wholly earlier than the window (#202's disjoint case): there is
+        # no prefix here to build on, only a file that happens to share a
+        # name. Regenerate.
+        return STALE
+    if last < effective_end - tolerance:
+        return PREFIX
+    return COVERS
+
+
+def covers_run_window(path, start_dt, end_dt, *, logger=None, now=None):
+    """True unless the file's data demonstrably stops short of the window.
+
+    Thin wrapper over :func:`classify_coverage` so the reuse gates and
+    the continuation planner can never disagree about a file.
+    """
+    return classify_coverage(path, start_dt, end_dt, logger=logger,
+                             now=now) == COVERS
+
+
+def continuation_start(path, start_dt, end_dt, overlap, *, logger=None,
+                       now=None):
+    """Where a continuation run should resume fetching for this artifact.
+
+    Returns the tail start (the file's last timestamp backed up by
+    ``overlap``, a :class:`~datetime.timedelta`, and clamped to the
+    window start) when the file classifies as :data:`PREFIX`, else
+    ``None``. Re-fetching a trailing overlap lets provider QC revisions
+    and re-extracted model rows replace what is already on disk instead
+    of butting up against it.
+    """
+    if classify_coverage(path, start_dt, end_dt, logger=logger,
+                         now=now) != PREFIX:
+        return None
+    _, last = read_first_last_timestamps(path)
+    if last is None:  # pragma: no cover - PREFIX implies a parseable row
+        return None
+    return max(start_dt, last - overlap)
 
 
 def is_within_directory(path, directory):
