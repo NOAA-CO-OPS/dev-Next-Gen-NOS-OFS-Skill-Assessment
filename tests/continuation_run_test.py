@@ -26,8 +26,12 @@ Covers:
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import logging
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -53,6 +57,29 @@ WINDOW_END = datetime(2026, 4, 1, 0, 0)
 NOW = datetime(2026, 4, 2, 0, 0)
 
 SERIES_HEADER = 'Julian days, Year, Month, Day, Hours, Minutes, Water level (m)\n'
+
+# The package re-exports get_skill the function, shadowing get_skill the
+# module, so the module has to be fetched by name.
+get_skill_mod = importlib.import_module('ofs_skill.skill_assessment.get_skill')
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CREATE_1DPLOT_PATH = REPO_ROOT / 'bin' / 'visualization' / 'create_1dplot.py'
+
+
+@pytest.fixture(scope='module', name='create_1dplot_mod')
+def fixture_create_1dplot_mod():
+    """Import bin/visualization/create_1dplot.py as a module.
+
+    bin/ is not a package, and the sys.modules key is unique to this test
+    module so loading the same script from another test file does not
+    collide with this one.
+    """
+    spec = importlib.util.spec_from_file_location(
+        'create_1dplot_continuation_under_test', CREATE_1DPLOT_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules['create_1dplot_continuation_under_test'] = mod
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _row(stamp, value=1.2345):
@@ -431,6 +458,280 @@ class TestMergeAndWrite:
         header, data = read_series_file(path)
         assert header == SERIES_HEADER
         assert len(data) == 12
+
+
+# --------------------------------------------------------------------
+# reuse gates
+# --------------------------------------------------------------------
+
+class _GateProp:
+    """Minimum prop surface the .obs and .prd reuse gates touch."""
+
+    def __init__(self, tmp_path, continue_run=False,
+                 start='2026-02-15T00:00:00Z', end='2026-04-01T00:00:00Z'):
+        self.ofs = 'cbofs'
+        self.whichcast = 'nowcast'
+        self.ofsfiletype = 'stations'
+        self.forecast_hr = '00z'
+        self.start_date_full = start
+        self.end_date_full = end
+        self.continue_run = continue_run
+        self.continue_overlap_hours = 24.0
+        self.data_observations_1d_station_path = str(tmp_path)
+        self.data_model_1d_node_path = str(tmp_path)
+
+
+def _obs_ctl(station_ids):
+    """Station ctl structure as _ensure_obs_files indexes it."""
+    return [[[sid, '', '', 'CO-OPS'] for sid in station_ids], []]
+
+
+def _model_ctl(station_ids, nodes):
+    """Model ctl structure as _prd_paths indexes it (``[1]`` and ``[-1]``)."""
+    return [[], list(nodes), [], [], [], list(station_ids)]
+
+
+class TestEnsureObsFiles:
+    """The observation reuse gate's three outcomes."""
+
+    def test_prefix_plans_a_tail_fetch(self, tmp_path, monkeypatch):
+        """A short .obs is kept and its tail start recorded."""
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        calls = {}
+        monkeypatch.setattr(
+            get_skill_mod, 'get_station_observations',
+            lambda prop, log, continuation=None: calls.update(
+                plan=continuation))
+
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert path.exists()
+        assert list(calls['plan']) == [str(path)]
+        assert calls['plan'][str(path)] < WINDOW_END
+
+    def test_prefix_without_flag_is_deleted(self, tmp_path, monkeypatch):
+        """Without --Continue_Run the same file is regenerated as before."""
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        calls = {}
+        monkeypatch.setattr(
+            get_skill_mod, 'get_station_observations',
+            lambda prop, log, continuation=None: calls.update(
+                plan=continuation))
+
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path), 'wl', _logger())
+
+        assert not path.exists()
+        assert calls['plan'] is None
+
+    def test_stale_file_is_deleted_even_in_continuation(
+            self, tmp_path, monkeypatch):
+        """A file starting after the window start cannot be extended."""
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START + timedelta(days=10), 40 * 24)
+        calls = {}
+        monkeypatch.setattr(
+            get_skill_mod, 'get_station_observations',
+            lambda prop, log, continuation=None: calls.update(
+                plan=continuation))
+
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert not path.exists()
+        assert calls['plan'] is None
+
+    def test_covering_file_triggers_no_fetch(self, tmp_path, monkeypatch):
+        """A complete .obs is reused without contacting any provider."""
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 46 * 24 + 1)
+        calls = []
+        monkeypatch.setattr(
+            get_skill_mod, 'get_station_observations',
+            lambda prop, log, continuation=None: calls.append(continuation))
+
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert calls == []
+        assert path.exists()
+
+    def test_empty_file_is_not_extended(self, tmp_path, monkeypatch):
+        """A 0-byte .obs records 'no data', not a window."""
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        path.write_text('', encoding='utf-8')
+        calls = []
+        monkeypatch.setattr(
+            get_skill_mod, 'get_station_observations',
+            lambda prop, log, continuation=None: calls.append(continuation))
+
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert calls == []
+
+
+class TestEnsurePrdFiles:
+    """The model-extraction reuse gate."""
+
+    def test_prefix_runs_a_tail_extraction(self, tmp_path, monkeypatch):
+        """A short .prd triggers extraction over the tail window only."""
+        path = tmp_path / '8638901_cbofs_wl_45_nowcast_stations_model.prd'
+        _write_series(path, WINDOW_START, 15 * 24)
+        seen = {}
+
+        def _fake_extract(prop, log, model_dataset=None):
+            seen['start'] = prop.start_date_full
+            seen['merge'] = getattr(prop, 'continuation_prd_merge', False)
+            # Stand in for the real extraction plus its merge.
+            _write_series(path, WINDOW_START, 46 * 24 + 1)
+            return None
+
+        monkeypatch.setattr(get_skill_mod, 'get_node_ofs', _fake_extract)
+        get_skill_mod._ensure_prd_files(
+            _model_ctl(['8638901'], [45]),
+            _GateProp(tmp_path, continue_run=True), 'wl', _logger())
+
+        assert seen['merge'] is True
+        assert seen['start'] < '2026-03-02'
+        assert seen['start'] > '2026-02-15'
+
+    def test_failed_tail_falls_back_to_full_extraction(
+            self, tmp_path, monkeypatch):
+        """A tail pass that does not close the gap regenerates in full."""
+        path = tmp_path / '8638901_cbofs_wl_45_nowcast_stations_model.prd'
+        _write_series(path, WINDOW_START, 15 * 24)
+        windows = []
+
+        def _fake_extract(prop, log, model_dataset=None):
+            windows.append(
+                (prop.start_date_full,
+                 getattr(prop, 'continuation_prd_merge', False)))
+            return None  # never actually extends the file
+
+        monkeypatch.setattr(get_skill_mod, 'get_node_ofs', _fake_extract)
+        get_skill_mod._ensure_prd_files(
+            _model_ctl(['8638901'], [45]),
+            _GateProp(tmp_path, continue_run=True), 'wl', _logger())
+
+        assert len(windows) == 2
+        assert windows[0][1] is True
+        assert windows[1] == ('2026-02-15T00:00:00Z', False)
+        assert not path.exists()
+
+    def test_missing_file_skips_continuation(self, tmp_path, monkeypatch):
+        """Nothing on disk means there is no prefix to extend."""
+        windows = []
+        monkeypatch.setattr(
+            get_skill_mod, 'get_node_ofs',
+            lambda prop, log, model_dataset=None: windows.append(
+                (prop.start_date_full,
+                 getattr(prop, 'continuation_prd_merge', False))))
+
+        get_skill_mod._ensure_prd_files(
+            _model_ctl(['8638901'], [45]),
+            _GateProp(tmp_path, continue_run=True), 'wl', _logger())
+
+        assert windows == [('2026-02-15T00:00:00Z', False)]
+
+    def test_tail_starts_at_the_furthest_behind_station(
+            self, tmp_path, monkeypatch):
+        """One dataset load must reach the station with the least data."""
+        ahead = tmp_path / '111_cbofs_wl_45_nowcast_stations_model.prd'
+        behind = tmp_path / '222_cbofs_wl_46_nowcast_stations_model.prd'
+        _write_series(ahead, WINDOW_START, 30 * 24)
+        _write_series(behind, WINDOW_START, 15 * 24)
+        seen = {}
+
+        def _fake_extract(prop, log, model_dataset=None):
+            seen['start'] = prop.start_date_full
+            _write_series(ahead, WINDOW_START, 46 * 24 + 1)
+            _write_series(behind, WINDOW_START, 46 * 24 + 1)
+            return None
+
+        monkeypatch.setattr(get_skill_mod, 'get_node_ofs', _fake_extract)
+        get_skill_mod._ensure_prd_files(
+            _model_ctl(['111', '222'], [45, 46]),
+            _GateProp(tmp_path, continue_run=True), 'wl', _logger())
+
+        # 15 days of hourly rows minus the 24 h overlap lands on Feb 28.
+        assert seen['start'].startswith('2026-02-28')
+
+
+class TestPairInvalidation:
+    """.int files are always rebuilt in a continuation run."""
+
+    def test_pair_files_removed_under_flag(self, tmp_path, monkeypatch,
+                                           create_1dplot_mod):
+        """Every existing pair file is dropped so skill is recomputed."""
+        pair = (tmp_path
+                / 'cbofs_wl_8638901_45_nowcast_stations_pair.int')
+        _write_series(pair, WINDOW_START, 46 * 24 + 1)
+        prop = _GateProp(tmp_path, continue_run=True)
+        prop.data_skill_1d_pair_path = str(tmp_path)
+        prop.whichcasts = ['nowcast']
+        prop.start_date_full_before = prop.start_date_full
+        prop.end_date_full_before = prop.end_date_full
+        monkeypatch.setattr(create_1dplot_mod, 'get_skill',
+                            lambda *a, **k: None)
+
+        create_1dplot_mod._ensure_paired_data_exists(
+            _model_ctl(['8638901'], [45]), prop, ('water_level', 'wl'),
+            _logger())
+
+        assert not pair.exists()
+
+    def test_covering_pair_kept_without_flag(self, tmp_path, monkeypatch,
+                                             create_1dplot_mod):
+        """Today's behavior is untouched when the flag is off."""
+        pair = (tmp_path
+                / 'cbofs_wl_8638901_45_nowcast_stations_pair.int')
+        _write_series(pair, WINDOW_START, 46 * 24 + 1)
+        prop = _GateProp(tmp_path)
+        prop.data_skill_1d_pair_path = str(tmp_path)
+        prop.whichcasts = ['nowcast']
+        prop.start_date_full_before = prop.start_date_full
+        prop.end_date_full_before = prop.end_date_full
+        monkeypatch.setattr(create_1dplot_mod, 'get_skill',
+                            lambda *a, **k: None)
+
+        create_1dplot_mod._ensure_paired_data_exists(
+            _model_ctl(['8638901'], [45]), prop, ('water_level', 'wl'),
+            _logger())
+
+        assert pair.exists()
+
+
+class TestTailFetchWindow:
+    """Narrowing a station's retrieval window to its tail."""
+
+    def test_no_tail_start_passes_window_through(self):
+        """Stations outside the plan keep the full-window dates."""
+        from ofs_skill.obs_retrieval.get_station_observations import (
+            _tail_fetch_window,
+        )
+        assert _tail_fetch_window(
+            None, '20260212', '20260404', '20260215-00:00:00',
+            '20260401-00:00:00') == ('20260212', '20260215-00:00:00')
+
+    def test_tail_start_keeps_the_three_day_padding(self):
+        """The coarse date keeps the retrieval padding the full path uses."""
+        from ofs_skill.obs_retrieval.get_station_observations import (
+            _tail_fetch_window,
+        )
+        assert _tail_fetch_window(
+            datetime(2026, 3, 1, 6, 0), '20260212', '20260404',
+            '20260215-00:00:00', '20260401-00:00:00') == (
+                '20260226', '20260301-06:00:00')
+
+
 
 
 if __name__ == '__main__':  # pragma: no cover - manual invocation

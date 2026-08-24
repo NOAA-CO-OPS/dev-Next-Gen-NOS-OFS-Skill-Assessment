@@ -40,6 +40,11 @@ python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2
 
 # 4. Run the 1D skill assessment
 python ./bin/visualization/create_1dplot.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -d MLLW -ws nowcast,forecast_b
+
+# 5. (Optional) Later, extend that assessment to a later end date without
+#    redoing the part you already ran. Pass the FULL window and add -cr;
+#    only the new span is downloaded, extracted and fetched.
+python ./bin/visualization/create_1dplot.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-05T00:00:00Z -d MLLW -ws nowcast,forecast_b -cr
 ```
 
 Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/10.-Graphical-User-Interfaces-(GUI)). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/01.-Setup-and-Installation).
