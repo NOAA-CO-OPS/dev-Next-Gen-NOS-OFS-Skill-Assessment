@@ -37,6 +37,7 @@ class TidesandCurrentsProperties:
     """
 
     def __init__(self):
+        """Initialize CO-OPS API URL and chunk-state fields."""
         self.mdapi_url: str = ''
         self.api_url: str = ''
         self.start_dt_0: datetime | None = None

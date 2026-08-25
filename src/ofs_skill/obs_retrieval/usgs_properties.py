@@ -33,6 +33,7 @@ class USGSProperties:
     """
 
     def __init__(self):
+        """Initialize USGS URL and date-component fields."""
         self.base_url: str = ''
         self.url: str = ''
         self.obs_final: pd.DataFrame | None = None

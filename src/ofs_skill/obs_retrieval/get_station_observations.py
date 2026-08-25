@@ -936,15 +936,25 @@ def _process_variable_obs(
 
 
 def get_station_observations(prop,logger):
-    """
-    This is the final function.
-    This function calls the Tides and Currents, NDBC, and
-    USGS retrieval function in loop for all stations found
-    for the ofs_inventory(ofs, start_date, end_date, path)
-    and variables ['water_level', 'water_temperature',
-                   'salinity', 'currents'].
-    The output is a csv file for each station with DateTime
-    and OBS.
+    """Download and format 1D station observations for an OFS run window.
+
+    Inventories (or reuses) stations for the OFS extent, then retrieves
+    time series from CO-OPS, NDBC, USGS, and/or CHS for each requested
+    variable. Writes per-station ``.obs`` files and observation control
+    files under the paths in ``prop``.
+
+    Args:
+        prop: ``ModelProperties`` (or compatible) with ``ofs``,
+            ``start_date_full``, ``end_date_full``, ``datum``, ``path``,
+            ``stationowner``, and ``var_list`` set.
+        logger: Logger instance, or ``None`` to configure from
+            ``conf/logging.conf``.
+
+    Returns:
+        None. Side effects: observation and control files on disk.
+
+    Raises:
+        SystemExit: If logging config is missing when ``logger`` is ``None``.
     """
 
     # Hand out vars from the prop Santa
