@@ -277,8 +277,13 @@ class TestPairedScalarIntBytes:
         # Tripwire on the fixture itself: the data rows end in digits, so
         # no whitespace hook can reach them, but a well-meaning reformat
         # of the file would otherwise silently weaken this test.
+        # Hash the normalised bytes: .gitattributes pins this fixture to
+        # LF so a fresh checkout matches on every platform, but a working
+        # copy cloned before that rule was added can still hold CRLF, and
+        # a line-ending difference is not the corruption this guards
+        # against.
         assert hashlib.sha256(
-            _GOLDEN_ROWS.read_bytes()).hexdigest() == _GOLDEN_ROWS_SHA256
+            _lf(_GOLDEN_ROWS.read_bytes())).hexdigest() == _GOLDEN_ROWS_SHA256
 
     def test_matches_legacy_writer(self, logger):
         """Same bytes as the row-by-row writer it replaced."""
