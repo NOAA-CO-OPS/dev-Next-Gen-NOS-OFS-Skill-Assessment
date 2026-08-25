@@ -1010,6 +1010,16 @@ def create_1dplot(prop, logger):
         else:
             logger.error('Failure checking for datum netcdf file on the NODD S3 '
                         'bucket! Datum conversions may fail. Continuing...')
+    finally:
+        # This dataset is only opened to test datum availability. Close its
+        # (h5netcdf/h5py) file handle now so it isn't finalized during
+        # interpreter shutdown after h5py is torn down (issue #94).
+        _close = getattr(vdatums, 'close', None)
+        if _close is not None:
+            try:
+                _close()
+            except Exception:  # pragma: no cover - defensive cleanup only
+                pass
 
     # Date-gate for forecast horizon functionality
     if ((datetime.strptime(prop.end_date_full,'%Y-%m-%dT%H:%M:%SZ')-
