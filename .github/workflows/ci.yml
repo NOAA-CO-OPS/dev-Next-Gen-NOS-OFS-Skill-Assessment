@@ -250,3 +250,45 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
           # Do not cache coverage.xml across jobs/runs — always regenerate.
+
+  # Single required status check for branch protection.
+  #
+  # Protection rules can only require a check by name, and a check that
+  # never reports blocks a PR forever rather than failing it. The Pytest
+  # matrix is conditional (`if: needs.changes.outputs.code == 'true'`),
+  # so on a docs-only PR those six jobs are skipped and never report --
+  # requiring them directly would deadlock exactly the documentation PRs
+  # they are irrelevant to.
+  #
+  # This job always reports. It treats a skipped dependency as fine,
+  # because skipping is how the workflow expresses "not applicable here",
+  # and fails when any dependency actually failed or was cancelled.
+  # Require only this one check on main; the jobs below stay free to be
+  # renamed, split, or made conditional without touching the rule.
+  ci-gate:
+    name: CI gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, lint, types, docs, package, tests]
+    if: always()
+    steps:
+      - name: Summarize dependency results
+        run: |
+          {
+            echo '### CI gate'
+            echo
+            echo '| job | result |'
+            echo '| --- | --- |'
+            echo '| Detect code changes | ${{ needs.changes.result }} |'
+            echo '| Lint (ruff + detect-secrets) | ${{ needs.lint.result }} |'
+            echo '| Types (mypy) | ${{ needs.types.result }} |'
+            echo '| Docs (mkdocs) | ${{ needs.docs.result }} |'
+            echo '| Package (build + twine) | ${{ needs.package.result }} |'
+            echo '| Pytest matrix | ${{ needs.tests.result }} |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if any job failed or was cancelled
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo '::error::One or more CI jobs did not succeed; see the run summary.'
+          exit 1
