@@ -84,22 +84,19 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
 
     obs = make_usgs_obs_dataframe(periods=8, value=14.0)
 
-    # The new inventory gate deletes pre-manifest files as stale. We patch
-    # ensure_fresh to unconditionally treat our synthetic inventory as fresh so
-    # the pipeline reuses it instead of deleting it and trying (and failing) to
-    # rebuild it with un-mocked USGS inventory APIs.
+    # The inventory gate deletes pre-manifest files as stale, so stamp the
+    # synthetic inventory with the signature this call will compute. Mocking
+    # ensure_fresh instead would switch off the very gate under test -- that
+    # is what previously hid an empty rebuild being recorded as fresh.
     from ofs_skill.utils import cache_manifest
-    original_ensure_fresh = cache_manifest.ensure_fresh
-
-    def mock_ensure_fresh(artifact_path, signature, base_dir, kind, logger=None):
-        if 'inventory' in str(kind).lower() or str(artifact_path).endswith('.csv'):
-            return True
-        return original_ensure_fresh(artifact_path, signature, base_dir, kind, logger)
+    cache_manifest.record_artifact(
+        str(inv_path),
+        cache_manifest.inventory_signature(
+            'cbofs', '20240101', '20240102', 'usgs'),
+        str(control),
+    )
 
     with patch(
-        'ofs_skill.obs_retrieval.write_obs_ctlfile.cache_manifest.ensure_fresh',
-        side_effect=mock_ensure_fresh,
-    ), patch(
         'ofs_skill.obs_retrieval.write_obs_ctlfile.retrieve_usgs_station',
         return_value=obs,
     ), mock_usgs_searvey():

@@ -1018,6 +1018,36 @@ def _process_variable(
         raise Exception('Saving station failed.') from ex
 
 
+def record_inventory_if_populated(inventory, inventory_path,
+                                  inventory_signature, control_files_path,
+                                  logger):
+    """Stamp the inventory's run signature, but only if it holds stations.
+
+    Returns True when the signature was recorded.
+
+    A build that comes back with zero rows must not be certified. One
+    provider outage during the single run that rebuilds an inventory is
+    enough to produce a header-only file, and stamping it tells every later
+    run with the same parameters that the empty station set is correct --
+    along with the 0-byte station ctls built from it. The user sees the run
+    fail, but the only way out is deleting ``control_files/`` by hand, which
+    is the manual step the manifest exists to remove.
+
+    Leaving it unstamped costs one rebuild on the next run and is
+    self-healing, which is the right trade.
+    """
+    if inventory is None or getattr(inventory, 'empty', False):
+        if logger is not None:
+            logger.warning(
+                'Inventory %s has no station rows, so it is not being '
+                'recorded as fresh -- the next run will rebuild it rather '
+                'than reuse an empty station set.', inventory_path)
+        return False
+    cache_manifest.record_artifact(
+        inventory_path, inventory_signature, control_files_path, logger)
+    return True
+
+
 def write_obs_ctlfile(
     start_date,
     end_date,
@@ -1076,14 +1106,8 @@ def write_obs_ctlfile(
     # parameters so the reader below rebuilds it instead of reusing the
     # wrong station set (issue: stale cache reuse across runs).
     inventory_path = f'{control_files_path}/inventory_all_{ofs}.csv'
-    inventory_signature = {
-        'ofs': cache_manifest._normalize(ofs),
-        'start_date': cache_manifest._normalize(start_date),
-        'end_date': cache_manifest._normalize(end_date),
-        'stationowner': cache_manifest._normalize(stationowner),
-        'currents_bins_csv': cache_manifest.file_fingerprint(
-            currents_bins_csv),
-    }
+    inventory_signature = cache_manifest.inventory_signature(
+        ofs, start_date, end_date, stationowner, currents_bins_csv)
     cache_manifest.ensure_fresh(
         inventory_path, inventory_signature, control_files_path,
         'inventory', logger)
@@ -1153,8 +1177,9 @@ def write_obs_ctlfile(
 
     # Record the signature for the (possibly freshly built) inventory so a
     # same-parameter rerun reuses it and a changed-parameter run rebuilds it.
-    cache_manifest.record_artifact(
-        inventory_path, inventory_signature, control_files_path, logger)
+    record_inventory_if_populated(
+        inventory, inventory_path, inventory_signature, control_files_path,
+        logger)
 
     logger.info('Downloading data from the Inventory file!')
 

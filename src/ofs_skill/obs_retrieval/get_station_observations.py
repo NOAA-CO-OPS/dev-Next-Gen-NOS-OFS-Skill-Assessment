@@ -648,6 +648,17 @@ def _fetch_and_format_station(
                             '%s_%s_%s_station.obs created successfully',
                             station_id, ofs, name_var
                         )
+                    # Stamp the run signature so a same-parameter rerun
+                    # reuses this file and a changed-parameter run treats
+                    # it as stale. Only reached once the file is known to
+                    # have rows, so an empty series is never stamped.
+                    # Without this the gate finds no entry for any .obs,
+                    # reads every one as stale, and re-fetches the whole
+                    # station set on every run.
+                    if obs_signature is not None:
+                        cache_manifest.record_artifact(
+                            obs_path, obs_signature,
+                            data_observations_1d_station_path, logger)
                     return station_id
                 else:
                     # Return None so it gets appended to the `failed` list

@@ -197,6 +197,25 @@ def run_signature(prop, *, variable=None, extra=None) -> dict:
                 else _normalize(value)
     return sig
 
+def inventory_signature(ofs, start_date, end_date, stationowner,
+                        currents_bins_csv=None) -> dict:
+    """Signature for the shared station inventory CSV.
+
+    The inventory is built before a ``prop`` exists, so it cannot go through
+    :func:`run_signature`. Keeping its shape here rather than inline at the
+    call site means the normalization stays consistent, and callers (tests
+    included) do not have to reach into the private ``_normalize`` helpers
+    to construct a matching stamp.
+    """
+    return {
+        'ofs': _normalize(ofs),
+        'start_date': _normalize_date(start_date),
+        'end_date': _normalize_date(end_date),
+        'stationowner': _normalize(stationowner),
+        'currents_bins_csv': file_fingerprint(currents_bins_csv),
+    }
+
+
 def _index_path(directory: str) -> str:
     return os.path.join(directory, MANIFEST_FILENAME)
 
