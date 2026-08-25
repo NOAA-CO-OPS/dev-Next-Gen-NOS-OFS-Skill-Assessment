@@ -46,6 +46,7 @@ Date: June 2026
 
 import argparse
 import csv
+import logging
 import os
 from pathlib import Path
 
@@ -329,7 +330,7 @@ def main(args):
             target_whichcasts.append(wc)
 
     if not target_whichcasts:
-        print(f"Error: No valid whichcasts provided. Allowed choices are: "
+        print(f'Error: No valid whichcasts provided. Allowed choices are: '
               f"{', '.join(ALLOWED_WHICHCASTS)}")
         raise SystemExit(1)
 
@@ -339,10 +340,16 @@ def main(args):
         target_vars = [var_selection]
 
     home_dir = Path(args.Path)
+    # A relative -c is looked for under the working directory first, then
+    # under the installation root, so an external -p still finds the
+    # shipped config instead of dying on a path that cannot exist.
+    resolved_conf = (
+        conf_path if os.path.isabs(conf_path)
+        else utils.resolve_asset_path(home_dir, conf_path)
+    )
     try:
-        dir_params = utils.Utils(
-            os.path.join(home_dir, conf_path)
-        ).read_config_section('directories', None)
+        dir_params = utils.Utils(resolved_conf).read_config_section(
+            'directories', logging.getLogger(__name__))
     except FileNotFoundError as exc:
         print('No configuration file found! Please check the path.')
         raise SystemExit(1) from exc

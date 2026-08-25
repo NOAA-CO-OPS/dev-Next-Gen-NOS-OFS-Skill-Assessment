@@ -31,14 +31,12 @@ Last Modified: 01/2026 - Refactored and updated to process model data if
 from __future__ import annotations
 
 import json
-import logging.config
 import math
 import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import matplotlib.path as mplPath
@@ -95,24 +93,8 @@ def param_val(netcdf_file_sat: str | None, prop1=None) -> tuple[Logger, list]:
     logger = None
     if logger is None:
         _conf = getattr(prop1, 'config_file', None) if prop1 is not None else None
-        config_file = utils.Utils(_conf).get_config_file()
-        log_config_rel = 'conf/logging.conf'
-        log_config_file = (
-            Path(__file__).parent.parent.parent.parent / log_config_rel
-        ).resolve()
-
-        # Check if log file exists
-        if not os.path.isfile(log_config_file):
-            sys.exit(-1)
-        # Check if config file exists
-        if not os.path.isfile(config_file):
-            sys.exit(-1)
-
-        # Create logger
-        logging.config.fileConfig(log_config_file)
-        logger = logging.getLogger('root')
-        logger.info('Using config %s', config_file)
-        logger.info('Using log config %s', log_config_file)
+        logger = utils.init_root_logger(
+            getattr(prop1, 'path', None), utils.Utils(_conf).get_config_file())
 
     logger.info('--- Parsing to leaflet JSON file ---')
 
@@ -901,6 +883,47 @@ def _process_variables_parallel(
     return velocity_cache
 
 
+def _domain_mask_paths(prop1, logger: Logger) -> tuple[str, str]:
+    """
+    Locate the OFS extent shapefile and the derived domain-mask cache.
+
+    The shapefile is an input asset that ships with the installation, so it
+    goes through :func:`utils.resolve_asset_path` — the same lookup
+    ``create_2dplot`` validates the run with — and a copy under the working
+    directory wins. The mask is *generated*, so it belongs with the run's
+    output: writing it back beside the shapefile fails outright when the
+    installation is read-only, and otherwise leaves one user's derived
+    artifact in shared installation state.
+
+    Parameters
+    ----------
+    prop1
+        Properties object carrying ``ofs``, ``path`` and ``config_file``.
+    logger : Logger
+        Logger passed through to the config reader.
+
+    Returns
+    -------
+    tuple of str
+        ``(shapefile_path, mask_cache_path)``.
+    """
+    base_path = getattr(prop1, 'path', None)
+    extents_path = getattr(prop1, 'ofs_extents_path', '') or \
+        utils.resolve_asset_path(base_path, 'ofs_extents')
+    shapefile_path = os.path.join(str(extents_path), f'{prop1.ofs}.shp')
+
+    _conf = getattr(prop1, 'config_file', None)
+    dir_params = utils.Utils(_conf).read_config_section('directories', logger)
+    cache_dir = os.path.join(
+        str(base_path or '.'),
+        dir_params['data_dir'],
+        dir_params['model_dir'],
+        '2d_masks',
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+    return shapefile_path, os.path.join(cache_dir, f'{prop1.ofs}_mask.npy')
+
+
 def interp_grid(
     lons: npt.NDArray,
     lats: npt.NDArray,
@@ -938,7 +961,8 @@ def interp_grid(
         5. Apply OFS domain mask from cached/generated shapefile mask
 
     Notes:
-        - Caches domain mask as {ofs}.shp_mask.npy for reuse
+        - Caches the domain mask as {ofs}_mask.npy under the configured
+          data_dir so a read-only installation is never written to
         - Uses vertex decimation (every 5th point) for fast polygon checks
         - Parallel processing disabled (num_threads=0) for compatibility
 
@@ -1027,11 +1051,8 @@ def interp_grid(
     # --- Apply Shapefile Mask ---
     # ==========================================
     logger.info('--- Applying OFS Shapefile Mask ---')
-    grid_shapefile = Path(__file__).parents[3] / 'ofs_extents' / f'{prop1.ofs}.shp'
+    grid_shapefile, mask_cache_file = _domain_mask_paths(prop1, logger)
     logger.debug('Shapefile path: %s', grid_shapefile)
-
-    # Define cache file path
-    mask_cache_file = str(grid_shapefile).replace('.shp', '_mask.npy')
     mask_to_apply = None
 
     # Try to load from cache
@@ -1046,7 +1067,7 @@ def interp_grid(
         mask_to_apply = generate_domain_mask_bool(
             targets[:, 0],
             targets[:, 1],
-            str(grid_shapefile),
+            grid_shapefile,
             logger
         )
         # Save for future use
