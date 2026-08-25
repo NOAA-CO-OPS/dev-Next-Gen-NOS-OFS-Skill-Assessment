@@ -478,10 +478,10 @@ def index_nearest_node(
 
             x_np = np.array(x_coords)
             y_np = np.array(y_coords)
-            
+
             # Normalize model longitudes from [0, 360] to [-180, 180]
             x_np = np.where(x_np > 180, x_np - 360, x_np)
-            
+
             for obs_p in range(len(ctl_file_extract)):
                 obs_lon = float(ctl_file_extract[obs_p][1])
                 obs_lat = float(ctl_file_extract[obs_p][0])
@@ -782,15 +782,44 @@ def index_nearest_depth(
                 # therefore, we use depth layes at time 0
                 #z_coords_1d = model_netcdf['zCoordinates'].load()
                 try:
-                    z_coords_1d = np.asarray(model_netcdf['zCoordinates'])[0,:,:]
+                    # Slice the time dimension lazily BEFORE materializing so
+                    # only a single timestep (node, depth) plane is loaded.
+                    # Calling np.asarray on the full dask-backed variable
+                    # forces every timestep into memory (hundreds of MiB per
+                    # step for large STOFS-3D meshes) and blows up RAM.
+                    zc = model_netcdf['zCoordinates']
+                    if 'time' in zc.dims:
+                        zc = zc.isel(time=0)
+                    else:
+                        zc = zc[0]
+                    z_coords_1d = np.asarray(zc)
                 except KeyError:
                     logger.warning('SECOFS field file does not have depth '
                                    'info! Taking surface value...')
-                    return np.asarray(model_netcdf['salinity']).shape[1]-1, 0
-                if np.asarray(model_netcdf['temp']).shape[1] == len(z_coords_1d):
-                    # Transpose for secofs, or other OFS
-                    # where the depth and node dims are reversed
-                    z_coords_1d = z_coords_1d.T
+                    return model_netcdf['salinity'].shape[1]-1, 0
+                # ``z_coords_1d`` must end up as (node, nvrt) so that
+                # ``z_coords_1d[node, :]`` returns that node's vertical
+                # column. Different SCHISM-family products order the two
+                # spatial dims differently:
+                #   * STOFS-3D-Atl fields: zCoordinates is
+                #     (time, nvrt, node) -> after the time slice above it
+                #     is (nvrt, node) and MUST be transposed.
+                #   * SECOFS: zCoordinates is (time, node, nvrt) -> after
+                #     the time slice it is already (node, nvrt).
+                # The old guard compared temp_shape[1] to len(z_coords_1d),
+                # which fired incorrectly whenever temp's axis 1 was the
+                # node axis (STOFS-3D-Atl) — leaving the array as
+                # (nvrt, node) and raising an IndexError when indexed by a
+                # node id. Instead, decide the orientation directly from
+                # the two axis lengths: the smaller axis is nvrt (tens of
+                # layers), the larger is the node count (~millions).
+                if z_coords_1d.ndim == 2:
+                    ax0, ax1 = z_coords_1d.shape
+                    # Transpose only when axis 0 is clearly the vertical
+                    # (layer) axis, i.e. shorter than axis 1. When they are
+                    # equal (degenerate) leave as-is.
+                    if ax0 < ax1:
+                        z_coords_1d = z_coords_1d.T
                 node = index_min_dist[idx]
 
                 if np.isnan(node) or np.isnan(float(station_ctl_file_extract[idx][3])):
@@ -798,6 +827,16 @@ def index_nearest_depth(
                    index_min_dist.append(-1)
                    depth_value.append(-1)
                    continue
+
+                node = int(node)
+                if node < 0 or node >= z_coords_1d.shape[0]:
+                    logger.warning(
+                        'Node index %s out of range for zCoordinates node '
+                        'axis (size %s) at station %s; taking surface layer.',
+                        node, z_coords_1d.shape[0], idx + 1)
+                    index_min_depth.append(0)
+                    depth_value.append(0.0)
+                    continue
 
                 #model_depths = z_coords_1d[0,node,:]
                 model_depths = z_coords_1d[node,:]

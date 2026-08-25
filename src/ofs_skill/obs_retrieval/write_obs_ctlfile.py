@@ -30,7 +30,6 @@ from typing import Optional
 import pandas as pd
 
 from ofs_skill.obs_retrieval import retrieve_properties, utils, vdatum_resilient
-from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 from ofs_skill.obs_retrieval.chs_utils import (
     CHS_IWLS_BASE_URL,
     CHS_SINE_BASE_URL,
@@ -53,6 +52,7 @@ from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
     retrieve_t_and_c_station,
 )
 from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
+from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 
 _COOPS_MAX_WORKERS = 6
 _COOPS_CURRENTS_MAX_WORKERS = 2
@@ -175,6 +175,25 @@ def _normalize_vdatum_name(name: str) -> str:
     if str(name).upper() == 'IGLD':
         return 'IGLD85'
     return name
+
+
+def _vdatum_name(name: str, ofs: str = '') -> str:
+    """Map a CO-OPS/ctl datum label to the name coastalmodeling_vdatum uses.
+
+    ``coastalmodeling_vdatum`` knows mean sea level only as ``lmsl``; CO-OPS
+    and our ctl files call it ``MSL``. Passing ``msl`` straight through
+    raises "Unsupported vertical datum conversion 'msl'->..." and drops the
+    station, which can blank the entire water-level ctl file.
+
+    This MSL->lmsl remap is applied ONLY for STOFS OFS (whose model datum is
+    xgeoid20b, reached from lmsl), to avoid changing datum handling for any
+    other OFS. It is used ONLY at the vdatum.convert call site so the
+    ctl-file label and datum_list membership checks keep using ``MSL``.
+    """
+    canonical = _normalize_vdatum_name(name)
+    if str(ofs).lower().startswith('stofs') and str(canonical).upper() == 'MSL':
+        return 'lmsl'
+    return str(canonical).lower()
 
 
 def _ctl_availability_probe_enabled(config_file, logger) -> bool:
@@ -380,10 +399,10 @@ def _process_coops_station(
                     str(datum_found).upper() != datum_canonical
                     and str(datum_found).upper() in datum_list
                 ):
-                    ldatum = _normalize_vdatum_name(datum).lower()
+                    ldatum = _vdatum_name(datum, ofs)
                     dummyval = 10
                     _, _, z = vdatum_resilient.convert(
-                        str(datum_found).lower(),
+                        _vdatum_name(datum_found, ofs),
                         ldatum,
                         y_value,
                         x_value,
@@ -525,11 +544,11 @@ def _process_usgs_station(
                 elif datum == 'IGLD' and 'LWD' in ts_datum_upper:
                     zdiff = ofs_base_offsets.get(ofs, 'UNKNOWN')
                 elif ts_datum == 'NAVD88' and datum != 'NAVD88':
-                    ldatum = _normalize_vdatum_name(datum).lower()
+                    ldatum = _vdatum_name(datum, ofs)
                     dummyval = 10
 
                     _, _, z = vdatum_resilient.convert(
-                        ts_datum.lower(),
+                        _vdatum_name(ts_datum, ofs),
                         ldatum,
                         y_value,
                         x_value,
@@ -620,10 +639,10 @@ def _process_ndbc_station(
             if str(data_station['Datum'][1]).upper() == datum:
                 zdiff = 0
             elif str(data_station['Datum'][1]) == 'MLLW' and datum != 'MLLW':
-                ldatum = _normalize_vdatum_name(datum).lower()
+                ldatum = _vdatum_name(datum, ofs)
                 dummyval = 10
                 _, _, z = vdatum_resilient.convert(
-                    data_station['Datum'][1].lower(),
+                    _vdatum_name(data_station['Datum'][1], ofs),
                     ldatum,
                     y_value,
                     x_value,

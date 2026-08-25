@@ -433,12 +433,23 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
             # automagically combine datasets
             if prop.model_source == 'schism':
                 if prop.ofsfiletype == 'fields':
+                    # SCHISM fields files are combined by coordinates across
+                    # time. The ``filename`` scalar coordinate added by
+                    # preprocess_fn differs per file; drop it before combining
+                    # so xarray does not raise a MergeError on conflicting
+                    # scalar coordinates. compat='override' is not usable
+                    # here because combine_by_coords also passes
+                    # coords='different', and xarray rejects that combination.
+                    def _drop_filename(ds):
+                        ds = preprocess_fn(ds)
+                        return ds.drop_vars('filename', errors='ignore')
+
                     source = intake.open_netcdf(
                         urlpath=urlpaths,
                         xarray_kwargs={
-                            'combine': 'by_coords',  # <-- align files by coordinates
+                            'combine': 'by_coords',
                             'engine': open_engine,
-                            'preprocess': preprocess_fn,
+                            'preprocess': _drop_filename,
                             'drop_variables': drop_variables,
                             'chunks': {'time': 1},
                         },

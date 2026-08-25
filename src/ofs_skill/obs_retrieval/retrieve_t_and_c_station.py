@@ -149,6 +149,14 @@ _station_info_cache: dict[str, Optional[dict]] = {}
 # live one level deeper at ``stations/{id}/deployments.json``.
 _station_deployment_cache: dict[str, Optional[dict]] = {}
 
+# Cache sensor-level metadata (``elevation``, ``refdatum`` per sensor)
+# and station datum tables (tidal datum values above STND, NAVD88, and
+# record low/high water). Both are used by the STOFS-3D fields wet-node
+# preprocessing (station_depth_preprocessing.py) to convert a CO-OPS
+# sensor elevation and the record-low water level into the model datum.
+_station_sensors_cache: dict[str, Optional[list]] = {}
+_station_datums_cache: dict[str, Optional[dict]] = {}
+
 # Per-run cache of ``check_bin_depth_changes`` results keyed by
 # station_id. The audit's expanded ``deployments,bins`` MDAPI request is
 # issued from both ``_retrieve_currents_all_bins`` and
@@ -521,6 +529,86 @@ def get_station_info(
     info = stations[0] if stations else None
     _station_info_cache[station_id] = info
     return info
+
+
+def get_station_sensors(
+    station_id: str, mdapi_url: str, logger: Logger,
+) -> Optional[list]:
+    """Fetch the CO-OPS sensor list (cached) from the MDAPI sensors endpoint.
+
+    Returns the ``sensors`` list from
+    ``stations/{id}/sensors.json`` — each entry has ``name`` (e.g.
+    ``'Water Temperature'``), ``elevation`` (meters relative to
+    ``refdatum``, may be ``null``), and ``refdatum`` (e.g. ``'MLLW'``,
+    ``'MSL'``, ``'Site Elevation'``). Returns ``None`` on HTTP error or
+    an unrecognized payload shape.
+
+    Used by the STOFS-3D fields wet-node preprocessing to recover the
+    temperature/salinity sensor elevation for datum conversion.
+    """
+    if station_id in _station_sensors_cache:
+        return _station_sensors_cache[station_id]
+
+    url = f'{mdapi_url}/webapi/stations/{station_id}/sensors.json?units=metric'
+    try:
+        response = _rate_limited_get(url, timeout=120)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.exceptions.RequestException as ex:
+        logger.warning(
+            'CO-OPS sensor metadata retrieval failed for %s: %s',
+            station_id, ex)
+        # Do not cache a transient failure.
+        return None
+    except ValueError as ex:
+        logger.warning(
+            'CO-OPS sensor metadata for %s was not valid JSON: %s',
+            station_id, ex)
+        return None
+
+    sensors = payload.get('sensors') if isinstance(payload, dict) else None
+    _station_sensors_cache[station_id] = sensors
+    return sensors
+
+
+def get_station_datums(
+    station_id: str, mdapi_url: str, logger: Logger,
+) -> Optional[dict]:
+    """Fetch the CO-OPS datum table (cached) from the MDAPI datums endpoint.
+
+    Returns the full parsed payload from
+    ``stations/{id}/datums.json`` — includes the ``datums`` list (tidal
+    datum values above STND), the top-level ``NAVD88`` value (also above
+    STND), and record-low / record-high water levels (``min`` / ``max``).
+    Returns ``None`` on HTTP error or an unrecognized payload shape.
+
+    Used by the STOFS-3D fields wet-node preprocessing to bridge a
+    sensor elevation and the record-low water level into the model
+    datum (xgeoid20b) via NAVD88.
+    """
+    if station_id in _station_datums_cache:
+        return _station_datums_cache[station_id]
+
+    url = f'{mdapi_url}/webapi/stations/{station_id}/datums.json?units=metric'
+    try:
+        response = _rate_limited_get(url, timeout=120)
+        response.raise_for_status()
+        payload = response.json()
+    except requests.exceptions.RequestException as ex:
+        logger.warning(
+            'CO-OPS datum metadata retrieval failed for %s: %s',
+            station_id, ex)
+        return None
+    except ValueError as ex:
+        logger.warning(
+            'CO-OPS datum metadata for %s was not valid JSON: %s',
+            station_id, ex)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    _station_datums_cache[station_id] = payload
+    return payload
 
 
 def get_station_deployment(

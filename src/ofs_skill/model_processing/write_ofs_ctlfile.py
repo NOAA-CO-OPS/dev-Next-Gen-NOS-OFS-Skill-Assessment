@@ -35,6 +35,7 @@ from typing import Any
 import numpy as np
 
 import ofs_skill.model_processing.indexing as indexing
+import ofs_skill.model_processing.station_depth_preprocessing as wetnode_prep
 from ofs_skill.obs_retrieval import utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.utils.file_headers import MODEL_CTL_HEADER, OBS_CTL_HEADER
@@ -471,6 +472,28 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                             prop.ofs,
                             logger,
                         )
+
+                    # STOFS-3D fields temp/salt/currents: override the
+                    # geometric nearest node with a bathymetry-aware wet
+                    # node (per station source). For CO-OPS this also
+                    # back-patches the obs depth to the model-datum sensor
+                    # depth so the vertical-layer search below targets the
+                    # correct level. Returns None (no change) for other
+                    # OFS/variables, or when metadata/grid vars are
+                    # unavailable — in which case the default node stands.
+                    if (prop.ofs in wetnode_prep.STOFS3D_FIELDS_OFS
+                            and name_var in wetnode_prep.SUPPORTED_NAME_VARS):
+                        prop._sdp_variable = variable
+                        overridden = wetnode_prep.preprocess_stofs3d_nodes(
+                            prop,
+                            extract,
+                            list_of_nearest_node,
+                            model,
+                            name_var,
+                            logger,
+                        )
+                        if overridden is not None:
+                            list_of_nearest_node = overridden
                 elif prop.ofsfiletype == 'stations':
                     list_of_nearest_node = \
                         indexing.index_nearest_station(
