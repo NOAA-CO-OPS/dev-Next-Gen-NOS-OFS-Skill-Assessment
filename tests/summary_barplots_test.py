@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from ofs_skill.visualization import summary_barplots
+from tests.conftest import decode_plotly_escapes
 
 
 def _write_error_ranges(root: str) -> None:
@@ -262,7 +263,7 @@ def test_currents_rmse_labels_use_speed_units(tmp_path):
         prop.visuals_1d_station_path,
         f'{prop.ofs}_summary_barplot_currents_nowcast_stations.html')
     with open(html_path, encoding='utf-8') as fh:
-        content = fh.read().replace('\\u002f', '/')
+        content = decode_plotly_escapes(fh.read())
     assert 'RMSE (m/s)' in content
     assert 'RMSE (meters)' not in content
 

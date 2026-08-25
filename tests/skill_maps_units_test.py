@@ -8,6 +8,7 @@ import types
 import pytest
 
 from ofs_skill.skill_assessment.make_skill_maps import make_skill_maps
+from tests.conftest import decode_plotly_escapes
 
 
 def _write_error_ranges(root) -> None:
@@ -60,11 +61,10 @@ def _render(tmp_path, variable, name_var):
         f'{prop.ofs}_{variable}_{prop.whichcast}_Skill_Map.html')
     assert os.path.isfile(path), path
     with open(path, encoding='utf-8') as fh:
-        # plotly escapes '/' and '<' inside the embedded JSON, which
-        # would hide the 'm/s' unit and the '<br>' title break from a
-        # plain substring search.
-        return (fh.read().replace('\\u002f', '/')
-                .replace('\\u003c', '<').replace('\\u003e', '>'))
+        # plotly escapes characters inside the embedded JSON, which would
+        # otherwise hide the 'm/s' unit, the '<br>' title break and the
+        # degree sign from a plain substring search.
+        return decode_plotly_escapes(fh.read())
 
 
 @pytest.mark.parametrize('variable,name_var,unit', [

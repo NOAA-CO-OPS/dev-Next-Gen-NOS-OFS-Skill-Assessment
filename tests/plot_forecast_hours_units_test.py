@@ -14,6 +14,7 @@ from ofs_skill.visualization import (
     plot_forecast_hours,
     plotting_functions,
 )
+from tests.conftest import decode_plotly_escapes
 
 
 def _write_error_ranges(root) -> None:
@@ -87,10 +88,10 @@ def _run(tmp_path, prop, name_var, variable):
     assert os.path.isfile(html_path), html_path
     with open(html_path, encoding='utf-8') as fh:
         content = fh.read()
-    # plotly escapes '/' and '<' inside the embedded JSON, which would
-    # hide 'm/s' and the '<i>' unit markup from a substring search.
-    return (content.replace('\\u002f', '/').replace('\\u003c', '<')
-            .replace('\\u003e', '>'))
+    # plotly escapes characters inside the embedded JSON, which would
+    # otherwise hide 'm/s', the '<i>' unit markup and any non-ASCII unit
+    # from a substring search.
+    return decode_plotly_escapes(content)
 
 
 @pytest.mark.usefixtures('_no_network')
