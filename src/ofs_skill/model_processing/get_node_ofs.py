@@ -1711,7 +1711,7 @@ def get_node_ofs(prop, logger, model_dataset=None):
                                 'input file, then an observation control file '
                                 'must be present! Exiting...', control_file)
                     sys.exit()
-                if os.path.getsize(control_file): # Gets size of obs ctl file!
+                if os.path.isfile(control_file) and os.path.getsize(control_file) > 0: # Gets size of obs ctl file!
                     ofs_ctlfile = ofs_ctlfile_extract(
                         prop_local, name_conventions[0], model, logger)
                     if ofs_ctlfile is None:

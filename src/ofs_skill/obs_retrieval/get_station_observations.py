@@ -634,28 +634,27 @@ def _fetch_and_format_station(
         # Write the .obs file
         try:
             if formatted_series != 'NoDataFound':
-                obs_path = os.path.join(
-                    data_observations_1d_station_path,
-                    str(station_id + '_' + ofs + '_' +
-                        name_var + '_station.obs'))
-                with open(obs_path, 'w', encoding='utf-8') as output:
-                    # Header only when there is data: an empty .obs
-                    # must stay 0 bytes so the getsize() blank-file
-                    # checks downstream keep working.
-                    if len(formatted_series) > 0:
+                # FIX: Check for data before stamping the file
+                if len(formatted_series) > 0:
+                    obs_path = os.path.join(
+                        data_observations_1d_station_path,
+                        str(station_id + '_' + ofs + '_' +
+                            name_var + '_station.obs'))
+                    with open(obs_path, 'w', encoding='utf-8') as output:
                         output.write(series_header(name_var))
-                    for line in formatted_series:
-                        output.write(str(line) + '\n')
-                    logger.info(
-                        '%s_%s_%s_station.obs created successfully',
-                        station_id, ofs, name_var
-                    )
-                # Stamp the run signature so a same-parameter rerun reuses
-                # this file and a changed-parameter run treats it as stale.
-                if obs_signature is not None:
-                    cache_manifest.record_artifact(
-                        obs_path, obs_signature, data_observations_1d_station_path, logger)
-                return station_id
+                        for line in formatted_series:
+                            output.write(str(line) + '\n')
+                        logger.info(
+                            '%s_%s_%s_station.obs created successfully',
+                            station_id, ofs, name_var
+                        )
+                    return station_id
+                else:
+                    # Return None so it gets appended to the `failed` list
+                    logger.info('Formatted %s time series '
+                                'empty for station %s',
+                                variable, station_id)
+                    return None
             else:
                 logger.info('Formatted %s time series '
                             'not found for station %s',

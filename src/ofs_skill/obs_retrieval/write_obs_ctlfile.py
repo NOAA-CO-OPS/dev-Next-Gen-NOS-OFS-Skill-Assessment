@@ -998,21 +998,18 @@ def _process_variable(
                     ctl_file.extend(result)
 
     try:
-        with open(
-            r'' + f'{control_files_path}/{ofs}_{name_var}_station.ctl',
-            'w',
-            encoding='utf-8',
-        ) as output:
-            # Header only when there is data: an empty ctl must stay
-            # 0 bytes so station_ctl_file_extract keeps returning None
-            # for blank files.
-            if ctl_file:
+        if ctl_file:
+            with open(
+                r'' + f'{control_files_path}/{ofs}_{name_var}_station.ctl',
+                'w',
+                encoding='utf-8',
+            ) as output:
                 output.write(OBS_CTL_HEADER)
-            for i in ctl_file:
-                output.write(str(i))
-            logger.info(
-                '%s_%s_station.ctl created successfully!', ofs, name_var
-            )
+                for i in ctl_file:
+                    output.write(str(i))
+                logger.info(
+                    '%s_%s_station.ctl created successfully!', ofs, name_var
+                )
     except Exception as ex:
         logger.error(
             'Saving station failed: {ex}. Please check the directory path: %s.',
