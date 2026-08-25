@@ -27,7 +27,7 @@ import threading
 import time
 from datetime import UTC, datetime, timedelta
 from logging import Logger
-from typing import Any, Optional, Union
+from typing import Any
 from urllib.error import HTTPError
 
 import pandas as pd
@@ -140,14 +140,14 @@ _depth_cache: dict[str, Any] = {}  # station_id -> depth_data
 
 # Cache station-level metadata (``height_from_bottom`` etc.) keyed by
 # station_id. Populated via ``get_station_info``.
-_station_info_cache: dict[str, Optional[dict]] = {}
+_station_info_cache: dict[str, dict | None] = {}
 
 # Cache deployment-level metadata (``orientation``, ``sensor_depth`` etc.)
 # keyed by station_id. Populated via ``get_station_deployment``.
 # The station endpoint (``stations/{id}.json``) only returns a
 # ``deployments: {self: <url>}`` pointer; the actual deployment fields
 # live one level deeper at ``stations/{id}/deployments.json``.
-_station_deployment_cache: dict[str, Optional[dict]] = {}
+_station_deployment_cache: dict[str, dict | None] = {}
 
 # Per-run cache of ``check_bin_depth_changes`` results keyed by
 # station_id. The audit's expanded ``deployments,bins`` MDAPI request is
@@ -339,7 +339,7 @@ def _get_with_retry(
     context: str,
     logger: Logger,
     return_error_body: bool = False,
-) -> Optional[dict]:
+) -> dict | None:
     """GET ``url`` with retries for transient CO-OPS errors.
 
     Retries only on network-level failures (ConnectionError, Timeout) or
@@ -449,11 +449,11 @@ def _get_with_retry(
 
 def _fetch_with_backup(
     primary_url: str,
-    backup_url: Optional[str],
+    backup_url: str | None,
     station_id: str,
     variable: str,
     logger: Logger,
-) -> tuple[Optional[dict], bool]:
+) -> tuple[dict | None, bool]:
     """Fetch the primary URL with retry; fall back to ``backup_url`` when set.
 
     The water_temperature / salinity backup URL points at the
@@ -495,7 +495,7 @@ def _fetch_with_backup(
 
 def get_station_info(
     station_id: str, mdapi_url: str, logger: Logger,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch station-level metadata (cached) from the MDAPI station endpoint.
 
     Returns the first entry of ``stations`` (fields include
@@ -525,7 +525,7 @@ def get_station_info(
 
 def get_station_deployment(
     station_id: str, mdapi_url: str, logger: Logger,
-) -> Optional[dict]:
+) -> dict | None:
     """Fetch deployment-level metadata (cached) from MDAPI.
 
     The station-level endpoint (``stations/{id}.json``) only returns a
@@ -670,10 +670,10 @@ def _csv_safe(value: Any) -> Any:
 def log_and_export_deployment_info(
     station_id: str,
     mdapi_url: str,
-    control_files_path: Optional[str],
+    control_files_path: str | None,
     logger: Logger,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     actual_gap_str: str = 'N/A',
 ) -> None:
     """
@@ -826,7 +826,7 @@ def log_and_export_deployment_info(
 
 
 def resolve_mounting_type(
-    deployment_info: Optional[dict],
+    deployment_info: dict | None,
 ) -> str:
     """Canonicalise the MDAPI deployment ``orientation`` to a known symbol.
 
@@ -845,9 +845,9 @@ def resolve_mounting_type(
 
 
 def _resolve_side_real_time_bin(
-    bins_payload: Optional[dict],
-    deployment_info: Optional[dict],
-) -> Optional[int]:
+    bins_payload: dict | None,
+    deployment_info: dict | None,
+) -> int | None:
     """Return the bin number to use for a side-looking ADCP, or ``None``.
 
     Priority order, validated against the live MDAPI survey (issue #140):
@@ -885,7 +885,7 @@ def _resolve_side_real_time_bin(
     return None
 
 
-def _coerce_int(value: Any) -> Optional[int]:
+def _coerce_int(value: Any) -> int | None:
     """Best-effort int coercion that returns ``None`` instead of raising."""
     if value is None:
         return None
@@ -896,8 +896,8 @@ def _coerce_int(value: Any) -> Optional[int]:
 
 
 def _resolve_side_sensor_depth(
-    deployment_info: Optional[dict],
-) -> Optional[float]:
+    deployment_info: dict | None,
+) -> float | None:
     """Return the side-looking ADCP's sensor_depth (m, positive-down).
 
     Prefers the explicit ``sensor_depth`` field; falls back to
@@ -951,11 +951,11 @@ _get_station_deployment = get_station_deployment
 def retrieve_t_and_c_station(
     retrieve_input: Any,
     logger: Logger,
-    control_files_path: Optional[str] = None,
-    only_bins: Optional[set[int]] = None,
+    control_files_path: str | None = None,
+    only_bins: set[int] | None = None,
     config_file=None,
     availability_probe: bool = False,
-) -> Optional[Union[pd.DataFrame, dict[int, pd.DataFrame]]]:
+) -> pd.DataFrame | dict[int, pd.DataFrame] | None:
     """
     Retrieve time series observations from NOAA Tides and Currents station.
 
@@ -1200,7 +1200,7 @@ def retrieve_t_and_c_station(
 
 
 def _extract_bin_records(
-    bins_payload: Optional[dict],
+    bins_payload: dict | None,
 ) -> list[dict]:
     """Return the list of bin records from a CO-OPS bins payload, or []."""
     if not bins_payload or not bins_payload.get('bins'):
@@ -1208,7 +1208,7 @@ def _extract_bin_records(
     return list(bins_payload['bins'])
 
 
-def _bin_depth_from_record(entry: dict) -> Optional[float]:
+def _bin_depth_from_record(entry: dict) -> float | None:
     """Resolve depth (m) for a single bin record.
 
     Returns the bin's ``depth`` value when provided by the MDAPI. For
@@ -1249,7 +1249,7 @@ def _bin_depth_from_record(entry: dict) -> Optional[float]:
 _WRONG_BIN_ERROR_TEXT = 'wrong bin number'
 
 
-def _is_wrong_bin_error(obs: Optional[dict]) -> bool:
+def _is_wrong_bin_error(obs: dict | None) -> bool:
     """True when the datagetter rejected a no-bin currents request
     because the station's real_time_bin is null."""
     if not isinstance(obs, dict):
@@ -1261,10 +1261,10 @@ def _is_wrong_bin_error(obs: Optional[dict]) -> bool:
 
 
 def _probe_rows_in_range(
-    obs: Optional[dict],
+    obs: dict | None,
     range_start: datetime,
     range_end: datetime,
-    bin_num: Optional[int],
+    bin_num: int | None,
     logger: Logger,
 ) -> list[dict]:
     """Filter datagetter rows to ``[range_start, range_end]``.
@@ -1296,13 +1296,13 @@ def _probe_rows_in_range(
 
 def _probe_scan_for_data(
     station_id: str,
-    bin_num: Optional[int],
-    fallback_bin: Optional[int],
+    bin_num: int | None,
+    fallback_bin: int | None,
     scan_start: datetime,
     scan_end: datetime,
     api_url: str,
     logger: Logger,
-) -> Optional[list[dict]]:
+) -> list[dict] | None:
     """Scan ``[scan_start, scan_end]`` in 30-day chunks for any data row,
     stopping at the first chunk that yields one.
 
@@ -1389,7 +1389,7 @@ def _probe_confirm_bin(
 
 def _probe_scan_range(
     station_id: str,
-    deployment_info: Optional[dict],
+    deployment_info: dict | None,
     has_depth_shifts: bool,
     start_dt_0: datetime,
     end_dt_0: datetime,
@@ -1453,14 +1453,14 @@ def _probe_updown_currents_availability(
     end_dt_0: datetime,
     api_url: str,
     bin_records: list[dict],
-    deployment_info: Optional[dict],
-    hfb: Optional[float],
+    deployment_info: dict | None,
+    hfb: float | None,
     orientation_label: str,
     mounting_type: str,
-    only_bins: Optional[set[int]],
+    only_bins: set[int] | None,
     has_depth_shifts: bool,
     logger: Logger,
-) -> Optional[dict[int, pd.DataFrame]]:
+) -> dict[int, pd.DataFrame] | None:
     """Availability-probe replacement for the per-bin full-window
     downloads of the up/down fan-out path at ctl-file time.
 
@@ -1468,7 +1468,7 @@ def _probe_updown_currents_availability(
     a station whose full-window scan finds nothing is rejected with the
     same ``None`` the full path returns for an empty result.
     """
-    candidates: list[tuple[int, Optional[float]]] = []
+    candidates: list[tuple[int, float | None]] = []
     for entry in bin_records:
         try:
             bin_num = int(entry.get('num', entry.get('bin')))  # type: ignore[arg-type]
@@ -1552,10 +1552,10 @@ def _retrieve_currents_all_bins(
     api_url: str,
     mdapi_url: str,
     logger: Logger,
-    only_bins: Optional[set[int]] = None,
-    control_files_path: Optional[str] = None,
+    only_bins: set[int] | None = None,
+    control_files_path: str | None = None,
     availability_probe: bool = False,
-) -> Optional[dict[int, pd.DataFrame]]:
+) -> dict[int, pd.DataFrame] | None:
     """Retrieve CO-OPS currents data for every bin of an ADCP station.
 
     Flow:
@@ -1818,9 +1818,9 @@ def _retrieve_currents_all_bins(
 
 
 def _resolve_height_from_bottom(
-    deployment_info: Optional[dict],
-    station_info: Optional[dict],
-) -> Optional[float]:
+    deployment_info: dict | None,
+    station_info: dict | None,
+) -> float | None:
     """Return ``height_from_bottom`` (m), preferring the deployments source.
 
     Both endpoints expose ``height_from_bottom`` and the surveyed values
@@ -1847,16 +1847,16 @@ def _retrieve_side_looking_currents(
     start_dt_0: datetime,
     end_dt_0: datetime,
     api_url: str,
-    bins_payload: Optional[dict],
-    deployment_info: Optional[dict],
+    bins_payload: dict | None,
+    deployment_info: dict | None,
     bin_records: list[dict],
-    hfb: Optional[float],
+    hfb: float | None,
     orientation_label: str,
-    only_bins: Optional[set[int]],
+    only_bins: set[int] | None,
     has_depth_shifts: bool,
     logger: Logger,
     availability_probe: bool = False,
-) -> Optional[dict[int, pd.DataFrame]]:
+) -> dict[int, pd.DataFrame] | None:
     """Side-looking ADCP currents retrieval (issue #140).
 
     Resolves the dissemination bin from MDAPI (``bins.json`` top-level
@@ -1976,15 +1976,15 @@ def _retrieve_currents_legacy_fallback(
     start_dt_0: datetime,
     end_dt_0: datetime,
     api_url: str,
-    station_info: Optional[dict],
-    bins_payload: Optional[dict],
-    deployment_info: Optional[dict],  # <-- ADDED
-    hfb: Optional[float],
+    station_info: dict | None,
+    bins_payload: dict | None,
+    deployment_info: dict | None,  # <-- ADDED
+    hfb: float | None,
     orientation_label: str,
     mounting_type: str,
     has_depth_shifts: bool,
     logger: Logger,
-) -> Optional[dict[int, pd.DataFrame]]:
+) -> dict[int, pd.DataFrame] | None:
     """No bin records on MDAPI: fall back to one unfiltered datagetter call.
 
     Used when the bins endpoint returns nothing (transient MDAPI
@@ -2029,8 +2029,8 @@ def _retrieve_currents_legacy_fallback(
     return {fallback_bin: legacy}
 
 def _legacy_fallback_bin(
-    station_info: Optional[dict],
-    bins_payload: Optional[dict],
+    station_info: dict | None,
+    bins_payload: dict | None,
 ) -> int:
     """Best-effort bin number for the legacy fallback path.
 
@@ -2065,10 +2065,10 @@ def _legacy_fallback_bin(
     return 1
 
 def _active_deployment_periods(
-    deployment_info: Optional[dict],
+    deployment_info: dict | None,
     start_dt_0: datetime,
     end_dt_0: datetime,
-    logger: Optional[Logger] = None,
+    logger: Logger | None = None,
 ) -> tuple[list[tuple[datetime, datetime]], bool]:
     """Intersect each deployment with ``[start_dt_0, end_dt_0]``.
 
@@ -2114,14 +2114,14 @@ def _active_deployment_periods(
 
 def _fetch_currents_chunked(
     station_id: str,
-    bin_num: Optional[int],
+    bin_num: int | None,
     start_dt_0: datetime,
     end_dt_0: datetime,
     api_url: str,
     logger: Logger,
-    deployment_info: Optional[dict] = None,
+    deployment_info: dict | None = None,
     has_depth_shifts: bool = False,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """Pull currents data for a station (optionally a specific bin) in
     30-day chunks and return a DataFrame with DateTime/DIR/OBS columns.
 
@@ -2438,7 +2438,7 @@ def retrieve_tidal_predictions(
     retrieve_input: Any,
     logger: Logger,
     config_file=None,
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """
     Retrieve tidal predictions from CO-OPS API.
 
@@ -2563,7 +2563,7 @@ def retrieve_harmonic_constants(
     logger: Logger,
     units: str = 'metric',
     config_file=None,
-) -> Optional[dict]:
+) -> dict | None:
     """
     Retrieve accepted harmonic constants from the CO-OPS API.
 
@@ -2777,7 +2777,7 @@ def find_nearest_tidal_station(
     lon: float,
     logger: Logger,
     config_file=None,
-) -> tuple[Optional[str], Optional[str], Optional[float]]:
+) -> tuple[str | None, str | None, float | None]:
     """
     Find the single nearest CO-OPS station with tidal predictions.
 

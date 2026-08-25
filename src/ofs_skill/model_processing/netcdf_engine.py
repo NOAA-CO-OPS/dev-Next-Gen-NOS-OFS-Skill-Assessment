@@ -31,7 +31,8 @@ from __future__ import annotations
 import logging
 import threading
 import urllib.request
-from typing import Any, Iterable, Optional
+from collections.abc import Iterable
+from typing import Any
 
 from ofs_skill.obs_retrieval import utils
 
@@ -110,7 +111,7 @@ def _sniff_local(path: str, logger: logging.Logger) -> str:
         return FORMAT_UNKNOWN
 
 
-def sniff_netcdf_format(path: Any, logger: Optional[logging.Logger] = None) -> str:
+def sniff_netcdf_format(path: Any, logger: logging.Logger | None = None) -> str:
     """
     Detect the on-disk NetCDF format of a local path or remote URL.
 
@@ -163,7 +164,7 @@ def _sample_paths(file_list: list) -> list:
 
 def get_engine_strategy(
     config_file: Any = None,
-    logger: Optional[logging.Logger] = None,
+    logger: logging.Logger | None = None,
 ) -> str:
     """
     Read ``engine_strategy`` from the [settings] config section.

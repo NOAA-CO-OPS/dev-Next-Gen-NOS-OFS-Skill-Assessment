@@ -148,7 +148,7 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
                            logger, config_file=None):
     """ Retrieving Inventories """
     lat1, lat2, lon1, lon2 = geo[-4], geo[-3], geo[-2], geo[-1]
-    
+
 
     t_c_future = None
     usgs_future = None
@@ -316,7 +316,27 @@ def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger):
 
 def ofs_inventory_stations(ofs, start_date, end_date, path, stationowner,
                            logger, config_file=None):
-    """ Specify defaults (can be overridden with command line options) """
+    """Inventory observation stations inside an OFS domain for a date window.
+
+    Queries configured providers (CO-OPS, NDBC, USGS, CHS, and/or a fixed
+    station-id list), filters to the OFS extent, and writes inventory
+    artifacts under the control-files directory.
+
+    Args:
+        ofs: OFS identifier.
+        start_date: Inventory window start.
+        end_date: Inventory window end.
+        path: Working directory root.
+        stationowner: Provider selection string/list (may include ``list``
+            for ids from config).
+        logger: Logger instance, or ``None`` to configure from
+            ``conf/logging.conf``.
+        config_file: Optional path to ``ofs_dps.conf``.
+
+    Returns:
+        Provider-specific inventory structures written to disk; also used
+        downstream when building observation CTL files.
+    """
 
     if logger is None:
         log_config_file = 'conf/logging.conf'

@@ -18,7 +18,7 @@ Supported variables:
 import os
 from datetime import datetime
 from logging import Logger
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
 from searvey.usgs import (
@@ -28,6 +28,8 @@ from searvey.usgs import (
     USGS_WATER_LEVEL_CODES,
     get_usgs_station_data,
 )
+
+from ofs_skill.obs_retrieval.utils import redact_secrets
 
 # Track whether we've already warned about rate limiting this session
 _warned_rate_limit = False
@@ -63,7 +65,7 @@ _PREFERRED_SALINITY_CODES = {'00480', '72401', '90860', '90862', '00096', '70305
 def retrieve_usgs_station(
     retrieve_input: Any,
     logger: Logger
-) -> Optional[pd.DataFrame]:
+) -> pd.DataFrame | None:
     """
     Retrieve USGS stream gauge station observations via searvey.
 
@@ -144,7 +146,7 @@ def retrieve_usgs_station(
             return None
         logger.error(
             'Retrieve USGS data failed for %s station %s: %s',
-            variable, station, ex
+            variable, station, redact_secrets(str(ex)),
         )
         return None
 

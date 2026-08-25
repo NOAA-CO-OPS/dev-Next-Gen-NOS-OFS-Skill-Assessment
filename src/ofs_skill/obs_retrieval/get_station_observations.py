@@ -101,7 +101,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -114,7 +113,6 @@ from ofs_skill.obs_retrieval import (
 from ofs_skill.obs_retrieval.currents_bins_override import (
     split_virtual_currents_id,
 )
-from ofs_skill.utils.file_headers import series_header
 from ofs_skill.obs_retrieval.retrieve_chs_station import retrieve_chs_station
 from ofs_skill.obs_retrieval.retrieve_ndbc_station import retrieve_ndbc_station
 from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
@@ -125,6 +123,7 @@ from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
+from ofs_skill.utils.file_headers import series_header
 
 # Import directly from module to avoid circular import
 
@@ -212,7 +211,7 @@ def is_number(n):
     return True
 
 
-def _split_virtual_currents_id(sid: str) -> tuple[str, Optional[int]]:
+def _split_virtual_currents_id(sid: str) -> tuple[str, int | None]:
     """Backwards-compat shim around :func:`split_virtual_currents_id`.
 
     Existing tests import this private name; the canonical helper now
@@ -937,15 +936,25 @@ def _process_variable_obs(
 
 
 def get_station_observations(prop,logger):
-    """
-    This is the final function.
-    This function calls the Tides and Currents, NDBC, and
-    USGS retrieval function in loop for all stations found
-    for the ofs_inventory(ofs, start_date, end_date, path)
-    and variables ['water_level', 'water_temperature',
-                   'salinity', 'currents'].
-    The output is a csv file for each station with DateTime
-    and OBS.
+    """Download and format 1D station observations for an OFS run window.
+
+    Inventories (or reuses) stations for the OFS extent, then retrieves
+    time series from CO-OPS, NDBC, USGS, and/or CHS for each requested
+    variable. Writes per-station ``.obs`` files and observation control
+    files under the paths in ``prop``.
+
+    Args:
+        prop: ``ModelProperties`` (or compatible) with ``ofs``,
+            ``start_date_full``, ``end_date_full``, ``datum``, ``path``,
+            ``stationowner``, and ``var_list`` set.
+        logger: Logger instance, or ``None`` to configure from
+            ``conf/logging.conf``.
+
+    Returns:
+        None. Side effects: observation and control files on disk.
+
+    Raises:
+        SystemExit: If logging config is missing when ``logger`` is ``None``.
     """
 
     # Hand out vars from the prop Santa

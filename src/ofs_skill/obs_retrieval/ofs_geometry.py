@@ -6,14 +6,13 @@ boundaries and min/max lat/lon coordinates. Used to filter station inventory
 to within the OFS domain.
 """
 
-import os
 from logging import Logger
-from typing import Optional
 
 import numpy as np  # Ensure numpy is imported
 import shapefile
 
 from ofs_skill.obs_retrieval import utils
+
 
 def normalize_longitudes(longitudes):
     """Convert longitudes > 180 to -180..180 range."""
@@ -24,7 +23,7 @@ def normalize_longitudes(longitudes):
 
 def get_response_1(
     first: dict
-) -> Optional[tuple[float, float, float, float, list[tuple[float, float]]]]:
+) -> tuple[float, float, float, float, list[tuple[float, float]]] | None:
     """
     Extract largest polygon from shapefile (first search method).
 
@@ -71,7 +70,7 @@ def get_response_1(
 
 def get_response_2(
     first: dict
-) -> Optional[tuple[float, float, float, float, list[tuple[float, float]]]]:
+) -> tuple[float, float, float, float, list[tuple[float, float]]] | None:
     """
     Extract largest polygon from shapefile (second search method).
 
@@ -184,7 +183,7 @@ def ofs_geometry(
                 response_2[3],
                 response_2[4],
             )
-        
+
         # --- NORMALIZE LONGITUDES ONLY FOR STOFS MODELS ---
         if 'stofs' in ofs.lower():
             norm_lons = normalize_longitudes([pt[0] for pt in ofs_mask])

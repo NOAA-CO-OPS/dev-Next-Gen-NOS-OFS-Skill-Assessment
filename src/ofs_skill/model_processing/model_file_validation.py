@@ -43,12 +43,12 @@ path.
 
 from __future__ import annotations
 
-from collections import Counter
 import hashlib
-from logging import Logger
 import os
 import time
-from typing import Any, Optional
+from collections import Counter
+from logging import Logger
+from typing import Any
 
 import netCDF4
 import numpy as np
@@ -73,8 +73,8 @@ def _is_remote(path: Any) -> bool:
     return tail.startswith(_REMOTE_PREFIXES)
 
 
-def _static_fingerprint(nc: 'netCDF4.Dataset',
-                        time_name: Optional[str]) -> str:
+def _static_fingerprint(nc: netCDF4.Dataset,
+                        time_name: str | None) -> str:
     """Hash the values of the file's small static (non-time) variables.
 
     Multi-file concat with ``data_vars='minimal'`` requires static
@@ -106,9 +106,9 @@ def _static_fingerprint(nc: 'netCDF4.Dataset',
 
 def _check_file(
     path: str,
-    time_name: Optional[str],
+    time_name: str | None,
     fingerprint: bool = False,
-) -> tuple[Optional[str], dict, Optional[str]]:
+) -> tuple[str | None, dict, str | None]:
     """Validate one local file.
 
     Returns ``(reason, dims, static_fp)`` — ``reason`` is None when the
@@ -181,7 +181,7 @@ def _majority_dims(per_file_dims: list[dict], exempt: set) -> dict:
 def scrub_cached_copies(
     urlpaths: list,
     cache_dir: str,
-    time_name: Optional[str],
+    time_name: str | None,
     logger: Logger,
 ) -> int:
     """
@@ -252,7 +252,7 @@ def scrub_cached_copies(
 def validate_model_files(
     file_list: list,
     engine: str,
-    time_name: Optional[str],
+    time_name: str | None,
     ofsfiletype: str,
     logger: Logger,
 ) -> tuple[list, list[tuple[str, str]], dict[str, dict]]:

@@ -5,12 +5,11 @@ Extract and parse observation station information from control files.
 """
 
 import os
-from typing import Optional
 
 from ofs_skill.utils.file_headers import strip_obs_ctl_header
 
 
-def station_ctl_file_extract(ctlfile_path: str) -> Optional[tuple[list[list[str]], list[list[str]]]]:
+def station_ctl_file_extract(ctlfile_path: str) -> tuple[list[list[str]], list[list[str]]] | None:
     """
     Extract station information from an observation control file.
 
