@@ -387,13 +387,16 @@ class TestWriteSeriesFile:
 
         NamedTemporaryFile creates 0600 regardless of umask and
         os.replace carries that to the destination, so without an
-        explicit chmod an extended file becomes owner-only.
+        explicit chmod an extended file becomes owner-only. Asserted as
+        "unchanged" rather than against a literal, because Windows only
+        models the read-only bit and reports 0666 either way.
         """
         path = tmp_path / 'perm.obs'
         _write_series(path, WINDOW_START, 4)
         os.chmod(path, 0o644)
+        before = stat.S_IMODE(os.stat(path).st_mode)
         write_series_file(path, SERIES_HEADER, _rows(WINDOW_START, 6))
-        assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
+        assert stat.S_IMODE(os.stat(path).st_mode) == before
 
     def test_headerless_file_stays_headerless(self, tmp_path):
         """Legacy files without a header round-trip unchanged."""
