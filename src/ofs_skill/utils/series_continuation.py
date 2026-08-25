@@ -50,6 +50,24 @@ SEAM_CHECK_WINDOW_HOURS = 12.0
 MAX_SEAM_GAP_HOURS = 6.0
 
 
+def _read_umask_once():
+    """Read the process umask, restoring it immediately.
+
+    Called once at import, while the process is still single-threaded.
+    ``os.umask`` has no read-only form, so querying it later would set
+    the process-wide umask to 0 for an instant -- and any file another
+    worker thread created in that window would come out world-writable.
+    """
+    mask = os.umask(0)
+    os.umask(mask)
+    return mask
+
+
+# Mode for a replacement file whose predecessor is gone, matching what a
+# plain open(path, 'w') elsewhere in the pipeline would produce.
+_DEFAULT_FILE_MODE = 0o666 & ~_read_umask_once()
+
+
 def read_series_file(path):
     """Split a ``.obs``/``.prd`` file into ``(header, data_lines)``.
 
@@ -187,22 +205,14 @@ def write_series_file(path, header, lines):
         # so without this the extended artifact becomes unreadable to
         # everyone but its owner, unlike every other file the pipeline
         # writes.
-        if existing_mode is not None:
-            os.chmod(handle.name, existing_mode)
-        else:
-            os.chmod(handle.name, 0o666 & ~_current_umask())
+        os.chmod(handle.name,
+                 existing_mode if existing_mode is not None
+                 else _DEFAULT_FILE_MODE)
         os.replace(handle.name, path)
     except BaseException:
         with contextlib.suppress(OSError):
             os.remove(handle.name)
         raise
-
-
-def _current_umask():
-    """Read the process umask without leaving it changed."""
-    mask = os.umask(0)
-    os.umask(mask)
-    return mask
 
 
 def merge_and_write(path, new_lines, header, logger=None,
