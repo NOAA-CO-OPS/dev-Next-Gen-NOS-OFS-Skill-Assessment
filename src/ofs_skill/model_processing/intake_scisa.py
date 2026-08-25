@@ -1448,6 +1448,13 @@ def remove_extra_stations(engine: str,
         lat_key = 'lat_rho'
 
     reflat = np.array(refds[lat_key])
+    # reflat is a materialized numpy copy, so the reference dataset's file
+    # handle can be released now. Left open it would be finalized during
+    # interpreter shutdown after h5py is torn down (issue #94).
+    try:
+        refds.close()
+    except Exception:  # pragma: no cover - defensive cleanup only
+        pass
     # Now loop through datasets. Check for and remove extra stations.
     logger.info('Looping through each stations file, applying corrections...')
     for _i, file in enumerate(urlpaths):

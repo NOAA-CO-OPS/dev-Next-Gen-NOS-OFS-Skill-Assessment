@@ -9,32 +9,17 @@ from typing import Any
 
 
 class ModelFormatProperties:
-    """
-    Properties for model format configuration.
+    """Model time/obs format metadata used when reading NetCDF output.
 
-    This class stores model format-specific properties including
-    time format, observation format, and model language.
-
-    Attributes
-    ----------
-    model_time : str
-        Model time format specification
-    model_obs : str
-        Model observation format specification
-    model_lang : str
-        Model language/framework (e.g., 'python', 'fortran')
-    data_model : Any, optional
-        Model data object or structure
-
-    Examples
-    --------
-    >>> format_props = ModelFormatProperties()
-    >>> format_props.model_time = "hours since 1970-01-01"
-    >>> format_props.model_lang = "python"
+    Attributes:
+        model_time: Time-coordinate description or units string.
+        model_obs: Observation-related format hint.
+        model_lang: Model framework label (e.g. ``python``, ``fortran``).
+        data_model: Optional loaded model data object.
     """
 
     def __init__(self):
-        """Initialize ModelFormatProperties with default values."""
+        """Initialize empty format fields."""
         self.model_time: str = ''
         self.model_obs: str = ''
         self.model_lang: str = ''
