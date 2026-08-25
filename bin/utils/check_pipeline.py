@@ -343,9 +343,13 @@ def main(args):
     # A relative -c is looked for under the working directory first, then
     # under the installation root, so an external -p still finds the
     # shipped config instead of dying on a path that cannot exist.
+    # Split into components before resolving: resolve_asset_path joins its
+    # *parts with os.path.join, so handing it the whole 'conf/ofs_dps.conf'
+    # string would splice a forward slash into an otherwise native path and
+    # yield a mixed-separator path like 'C:\...\conf/ofs_dps.conf' on Windows.
     resolved_conf = (
         conf_path if os.path.isabs(conf_path)
-        else utils.resolve_asset_path(home_dir, conf_path)
+        else utils.resolve_asset_path(home_dir, *Path(conf_path).parts)
     )
     try:
         dir_params = utils.Utils(resolved_conf).read_config_section(
