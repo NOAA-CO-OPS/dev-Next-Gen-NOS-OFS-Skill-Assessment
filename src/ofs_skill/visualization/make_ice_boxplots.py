@@ -132,6 +132,9 @@ def make_ice_boxplots(ice_o, ice_m, time_all_dt, prop, logger):
     fig.update_layout(
         xaxis_title_font_size=20,
         yaxis_title_font_size=20,
+        # px.violin takes the y-axis title from the 'RMSE' dataframe
+        # column name; ice concentration RMSE is a percentage.
+        yaxis_title='RMSE (%)',
         xaxis=dict(tickfont=dict(size=15)),
         yaxis=dict(tickfont=dict(size=15)),
         title=figtitle,

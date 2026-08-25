@@ -22,6 +22,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from ofs_skill.utils import plot_units
 from ofs_skill.visualization import make_static_plots, plotting_functions
 
 
@@ -76,31 +77,19 @@ def make_table(grouped, info, prop, stat):
 
 def get_yaxis_label(name_var, logger):
     '''
-    Simple function that takes a variable name (wl, salt, temp, cu) and returns
-    strings that are then used for figure y-axis labels.
+    Takes a variable name (wl, salt, temp, cu, cu_dir, ice_conc, or the
+    long form such as 'water_level') and returns the quantity name plus
+    its HTML-formatted unit suffix, for use in figure y-axis labels.
+
+    Both strings come from ofs_skill.utils.plot_units, the single source
+    of truth for plot units. An unrecognized variable now yields
+    ('Unknown', '') instead of raising: the previous units if/elif chain
+    had no else branch, so any name_var outside {wl, temp, salt, cu}
+    raised UnboundLocalError on the return.
     Called by plotting functions below.
     '''
-    if name_var == 'wl':
-        label_text = 'Water level'
-    elif name_var == 'salt':
-        label_text = 'Salinity'
-    elif name_var == 'temp':
-        label_text = 'Water temperature'
-    elif name_var == 'cu':
-        label_text = 'Current speed'
-    else:
-        logger.error('Unknown name_var for labeling y-axis!')
-        label_text = 'Unknown'
-
-    # Units
-    if name_var == 'wl':
-        units = ' (<i>meters<i>)'
-    elif name_var == 'temp':
-        units = ' (<i>\u00b0C<i>)'
-    elif name_var == 'salt':
-        units = ' (<i>PSU<i>)'
-    elif name_var == 'cu':
-        units = ' (<i>m/s<i>)'
+    label_text = plot_units.quantity_label(name_var, logger)
+    units = plot_units.unit_suffix(name_var, html=True, logger=logger)
 
     return label_text, units
 
@@ -444,7 +433,8 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 go.Bar(
                     x=xlabels[i],
                     y=ydata[0],
-                    name='RMSE',
+                    name=plot_units.with_unit('RMSE', info[7], html=True,
+                                              logger=logger),
                     marker_color=rmsecolors,
                     marker_line_color='black',
                     marker_line_width=1.5,
@@ -456,7 +446,8 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 go.Bar(
                     x=xlabels[i],
                     y=ydata[1],
-                    name='Mean error',
+                    name=plot_units.with_unit('Mean error', info[7],
+                                              html=True, logger=logger),
                     marker_color=mecolors,
                     marker_line_color='dodgerblue',
                     marker_line_width=1.5,
@@ -481,7 +472,10 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 y=error_range, line_color='darkorange',
                 line_width=1.25,
                 line_dash='dash',
-                annotation_text='<b>Target error range</b>',
+                annotation_text=(
+                    '<b>Target error range '
+                    f'(+{plot_units.value_with_unit(error_range, info[7])})'
+                    '</b>'),
                 annotation_position='top left',
                 annotation_font_color='black',
                 annotation_font_size=13,
@@ -491,7 +485,10 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 y=-error_range, line_color='darkorange',
                 line_width=1.25,
                 line_dash='dash',
-                annotation_text='<b>Target error range</b>',
+                annotation_text=(
+                    '<b>Target error range '
+                    f'(-{plot_units.value_with_unit(error_range, info[7])})'
+                    '</b>'),
                 annotation_position='bottom right',
                 annotation_font_color='black',
                 annotation_font_size=13,
