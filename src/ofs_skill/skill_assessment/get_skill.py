@@ -96,6 +96,37 @@ def _set_cached_model(prop, dataset):
         gc.collect()
 
 
+def _close_cached_model(prop):
+    """Close and drop the model dataset cached on ``prop``.
+
+    The model dataset is opened lazily with the h5netcdf engine and stashed
+    on ``prop._cached_model`` so a single load can be shared across the
+    per-variable and per-station worker threads. Nothing else closes the
+    *final* cached dataset once processing is done, so its file handle would
+    otherwise be finalized during interpreter shutdown -- after h5py's
+    module globals have been torn down -- producing the noisy but harmless
+    ``TypeError: bad operand type for unary ~: 'NoneType'`` tracebacks
+    reported in issue #94. Closing it here, while the interpreter is still
+    healthy, lets h5netcdf/h5py release the handle cleanly.
+
+    Best-effort: a missing cache, a dataset without ``close``, or a close
+    that raises are all swallowed so end-of-run cleanup never masks the
+    actual results.
+    """
+    cached = getattr(prop, '_cached_model', None)
+    if cached is None:
+        return
+    try:
+        cached.close()
+    except Exception:  # pragma: no cover - defensive cleanup only
+        pass
+    finally:
+        prop._cached_model = None
+        prop._cached_model_key = None
+        del cached
+        gc.collect()
+
+
 def ofs_ctlfile_extract(prop, name_var, logger, model_dataset=None):
     """
     Extract info from model control files. If control file does not exist,
@@ -1289,22 +1320,28 @@ def get_skill(prop, logger):
     # Variable processing runs sequentially here. Variable parallelism
     # is handled inside get_node_ofs (which loads the model once and
     # dispatches variable extraction in parallel).
-    for variable in prop.var_list:
-        _skill_for_variable(variable, prop)
+    try:
+        for variable in prop.var_list:
+            _skill_for_variable(variable, prop)
 
-    # Now collect forecast horizon time series, if ya want!
-    if (prop.horizonskill and
-        prop.whichcast == 'forecast_b'):
-        # Get all model time series, and put them in a big 'ol CSV file
-        # Check to see if this has already been done
-        logger.info('Starting forecast horizon skill! This is going to '
-                    'take a while...\n')
-        try:
-            do_horizon_skill.make_horizon_series(prop, logger)
-            # Now get obs time series and put that in the CSV file, too.
-            do_horizon_skill.merge_obs_series_scalar(prop, logger)
-        except Exception as e_x:
-            logger.error('Exception caught in do_horizon_skill after '
-                         'calling it from get_skill. Error: %s', e_x)
-        prop.horizonskill = False
-        logger.info('Completed forecast horizon skill!')
+        # Now collect forecast horizon time series, if ya want!
+        if (prop.horizonskill and
+            prop.whichcast == 'forecast_b'):
+            # Get all model time series, and put them in a big 'ol CSV file
+            # Check to see if this has already been done
+            logger.info('Starting forecast horizon skill! This is going to '
+                        'take a while...\n')
+            try:
+                do_horizon_skill.make_horizon_series(prop, logger)
+                # Now get obs time series and put that in the CSV file, too.
+                do_horizon_skill.merge_obs_series_scalar(prop, logger)
+            except Exception as e_x:
+                logger.error('Exception caught in do_horizon_skill after '
+                             'calling it from get_skill. Error: %s', e_x)
+            prop.horizonskill = False
+            logger.info('Completed forecast horizon skill!')
+    finally:
+        # Release the shared model dataset's file handle now, while the
+        # interpreter is still healthy, rather than letting the GC finalize
+        # it at shutdown after h5py has been torn down (issue #94).
+        _close_cached_model(prop)
