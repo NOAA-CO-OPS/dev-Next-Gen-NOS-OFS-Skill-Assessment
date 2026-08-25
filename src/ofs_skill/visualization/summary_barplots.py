@@ -223,6 +223,10 @@ def write_html_summary_bars(df: pd.DataFrame, name_var: str, variable: str,
                 f"RMSE: {plot_units.value_with_unit('%{y:.3f}', variable, logger)}"
                 '<extra></extra>'
             ),
+            # Trace metadata only: showlegend is off and the
+            # hovertemplate ends in '<extra></extra>', so this string has
+            # no render path today. It is kept in step with the axis
+            # title so re-enabling either surface shows the unit.
             name=plot_units.with_unit('RMSE', variable, logger=logger),
             showlegend=False,
         ),

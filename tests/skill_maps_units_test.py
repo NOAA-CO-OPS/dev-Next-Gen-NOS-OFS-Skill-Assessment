@@ -60,9 +60,11 @@ def _render(tmp_path, variable, name_var):
         f'{prop.ofs}_{variable}_{prop.whichcast}_Skill_Map.html')
     assert os.path.isfile(path), path
     with open(path, encoding='utf-8') as fh:
-        # plotly escapes '/' as \u002f inside the embedded JSON, which
-        # would hide the 'm/s' unit from a plain substring search.
-        return fh.read().replace('\\u002f', '/')
+        # plotly escapes '/' and '<' inside the embedded JSON, which
+        # would hide the 'm/s' unit and the '<br>' title break from a
+        # plain substring search.
+        return (fh.read().replace('\\u002f', '/')
+                .replace('\\u003c', '<').replace('\\u003e', '>'))
 
 
 @pytest.mark.parametrize('variable,name_var,unit', [
@@ -95,3 +97,19 @@ def test_unmapped_variable_degrades_to_no_unit_not_its_own_name(tmp_path):
     html = _render(tmp_path, 'some_variable', 'wl')
     assert 'RMSE (some_variable)' not in html
     assert 'some_variable RMSE statistics' in html
+
+
+@pytest.mark.parametrize('maptitle', [
+    'RMSE (meters) statistics',
+    'central frequency (%)',
+    'mean bias (meters)',
+])
+def test_map_titles_break_before_the_date_range(tmp_path, maptitle):
+    """Plotly clips a figure title at the figure edge instead of
+    wrapping it. At font size 22 in a 1000px-wide figure the longest
+    single-line variants overflow once the unit is added, so the date
+    range has to start on its own line."""
+    html = _render(tmp_path, 'water_level', 'wl')
+    assert f'{maptitle},<br>2026-03-28 - 2026-03-29' in html
+    # No dropdown-relayout variant may keep the single-line form.
+    assert f'{maptitle}, 2026-03-28' not in html

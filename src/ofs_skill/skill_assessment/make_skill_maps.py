@@ -160,10 +160,18 @@ def make_skill_maps(
         zoom_lat = math.log2(180 / lat_diff) if lat_diff > 0 else 15.0
         zoom_level = min(zoom_lon, zoom_lat) - 0.25
 
-    # Base Titles
-    plottitle_rmse = f"{prop.ofs.upper()} {prop.whichcast.split('_')[0]} {title_var} RMSE{unit_sfx} statistics, {datestrbeg} - {datestrend}"
-    plottitle_cf = f"{prop.ofs.upper()} {prop.whichcast.split('_')[0]} {title_var} central frequency (%), {datestrbeg} - {datestrend}"
-    plottitle_mb = f"{prop.ofs.upper()} {prop.whichcast.split('_')[0]} {title_var} mean bias{unit_sfx}, {datestrbeg} - {datestrend}"
+    # Base Titles. Plotly does not wrap a figure title, it clips it at
+    # the figure edge, and at font size 22 in a 1000px-wide figure the
+    # longest single-line variants (e.g. STOFS_3D_ATL water level high
+    # water extrema) already overflowed before the unit was added. The
+    # explicit '<br>' puts the date range on its own line so every
+    # variant fits, and it also buys back vertical room next to the
+    # legend.
+    title_head = f"{prop.ofs.upper()} {prop.whichcast.split('_')[0]} {title_var}"
+    daterange = f'{datestrbeg} - {datestrend}'
+    plottitle_rmse = f'{title_head} RMSE{unit_sfx} statistics,<br>{daterange}'
+    plottitle_cf = f'{title_head} central frequency (%),<br>{daterange}'
+    plottitle_mb = f'{title_head} mean bias{unit_sfx},<br>{daterange}'
 
     # ========================================================
     #                     CALCULATE RMSE LOGIC

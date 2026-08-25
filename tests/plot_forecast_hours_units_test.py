@@ -59,6 +59,8 @@ def _df_all(n=120):
         'model_cycle': cycles,
         'error': error,
         'square_error': error ** 2,
+        'OBS': rng.normal(0.0, 0.5, size=n),
+        'OFS': rng.normal(0.0, 0.5, size=n),
     })
 
 
@@ -116,6 +118,22 @@ def test_horizonbin_currents_direction_uses_degrees(tmp_path):
     assert 'RMSE (<i>degrees</i>)' in html
     assert 'Mean error (<i>degrees</i>)' in html
     assert 'RMSE (<i>m/s</i>)' not in html
+    # The y-axis label must follow the same key, not info[0].
+    assert 'Current direction<br>RMSE or error (<i>degrees</i>)' in html
+    assert 'Current speed' not in html
+
+
+@pytest.mark.usefixtures('_no_network')
+def test_horizonbin_threshold_and_unit_share_one_key(tmp_path):
+    """The number in the target-error annotation must be the threshold
+    for the variable whose unit is printed next to it: 22.5 degrees for
+    current direction, not the 0.26 m/s current-speed threshold."""
+    _write_error_ranges(tmp_path)
+    prop = _make_prop(tmp_path)
+    html = _run(tmp_path, prop, 'cu', 'currents_dir')
+    assert 'Target error range (+22.5 degrees)' in html
+    assert 'Target error range (-22.5 degrees)' in html
+    assert '0.26 degrees' not in html
 
 
 @pytest.mark.usefixtures('_no_network')
@@ -155,3 +173,27 @@ def test_static_bar_plot_axis_label_is_plain_text(tmp_path, monkeypatch):
     assert all('<' not in lbl for lbl in seen['ylabels']), seen['ylabels']
     assert 'Target error range (0.15 meters)' in seen['legend'], \
         seen['legend']
+
+
+@pytest.mark.usefixtures('_no_network')
+def test_timeseries_target_error_annotations_carry_value_and_unit(tmp_path):
+    """The error subplot's two mirror hlines used to render the same
+    bare 'Target error range' with no sign, value or unit, while the
+    sibling bar plot from the same run spelled all three out."""
+    _write_error_ranges(tmp_path)
+    prop = _make_prop(tmp_path)
+    info = _info('wl', 'water_level')
+    cycles = ['20260328-00:00:00', '20260328-06:00:00',
+              '20260328-12:00:00', '20260328-18:00:00']
+    plot_forecast_hours.make_timeseries_plots(
+        _df_all(), cycles, info, prop, logging.getLogger('test'))
+
+    html_path = os.path.join(
+        prop.visuals_horizon_path,
+        f'{prop.ofs}_8638901_water_level_cycle_series.html')
+    assert os.path.isfile(html_path), html_path
+    with open(html_path, encoding='utf-8') as fh:
+        content = fh.read()
+    assert 'Target error range (+0.15 meters)' in content
+    assert 'Target error range (-0.15 meters)' in content
+    assert '"text":"Target error range"' not in content

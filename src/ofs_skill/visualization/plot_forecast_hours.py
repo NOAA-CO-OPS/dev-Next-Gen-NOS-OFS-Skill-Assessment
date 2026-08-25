@@ -333,8 +333,14 @@ def make_horizonbin_plots(df_all, info, prop, logger):
     Writes a plot to file.
     '''
 
-    # Get error range
-    error_range, _ = plotting_functions.get_error_range(info[0], prop, logger)
+    # Resolve the target error range, the axis label and the unit
+    # through one key. info[7] (the long variable name) is the only one
+    # that separates current direction from current speed -- info[0]
+    # collapses both to 'cu' -- so a threshold read under info[0] would
+    # be printed next to a unit read under info[7].
+    label_var = plot_units.resolve_variable(info[7], info[0])
+    error_range, _ = plotting_functions.get_error_range(
+        plot_units.canonical_key(label_var) or info[0], prop, logger)
 
     # Stats
     n_threshold = 10
@@ -433,7 +439,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 go.Bar(
                     x=xlabels[i],
                     y=ydata[0],
-                    name=plot_units.with_unit('RMSE', info[7], html=True,
+                    name=plot_units.with_unit('RMSE', label_var, html=True,
                                               logger=logger),
                     marker_color=rmsecolors,
                     marker_line_color='black',
@@ -446,7 +452,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 go.Bar(
                     x=xlabels[i],
                     y=ydata[1],
-                    name=plot_units.with_unit('Mean error', info[7],
+                    name=plot_units.with_unit('Mean error', label_var,
                                               html=True, logger=logger),
                     marker_color=mecolors,
                     marker_line_color='dodgerblue',
@@ -474,7 +480,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 line_dash='dash',
                 annotation_text=(
                     '<b>Target error range '
-                    f'(+{plot_units.value_with_unit(error_range, info[7])})'
+                    f'(+{plot_units.value_with_unit(error_range, label_var)})'
                     '</b>'),
                 annotation_position='top left',
                 annotation_font_color='black',
@@ -487,7 +493,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
                 line_dash='dash',
                 annotation_text=(
                     '<b>Target error range '
-                    f'(-{plot_units.value_with_unit(error_range, info[7])})'
+                    f'(-{plot_units.value_with_unit(error_range, label_var)})'
                     '</b>'),
                 annotation_position='bottom right',
                 annotation_font_color='black',
@@ -506,7 +512,7 @@ def make_horizonbin_plots(df_all, info, prop, logger):
             )
             return
     try:
-        yaxis_label, unit_label = get_yaxis_label(info[0], logger)
+        yaxis_label, unit_label = get_yaxis_label(label_var, logger)
         yaxistitle = yaxis_label + '<br>RMSE or error' + unit_label
         fig.update_yaxes(
             title_text=yaxistitle,
@@ -650,8 +656,11 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
     NOTHING.
     Writes a plot to file.
     '''
-    # Get error range
-    error_range, _ = plotting_functions.get_error_range(info[0], prop, logger)
+    # See make_horizonbin_plots: the long variable name is the key that
+    # separates current direction from current speed.
+    label_var = plot_units.resolve_variable(info[7], info[0])
+    error_range, _ = plotting_functions.get_error_range(
+        plot_units.canonical_key(label_var) or info[0], prop, logger)
 
     # Stats
     n_threshold = 20
@@ -765,7 +774,7 @@ def make_horizonbin_freq_plots(df_all, info, prop, logger):
             )
             return
     try:
-        yaxis_label, _ = get_yaxis_label(info[0], logger)
+        yaxis_label, _ = get_yaxis_label(label_var, logger)
         yaxistitle = yaxis_label + '<br>central frequency' + ' (%)'
         fig.update_yaxes(
             title_text=yaxistitle,
@@ -908,8 +917,11 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
     Writes a plot to file.
     '''
 
-    # Get error range
-    error_range, _ = plotting_functions.get_error_range(info[0], prop, logger)
+    # See make_horizonbin_plots: the long variable name is the key that
+    # separates current direction from current speed.
+    label_var = plot_units.resolve_variable(info[7], info[0])
+    error_range, _ = plotting_functions.get_error_range(
+        plot_units.canonical_key(label_var) or info[0], prop, logger)
 
     # Sort out observation data
     df_obs = df_all[['DateTime', 'OBS']]
@@ -981,7 +993,9 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
             y=error_range, line_color='red',
             line_width=1,
             line_dash='dash',
-            annotation_text='Target error range',
+            annotation_text=(
+                'Target error range '
+                f'(+{plot_units.value_with_unit(error_range, label_var)})'),
             annotation_position='top left',
             annotation_font_color='black',
             annotation_font_size=12,
@@ -991,14 +1005,16 @@ def make_timeseries_plots(df_all, forecast_cols_sort, info, prop, logger):
             y=-error_range, line_color='red',
             line_width=1,
             line_dash='dash',
-            annotation_text='Target error range',
+            annotation_text=(
+                'Target error range '
+                f'(-{plot_units.value_with_unit(error_range, label_var)})'),
             annotation_position='bottom right',
             annotation_font_color='black',
             annotation_font_size=12,
             row=2, col=1,
         )
         # Set figure properties
-        yaxis_label, unit_label = get_yaxis_label(info[0], logger)
+        yaxis_label, unit_label = get_yaxis_label(label_var, logger)
         # yrange_error = np.ceil(np.nanmax(np.abs(df_all['error'])))
         fig.update_yaxes(
             title_text=yaxis_label + unit_label,

@@ -244,6 +244,11 @@ def make_2d_skill_maps(
                                  get_stat_name(maptype): ':.2f',
                                  'Date': False
                                  },
+                     # Display name for the statistic column, so the
+                     # hover row carries the same unit as the colorbar
+                     # without renaming the dataframe column (which is
+                     # also the color and animation_group key).
+                     labels={get_stat_name(maptype): cbartitle},
                      zoom=6,
                      title=plottitle,
                      color_continuous_scale=colorscale,

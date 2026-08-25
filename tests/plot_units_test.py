@@ -113,3 +113,33 @@ def test_rmse_axis_title_keeps_the_literal_token_for_bar_plots():
     assert 'RMSE' in sanitized
     assert '<' not in sanitized
     assert sanitized == 'Water level\nRMSE (meters)'
+
+
+def test_resolve_variable_prefers_the_long_name_when_it_is_mapped():
+    """The long variable name is the only one that separates current
+    direction from current speed."""
+    assert plot_units.resolve_variable('currents_dir', 'cu') == 'currents_dir'
+    assert plot_units.resolve_variable('water_level', 'wl') == 'water_level'
+
+
+def test_resolve_variable_falls_back_when_the_long_name_is_unmapped():
+    """An unmapped long name must never strip the unit off a plot that
+    the short code can still resolve."""
+    assert plot_units.resolve_variable('not_a_variable', 'wl') == 'wl'
+    assert plot_units.resolve_variable(None, 'cu') == 'cu'
+    assert plot_units.resolve_variable('', 'temp') == 'temp'
+
+
+def test_resolve_variable_keeps_threshold_and_unit_on_one_key():
+    """canonical_key of the resolved name is the error_ranges.csv row
+    whose unit gets printed beside the number."""
+    for preferred, fallback, expected in [
+        ('currents_dir', 'cu', 'cu_dir'),
+        ('currents', 'cu', 'cu'),
+        ('water_level', 'wl', 'wl'),
+        ('water_temperature', 'temp', 'temp'),
+        ('salinity', 'salt', 'salt'),
+        ('not_a_variable', 'wl', 'wl'),
+    ]:
+        resolved = plot_units.resolve_variable(preferred, fallback)
+        assert plot_units.canonical_key(resolved) == expected

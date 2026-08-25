@@ -91,6 +91,24 @@ def canonical_key(variable: str | None) -> str | None:
     return _ALIASES.get(key.lower())
 
 
+def resolve_variable(preferred: str | None,
+                     fallback: str | None) -> str | None:
+    """Pick whichever of two names for the same series is mapped here.
+
+    The plotting modules carry two names for one series: the long
+    variable name ('currents_dir') and the short ``name_var`` code
+    ('cu').  Only the long name separates current direction from current
+    speed, so it wins whenever this module recognises it.  An unmapped
+    long name falls back to the short code, so a variable that used to
+    get a unit can never lose one.
+
+    Resolving the target-error threshold, the axis label and the unit
+    through this single key is what stops a plot printing one
+    variable's number in another variable's unit.
+    """
+    return preferred if canonical_key(preferred) else fallback
+
+
 def unit(variable: str | None, logger: Logger | None = None) -> str:
     """Bare unit text, e.g. 'meters'.  Empty string if unknown."""
     key = canonical_key(variable)
