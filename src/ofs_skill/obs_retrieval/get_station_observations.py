@@ -845,7 +845,7 @@ def _process_variable_obs(
                     cache_manifest.record_artifact(
                         other_path,
                         cache_manifest.run_signature(prop, variable=other_var),
-                        prop.control_files_path,
+                        control_files_path,
                         logger)
 
     logger.info('Downloading data found in the station ctl files')
