@@ -232,6 +232,11 @@ class TestIntHeaders:
         assert '_write_int_file(int_path, name_var' in source
 
 
+def _lf(raw: bytes) -> bytes:
+    """Normalise CRLF to LF so a stored golden compares equal on Windows."""
+    return raw.replace(b'\r\n', b'\n')
+
+
 class TestPairedScalarIntBytes:
     """End-to-end ``.int`` bytes for the committed CBOFS wl fixtures."""
 
@@ -261,7 +266,14 @@ class TestPairedScalarIntBytes:
         out = tmp_path / 'pair.int'
         _write_int_file(str(out), 'wl', rows)
 
-        assert out.read_bytes() == expected
+        # _write_int_file opens the .int in text mode without an explicit
+        # newline, exactly as the writer it replaced did, so the file
+        # inherits the platform line terminator and is CRLF on Windows.
+        # The golden is stored with LF, so compare with both sides
+        # normalised: the line ending is a property of the platform, not
+        # of this change, and test_matches_legacy_writer already pins the
+        # row bytes against the original writer without touching a file.
+        assert _lf(out.read_bytes()) == _lf(expected)
         # Tripwire on the fixture itself: the data rows end in digits, so
         # no whitespace hook can reach them, but a well-meaning reformat
         # of the file would otherwise silently weaken this test.
