@@ -85,13 +85,13 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import scipy.interpolate as interp
+from bin.model_processing import get_icecover_model
+from bin.obs_retrieval import get_icecover_observations
+from bin.visualization import create_1dplot_ice
 from mpl_toolkits.basemap import Basemap
 from numpy import isnan
 from sklearn.metrics import confusion_matrix
 
-from bin.model_processing import get_icecover_model
-from bin.obs_retrieval import get_icecover_observations
-from bin.visualization import create_1dplot_ice
 from ofs_skill.model_processing import (
     model_properties,
     model_source,

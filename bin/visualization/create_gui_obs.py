@@ -7,6 +7,7 @@ Run without arguments to open the GUI directly:
 Author: TSR
 """
 from bin.obs_retrieval.get_station_observations_cli import _run_pipeline
+
 from ofs_skill.visualization import create_gui_obs
 
 if __name__ == '__main__':

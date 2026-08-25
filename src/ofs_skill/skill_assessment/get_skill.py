@@ -91,6 +91,37 @@ def _set_cached_model(prop, dataset):
         gc.collect()
 
 
+def _close_cached_model(prop):
+    """Close and drop the model dataset cached on ``prop``.
+
+    The model dataset is opened lazily with the h5netcdf engine and stashed
+    on ``prop._cached_model`` so a single load can be shared across the
+    per-variable and per-station worker threads. Nothing else closes the
+    *final* cached dataset once processing is done, so its file handle would
+    otherwise be finalized during interpreter shutdown -- after h5py's
+    module globals have been torn down -- producing the noisy but harmless
+    ``TypeError: bad operand type for unary ~: 'NoneType'`` tracebacks
+    reported in issue #94. Closing it here, while the interpreter is still
+    healthy, lets h5netcdf/h5py release the handle cleanly.
+
+    Best-effort: a missing cache, a dataset without ``close``, or a close
+    that raises are all swallowed so end-of-run cleanup never masks the
+    actual results.
+    """
+    cached = getattr(prop, '_cached_model', None)
+    if cached is None:
+        return
+    try:
+        cached.close()
+    except Exception:  # pragma: no cover - defensive cleanup only
+        pass
+    finally:
+        prop._cached_model = None
+        prop._cached_model_key = None
+        del cached
+        gc.collect()
+
+
 def ofs_ctlfile_extract(prop, name_var, logger, model_dataset=None):
     """
     Extract info from model control files. If control file does not exist,
@@ -286,7 +317,18 @@ def _station_metadata(read_station_ctl_file, read_ofs_ctl_file, obs_idx, ofs_idx
     return {
         'station_id': read_station_ctl_file[0][obs_idx][0],
         'node': read_ofs_ctl_file[1][ofs_idx],
-        'obs_depth': read_station_ctl_file[1][obs_idx][-2],
+        # Every obs ctl writer emits the water depth as the 4th coord
+        # token. Scalar-variable coord lines have 5 tokens so [-2] used
+        # to land on it by coincidence, but CO-OPS ADCP currents lines
+        # carry 7 tokens ([-2] read height_from_bottom, making
+        # obs_water_depth constant across a station's bins) and
+        # NDBC/USGS/CHS currents lines carry 6 ([-2] read a literal
+        # 0.0). Issue #200. A malformed short row degrades to a blank
+        # depth rather than dropping the station via IndexError.
+        'obs_depth': (
+            read_station_ctl_file[1][obs_idx][3]
+            if len(read_station_ctl_file[1][obs_idx]) > 3 else ''
+        ),
         'mod_depth': read_ofs_ctl_file[-2][ofs_idx],
         'X': str(float(read_station_ctl_file[1][obs_idx][1])),
         'Y': read_station_ctl_file[1][obs_idx][0],
@@ -359,7 +401,7 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
             not formatted_series
             or isinstance(
                 formatted_series,
-                (str, format_paired_one_d.PairingStatus),
+                str | format_paired_one_d.PairingStatus,
             )
             or len(formatted_series[0]) <= 1
         ):
@@ -516,14 +558,24 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
 
 
 def skill(read_station_ctl_file, read_ofs_ctl_file, prop, name_var, logger):
-    """
-    This function 1) writes the paired observation and model time series to
-    file (.int), and 2) sends the paired time series to
-    metrics_paired_one_d to calculate skill stats, which are returned from the
-    function.
+    """Pair observation and model series for one variable and compute skill.
 
-    Returns a list: [output] for scalars, [output, output_dir] for currents,
-    [output, output_hw, output_lw] for water level (when extrema were paired).
+    Writes paired time series (``.int``) and calls
+    ``metrics_paired_one_d`` to produce per-station skill rows.
+
+    Args:
+        read_station_ctl_file: Parsed observation control-file structure
+            (station rows / metadata).
+        read_ofs_ctl_file: Parsed model control-file structure aligned to
+            the same stations.
+        prop: ``ModelProperties`` for paths, dates, and run settings.
+        name_var: Short variable key (``wl``, ``temp``, ``salt``, or ``cu``).
+        logger: Logger for progress and drop reasons.
+
+    Returns:
+        A list of output dicts: ``[output]`` for scalars;
+        ``[output, output_dir]`` for currents; and for water level with
+        extrema pairing, HW/LW dicts are included as well.
     """
 
     def _create_output_dict(extrema=False):
@@ -629,10 +681,25 @@ def name_convent(variable):
 
 
 def get_skill(prop, logger):
-    """
- This is the final skill assessment script.
- This function reads the obs and ofs control files, search for the
- respective data and creates the paired (.int) datasets and skill table.
+    """Run the 1D skill assessment for the variables configured on ``prop``.
+
+    For each variable, ensures observation (``.obs``) and model (``.prd``)
+    products exist (fetching/extracting when missing or stale), pairs them
+    into ``.int`` files, computes skill tables via :func:`skill`, and writes
+    outputs under the skill/paths on ``prop``.
+
+    Args:
+        prop: ``ModelProperties`` with OFS, dates, datum, whichcast(s),
+            paths, and variable list populated.
+        logger: Logger instance, or ``None`` to load from config.
+
+    Returns:
+        None. Side effects: paired series, skill CSVs/tables, and related
+        artifacts on disk.
+
+    Raises:
+        SystemExit: If required config/logging files are missing when
+            ``logger`` is ``None``.
     """
 
     if logger is None:
@@ -1153,22 +1220,28 @@ def get_skill(prop, logger):
     # Variable processing runs sequentially here. Variable parallelism
     # is handled inside get_node_ofs (which loads the model once and
     # dispatches variable extraction in parallel).
-    for variable in prop.var_list:
-        _skill_for_variable(variable, prop)
+    try:
+        for variable in prop.var_list:
+            _skill_for_variable(variable, prop)
 
-    # Now collect forecast horizon time series, if ya want!
-    if (prop.horizonskill and
-        prop.whichcast == 'forecast_b'):
-        # Get all model time series, and put them in a big 'ol CSV file
-        # Check to see if this has already been done
-        logger.info('Starting forecast horizon skill! This is going to '
-                    'take a while...\n')
-        try:
-            do_horizon_skill.make_horizon_series(prop, logger)
-            # Now get obs time series and put that in the CSV file, too.
-            do_horizon_skill.merge_obs_series_scalar(prop, logger)
-        except Exception as e_x:
-            logger.error('Exception caught in do_horizon_skill after '
-                         'calling it from get_skill. Error: %s', e_x)
-        prop.horizonskill = False
-        logger.info('Completed forecast horizon skill!')
+        # Now collect forecast horizon time series, if ya want!
+        if (prop.horizonskill and
+            prop.whichcast == 'forecast_b'):
+            # Get all model time series, and put them in a big 'ol CSV file
+            # Check to see if this has already been done
+            logger.info('Starting forecast horizon skill! This is going to '
+                        'take a while...\n')
+            try:
+                do_horizon_skill.make_horizon_series(prop, logger)
+                # Now get obs time series and put that in the CSV file, too.
+                do_horizon_skill.merge_obs_series_scalar(prop, logger)
+            except Exception as e_x:
+                logger.error('Exception caught in do_horizon_skill after '
+                             'calling it from get_skill. Error: %s', e_x)
+            prop.horizonskill = False
+            logger.info('Completed forecast horizon skill!')
+    finally:
+        # Release the shared model dataset's file handle now, while the
+        # interpreter is still healthy, rather than letting the GC finalize
+        # it at shutdown after h5py has been torn down (issue #94).
+        _close_cached_model(prop)

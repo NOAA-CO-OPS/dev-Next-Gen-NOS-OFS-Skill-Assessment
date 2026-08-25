@@ -21,7 +21,7 @@ concurrent run having already deleted the file.
 
 import contextlib
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 # How far a cached artifact's data may stop short of the reachable run
 # window before the file is declared stale. Sized to absorb the nowcast
@@ -131,7 +131,7 @@ def covers_run_window(path, start_dt, end_dt, *, logger=None, now=None):
                 'skipping staleness check for this file.', path)
         return True
     if now is None:
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        now = datetime.now(UTC).replace(tzinfo=None)
     effective_end = min(end_dt, now)
     if effective_end - start_dt <= STALENESS_TOLERANCE:
         return True

@@ -11,7 +11,6 @@ import os
 import sys
 import threading
 from pathlib import Path
-from typing import Union
 
 # Parsed-config cache keyed on file path, invalidated by (mtime_ns, size).
 # The pipeline re-reads config sections constantly — per variable, per
@@ -44,45 +43,17 @@ def _read_config_cached(config_file: Path) -> configparser.ConfigParser:
 
 
 class Utils:
-    """
-    Utility class for configuration file management.
+    """Helpers for reading ``ofs_dps.conf`` and related path resolution.
 
-    Provides methods to read and parse configuration files that define
-    directory paths, URLs, and other system parameters.
+    Attributes:
+        config_file: Path to the INI config (default ``conf/ofs_dps.conf``).
 
-    Attributes
-    ----------
-    config_file : Path
-        Path to the main configuration file (conf/ofs_dps.conf)
-
-    Examples
-    --------
-    >>> utils = Utils()
-    >>> config_path = utils.get_config_file()
-    >>> print(config_path)
-    /path/to/conf/ofs_dps.conf
-
-    >>> import logging
-    >>> logger = logging.getLogger(__name__)
-    >>> dir_params = utils.read_config_section('directories', logger)
-    >>> print(dir_params['home'])
-    ./
-
-    Notes
-    -----
-    The configuration file is expected to be in INI format with sections:
-
-    [directories]
-    home = ./
-    data_dir = data
-    ...
-
-    [urls]
-    nodd_s3 = https://noaa-nos-ofs-pds.s3.amazonaws.com/
-    ...
-
-    [stations]
-    ... station configuration ...
+    Example:
+        ```python
+        utils = Utils()
+        dir_params = utils.read_config_section("directories", logger)
+        home = dir_params["home"]
+        ```
     """
 
     def __init__(self, config_file=None):
@@ -330,26 +301,52 @@ def get_s3_cache_dir(config_file=None, logger=None) -> str:
     return configured
 
 
-def load_api_keys(config_filename='conf/api_keys.conf'):
+def redact_secrets(
+    text: str | None, env_keys: tuple[str, ...] = ('API_USGS_PAT',)
+) -> str | None:
+    """Return ``text`` with known secret env values replaced by ``***``.
+
+    Use before logging exceptions or writing diagnostics so tokens never
+    appear in CI logs, tracebacks, or uploaded artifacts.
+
+    Args:
+        text: Raw string that may contain secret values, or ``None``.
+        env_keys: Environment variable names whose values should be redacted.
+
+    Returns:
+        Redacted string, or ``None`` if ``text`` was ``None``.
+
+    Note:
+        Only values with length ``>= 6`` are redacted, so a pathologically
+        short or empty secret cannot mangle unrelated log text. This is
+        belt-and-suspenders on top of GitHub ``::add-mask::``.
     """
-    Load API keys from a config file into environment variables.
+    if text is None:
+        return None
+    out = str(text)
+    for key in env_keys:
+        value = os.environ.get(key, '').strip()
+        if len(value) >= 6:
+            out = out.replace(value, '***')
+    return out
 
-    Reads a simple KEY=VALUE config file and sets each key as an
-    environment variable, but only if it is not already set.
-    This allows environment variables (e.g., from conda or CI) to
-    take precedence over the config file.
 
-    Parameters
-    ----------
-    config_filename : str
-        Path to the config file, relative to the project root, or an
-        absolute path. Default: ``"conf/api_keys.conf"``.
+def load_api_keys(config_filename='conf/api_keys.conf'):
+    """Load API keys from a config file into environment variables.
 
-    Notes
-    -----
-    - Lines starting with ``#`` and blank lines are skipped.
-    - Keys with empty values (e.g., ``API_USGS_PAT=``) are skipped.
-    - If the file does not exist, a debug message is logged.
+    Reads ``KEY=VALUE`` lines and sets each key only if it is not already
+    present in the environment (conda/CI env vars win).
+
+    Args:
+        config_filename: Path relative to the project root, or absolute.
+            Default ``conf/api_keys.conf``.
+
+    Returns:
+        None. Side effect: may set ``os.environ`` entries.
+
+    Note:
+        Comment/blank lines and empty values are skipped. Missing files are
+        ignored (debug log only). Values are never logged — only key names.
     """
     logger = logging.getLogger(__name__)
 
@@ -378,7 +375,11 @@ def load_api_keys(config_filename='conf/api_keys.conf'):
                     os.environ[key] = value
                     logger.info('Loaded %s from %s', key, config_path)
                 else:
-                    logger.info('%s already set in environment, ignoring value from config file', key)
+                    logger.info(
+                        '%s already set in environment, ignoring value from '
+                        'config file',
+                        key,
+                    )
 
     if 'API_USGS_PAT' not in os.environ:
         logger.warning(
@@ -620,7 +621,7 @@ def get_station_match_max_dist(logger=None, config_file=None):
 
 
 def parse_arguments_to_list(
-    argument: Union[str, list[str]],
+    argument: str | list[str],
     logger: logging.Logger
 ) -> list[str]:
     """
