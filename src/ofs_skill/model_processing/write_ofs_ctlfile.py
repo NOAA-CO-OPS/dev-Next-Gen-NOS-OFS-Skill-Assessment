@@ -251,7 +251,7 @@ def _drop_bins_below_model_bottom(
         too_deep = sorted(
             (i for i, depth in depths.items()
              if depth > water_depth + _BIN_BELOW_BOTTOM_TOL_M),
-            key=depths.get)
+            key=lambda i: depths[i])
         if not too_deep:
             continue
         # Layers already represented by any other bin of this group —
@@ -265,12 +265,14 @@ def _drop_bins_below_model_bottom(
         group_drops = [i for i in too_deep if i != kept]
         if not group_drops:
             # Reachable only when too_deep == [kept], so ``kept`` is
-            # never None here.
-            logger.warning(
-                'Station %s: ADCP bin %s reported depth %.2f m exceeds '
-                'the model water depth %.2f m at node %s; keeping it as '
-                'the bottom-layer comparison.',
-                parent, station_id[kept], depths[kept], water_depth, node)
+            # never None here; the guard restates that for mypy, which
+            # cannot infer it from the comprehension above.
+            if kept is not None:
+                logger.warning(
+                    'Station %s: ADCP bin %s reported depth %.2f m exceeds '
+                    'the model water depth %.2f m at node %s; keeping it as '
+                    'the bottom-layer comparison.',
+                    parent, station_id[kept], depths[kept], water_depth, node)
             continue
         drop.update(group_drops)
         dropped_desc = ', '.join(
