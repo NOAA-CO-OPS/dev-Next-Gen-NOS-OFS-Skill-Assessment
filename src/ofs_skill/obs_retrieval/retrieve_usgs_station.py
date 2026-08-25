@@ -108,7 +108,7 @@ def _water_level_code_priority(requested_datum: str) -> list[str]:
     return preferred + [code for code in base if code not in preferred]
 
 
-def _series_key_column(data_filtered: pd.DataFrame) -> Optional[str]:
+def _series_key_column(data_filtered: pd.DataFrame) -> str | None:
     """Column distinguishing sensor series within a parameter code.
 
     The new Water Data API uses time_series_id; the legacy NWIS API
