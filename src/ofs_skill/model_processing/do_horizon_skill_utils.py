@@ -90,7 +90,8 @@ def pandas_merge(filepath, df, datecycle, prop):
     # Clean up existing dataframe if there are columns from a previous run
     desired_cols = prop.datecycles
     diff_cols = list(prd.columns.difference(desired_cols))
-    cols_to_drop = [item for item in diff_cols if 'hr' in item]
+    # Target 'forecast' columns instead of looking for 'hr'
+    cols_to_drop = [item for item in diff_cols if 'forecast' in item]
     if cols_to_drop:
         prd.drop(columns=cols_to_drop, inplace=True)
     # Set datatypes of new model cycle series before merging
@@ -187,7 +188,10 @@ def flush_horizon_series(prop, logger=None):
             try:
                 prd = pd.read_csv(filepath)
                 desired_cols = getattr(prop, 'datecycles', [])
-                stale = [c for c in prd.columns.difference(desired_cols) if 'hr' in c]
+
+                # Change 'hr' to 'forecast' here:
+                stale = [c for c in prd.columns.difference(desired_cols) if 'forecast' in c]
+
                 if stale:
                     prd = prd.drop(columns=stale)
                 # Drop any cycle columns we just recomputed to avoid dupes.
