@@ -252,6 +252,23 @@ use_s3_fallback=True
 use_custom_filenames=False
 filename_path=path/to/filename.txt
 
+# Maximum assessment window (in days) allowed when forecast-horizon skill
+# (-hs / --Horizon_Skill) is enabled. Runs longer than this auto-disable the
+# horizon skill option to guard against very long run times. The horizon
+# workflow scales roughly linearly with the number of model cycles in the
+# window (~cycles_per_day * days), so raise this if you want week+ horizon
+# skill and can accept the longer run time.
+horizon_max_days=2
+
+# Make the extra forecast-horizon-skill plots? Only applies when
+# forecast-horizon skill (-hs / --Horizon_Skill) is enabled. These are the
+# per-station model-cycle time-series plots (with a model-cycle dropdown) and
+# the pass/fail central-frequency scorecards. Disabled by default because they
+# add run time and produce many files (esp. per-station currents scorecards).
+# True = also make the time-series + scorecard plots
+# False = just the standard RMSE / central-frequency bar plots
+horizon_extra_plots=False
+
 # Maximum distance (km) between an observation station and its nearest model
 # output location for the two to be paired in the skill assessment. Stations
 # whose nearest model location is farther than this are not assessed.
