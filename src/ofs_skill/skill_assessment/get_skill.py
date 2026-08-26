@@ -31,6 +31,7 @@ from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment import format_paired_one_d, metrics_paired_one_d
 from ofs_skill.skill_assessment.make_skill_maps import make_skill_maps
 from ofs_skill.tidal_analysis.extremes import extract_water_level_extrema
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import series_rows_to_skip, strip_model_ctl_header
 from ofs_skill.utils.timeseries_coverage import (
     clamp_window_to_coverage,
@@ -40,6 +41,17 @@ from ofs_skill.utils.timeseries_coverage import (
     parse_run_window,
     remove_stale_artifact,
 )
+
+# Short model name-part -> long variable name. Cache-manifest signatures are
+# keyed on the long variable name (the ctl/obs/prd writers pass the long
+# name), so the reuse gates in this module -- which work in the short
+# ``wl``/``temp``/``salt``/``cu`` convention -- map back before comparing.
+_NAME_TO_VARIABLE = {
+    'wl': 'water_level',
+    'temp': 'water_temperature',
+    'salt': 'salinity',
+    'cu': 'currents',
+}
 
 
 def _cache_key(prop):
@@ -469,6 +481,16 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                 cleaned_val = str(p_value).replace(',', ' ').replace('[', '').replace(']', '')
                 output_2.write(f'{cleaned_val}\n')
         logger.info(f'{filename} is created successfully')
+        # Stamp the run signature on the paired file so a same-parameter
+        # rerun reuses it and a changed-parameter run treats it as stale.
+        # Keyed on the long variable name to match the .prd/.obs writers.
+        cache_manifest.record_artifact(
+            int_path,
+            cache_manifest.run_signature(
+                prop, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
+                extra={'whichcast': getattr(prop, 'whichcast', None)}),
+            prop.data_skill_1d_pair_path,
+            logger)
 
         # Water-level extrema (HW/LW) independent detection + ±3h pairing
         if name_var == 'wl' and prop.ofs[0] != 'l':
@@ -899,6 +921,10 @@ def get_skill(prop, logger):
                     # an earlier run" no matter what it covers — the
                     # provider has no more data. Re-deleting it would
                     # just re-fetch the identical series.
+                    obs_sig = cache_manifest.run_signature(
+                        p, variable=_NAME_TO_VARIABLE.get(name_var, name_var))
+                    stale_params = not cache_manifest.artifact_is_fresh(
+                        obs_path, obs_sig)
                     if (run_window is not None
                             and not created_this_run(obs_path)
                             and not covers_run_window(
@@ -914,6 +940,26 @@ def get_skill(prop, logger):
                                 obs_path,
                                 p.data_observations_1d_station_path,
                                 logger_):
+                            cache_manifest.forget_artifact(obs_path, p.data_observations_1d_station_path,
+                                                           logger_)
+                            needs_fetch = True
+                    elif stale_params:
+                        # Same window length but built under different
+                        # datum/station-owner/bins parameters -- delete and
+                        # re-fetch for the current run.
+                        logger_.warning(
+                            '%s was built for different run parameters and '
+                            'is likely left over from an earlier run. '
+                            'Deleting it and re-fetching observations.',
+                            obs_path)
+                        if remove_stale_artifact(
+                                obs_path,
+                                p.data_observations_1d_station_path,
+                                logger_):
+                            cache_manifest.forget_artifact(obs_path,
+                                                           p.data_observations_1d_station_path,
+                                                           logger_)
+                            cache_manifest.note_stale('obs')
                             needs_fetch = True
                     else:
                         logger_.info('%s found', obs_path)
@@ -967,6 +1013,14 @@ def get_skill(prop, logger):
                 # Never delete a file the current process extracted:
                 # regeneration would reproduce it byte-for-byte, at the
                 # cost of a full extraction pass per variable.
+                prd_extra = {'whichcast': p.whichcast}
+                if p.whichcast == 'forecast_a':
+                    prd_extra['forecast_hr'] = p.forecast_hr
+                prd_sig = cache_manifest.run_signature(
+                    p, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
+                    extra=prd_extra)
+                stale_params = not cache_manifest.artifact_is_fresh(
+                    prd_path, prd_sig)
                 if (run_window is not None
                         and not created_this_run(prd_path)
                         and not covers_run_window(
@@ -979,6 +1033,23 @@ def get_skill(prop, logger):
                         prd_path, run_window[0], run_window[1])
                     if remove_stale_artifact(
                             prd_path, p.data_model_1d_node_path, logger_):
+                        cache_manifest.forget_artifact(prd_path,
+                                                       prop.data_model_1d_node_path,
+                                                       logger_)
+                        needs_model = True
+                elif stale_params:
+                    # Same window length but built under different
+                    # datum/station-owner/bins parameters -- re-extract.
+                    logger_.warning(
+                        '%s was built for different run parameters and is '
+                        'likely left over from an earlier run. Deleting it '
+                        'and re-extracting model data.', prd_path)
+                    if remove_stale_artifact(
+                            prd_path, p.data_model_1d_node_path, logger_):
+                        cache_manifest.forget_artifact(prd_path,
+                                                       prop.data_model_1d_node_path,
+                                                       logger_)
+                        cache_manifest.note_stale('prd')
                         needs_model = True
             else:
                 logger_.info('%s is missing', prd_path)
@@ -1023,6 +1094,12 @@ def get_skill(prop, logger):
                     p.ofs, variable)
         ctl_path = os.path.join(p.control_files_path,str(p.ofs+'_'+\
                                 name_var+'_station.ctl'))
+
+        obs_ctl_signature = cache_manifest.run_signature(p, variable=variable)
+        cache_manifest.ensure_fresh(
+            ctl_path, obs_ctl_signature, p.control_files_path,
+            'obs ctl', logger)
+
         if os.path.isfile(ctl_path) is False:
             logger.info(
                 'Station ctl file not found. Creating station '
