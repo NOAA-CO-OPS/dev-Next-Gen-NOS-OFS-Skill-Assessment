@@ -69,6 +69,7 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
     control = tmp_path / 'control_files'
     control.mkdir()
     # Mentor inventory is CO-OPS-only; USGS path uses a one-row synthetic inventory.
+    inv_path = control / 'inventory_all_cbofs.csv'
     pd.DataFrame({
         'ID': ['01646500'],
         'X': [-77.04],
@@ -79,9 +80,21 @@ def test_write_obs_ctlfile_usgs_temp_with_mocks(tmp_path, logger):
         'has_temp': [True],
         'has_salt': [False],
         'has_cu': [False],
-    }).to_csv(control / 'inventory_all_cbofs.csv', index=False)
+    }).to_csv(inv_path, index=False)
 
     obs = make_usgs_obs_dataframe(periods=8, value=14.0)
+
+    # The inventory gate deletes pre-manifest files as stale, so stamp the
+    # synthetic inventory with the signature this call will compute. Mocking
+    # ensure_fresh instead would switch off the very gate under test -- that
+    # is what previously hid an empty rebuild being recorded as fresh.
+    from ofs_skill.utils import cache_manifest
+    cache_manifest.record_artifact(
+        str(inv_path),
+        cache_manifest.inventory_signature(
+            'cbofs', '20240101', '20240102', 'usgs'),
+        str(control),
+    )
 
     with patch(
         'ofs_skill.obs_retrieval.write_obs_ctlfile.retrieve_usgs_station',
