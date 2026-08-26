@@ -37,6 +37,7 @@ from pathlib import Path
 
 import pytest
 
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.series_continuation import (
     max_step_seconds,
     merge_and_write,
@@ -556,6 +557,32 @@ def _model_ctl(station_ids, nodes):
     return [[], list(nodes), [], [], [], list(station_ids)]
 
 
+def _stamp(tmp_path, path, name_var='wl', extra=None, **prop_kwargs):
+    """Record the manifest entry a real run would have left on ``path``.
+
+    Since the cache-manifest reuse gate landed, every .obs/.prd/.int is
+    stamped with the run signature as it is written, and a file with no
+    entry reads as left over from an earlier run and is deleted. These
+    fixtures are built by hand, so they have to record the same entry or
+    the gate never reaches the coverage question under test.
+    """
+    cache_manifest.record_artifact(
+        str(path),
+        cache_manifest.run_signature(
+            _GateProp(tmp_path, **prop_kwargs),
+            variable=_NAME_TO_VARIABLE.get(name_var, name_var),
+            extra=extra),
+        str(tmp_path))
+
+
+_NAME_TO_VARIABLE = {
+    'wl': 'water_level',
+    'temp': 'water_temperature',
+    'salt': 'salinity',
+    'cu': 'currents',
+}
+
+
 class TestEnsureObsFiles:
     """The observation reuse gate's three outcomes."""
 
@@ -563,6 +590,7 @@ class TestEnsureObsFiles:
         """A short .obs is kept and its tail start recorded."""
         path = tmp_path / '8638901_cbofs_wl_station.obs'
         _write_series(path, WINDOW_START, 15 * 24)
+        _stamp(tmp_path, path)
         calls = {}
 
         def _fake_fetch(prop, log, continuation=None):
@@ -592,6 +620,7 @@ class TestEnsureObsFiles:
         """
         path = tmp_path / '8638901_cbofs_wl_station.obs'
         _write_series(path, WINDOW_START, 15 * 24)
+        _stamp(tmp_path, path)
         plans = []
 
         def _fake_fetch(prop, log, continuation=None):
@@ -648,6 +677,7 @@ class TestEnsureObsFiles:
         """A complete .obs is reused without contacting any provider."""
         path = tmp_path / '8638901_cbofs_wl_station.obs'
         _write_series(path, WINDOW_START, 46 * 24 + 1)
+        _stamp(tmp_path, path)
         calls = []
         monkeypatch.setattr(
             get_skill_mod, 'get_station_observations',
@@ -676,6 +706,87 @@ class TestEnsureObsFiles:
         assert calls == []
 
 
+class TestContinuationRespectsRunParameters:
+    """A continuation run only ever extends files it could have written.
+
+    Widening the run window is the one signature change ``-cr`` is allowed
+    to make. Anything else -- a different datum, station owner or bins
+    file -- means the rows on disk are not the rows we would be appending
+    to, so the file is deleted and refetched in full rather than spliced.
+    """
+
+    def test_parameter_mismatch_is_not_extended(self, tmp_path, monkeypatch):
+        """A file built under a different datum is refetched, not extended."""
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        # Stamped by a run that used a different vertical datum.
+        cache_manifest.record_artifact(
+            str(path), {'ofs': 'cbofs', 'datum': 'IGLD85'}, str(tmp_path))
+        calls = {}
+
+        def _fake_fetch(prop, log, continuation=None):
+            calls['plan'] = continuation
+            _write_series(path, WINDOW_START, 46 * 24 + 1)
+
+        monkeypatch.setattr(get_skill_mod, 'get_station_observations',
+                            _fake_fetch)
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        # Refetched over the whole window, with no continuation plan.
+        assert calls['plan'] is None
+
+    def test_unstamped_file_is_not_extended(self, tmp_path, monkeypatch):
+        """A file with no manifest entry cannot be shown to match this run.
+
+        Pre-manifest artifacts are rebuilt once rather than extended on
+        faith; there is nothing on disk that says what they were built
+        from.
+        """
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        calls = {}
+
+        def _fake_fetch(prop, log, continuation=None):
+            calls['plan'] = continuation
+            _write_series(path, WINDOW_START, 46 * 24 + 1)
+
+        monkeypatch.setattr(get_skill_mod, 'get_station_observations',
+                            _fake_fetch)
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert calls['plan'] is None
+
+    def test_widened_window_alone_still_extends(self, tmp_path, monkeypatch):
+        """The window differing is exactly what -cr exists for.
+
+        Guards the regression that would make continuation a no-op: the
+        signature always disagrees on the window, so comparing it would
+        delete every file the run was about to extend.
+        """
+        path = tmp_path / '8638901_cbofs_wl_station.obs'
+        _write_series(path, WINDOW_START, 15 * 24)
+        # Stamped by the earlier, shorter run.
+        _stamp(tmp_path, path, end='2026-03-02T00:00:00Z')
+        calls = {}
+
+        def _fake_fetch(prop, log, continuation=None):
+            calls['plan'] = continuation
+            _write_series(path, WINDOW_START, 46 * 24 + 1)
+
+        monkeypatch.setattr(get_skill_mod, 'get_station_observations',
+                            _fake_fetch)
+        get_skill_mod._ensure_obs_files(
+            _obs_ctl(['8638901']), _GateProp(tmp_path, continue_run=True),
+            'wl', _logger())
+
+        assert calls['plan'], 'the shorter file should have been extended'
+        assert path.exists()
+
+
 class TestEnsurePrdFiles:
     """The model-extraction reuse gate."""
 
@@ -683,6 +794,7 @@ class TestEnsurePrdFiles:
         """A short .prd triggers extraction over the tail window only."""
         path = tmp_path / '8638901_cbofs_wl_45_nowcast_stations_model.prd'
         _write_series(path, WINDOW_START, 15 * 24)
+        _stamp(tmp_path, path, extra={'whichcast': 'nowcast'})
         seen = {}
 
         def _fake_extract(prop, log, model_dataset=None):
@@ -706,6 +818,7 @@ class TestEnsurePrdFiles:
         """A tail pass that does not close the gap regenerates in full."""
         path = tmp_path / '8638901_cbofs_wl_45_nowcast_stations_model.prd'
         _write_series(path, WINDOW_START, 15 * 24)
+        _stamp(tmp_path, path, extra={'whichcast': 'nowcast'})
         windows = []
 
         def _fake_extract(prop, log, model_dataset=None):
@@ -745,7 +858,9 @@ class TestEnsurePrdFiles:
         ahead = tmp_path / '111_cbofs_wl_45_nowcast_stations_model.prd'
         behind = tmp_path / '222_cbofs_wl_46_nowcast_stations_model.prd'
         _write_series(ahead, WINDOW_START, 30 * 24)
+        _stamp(tmp_path, ahead, extra={'whichcast': 'nowcast'})
         _write_series(behind, WINDOW_START, 15 * 24)
+        _stamp(tmp_path, behind, extra={'whichcast': 'nowcast'})
         seen = {}
 
         def _fake_extract(prop, log, model_dataset=None):
@@ -798,6 +913,7 @@ class TestPairInvalidation:
         pair = (tmp_path
                 / 'cbofs_wl_8638901_45_nowcast_stations_pair.int')
         _write_series(pair, WINDOW_START, 46 * 24 + 1)
+        _stamp(tmp_path, pair, extra={'whichcast': 'nowcast'})
         prop = _GateProp(tmp_path, continue_run=True)
         prop.data_skill_1d_pair_path = str(tmp_path)
         prop.whichcasts = ['nowcast']
@@ -820,6 +936,7 @@ class TestPairInvalidation:
         pair = (tmp_path
                 / 'cbofs_wl_8638901_45_nowcast_stations_pair.int')
         _write_series(pair, WINDOW_START, 46 * 24 + 1)
+        _stamp(tmp_path, pair, extra={'whichcast': 'nowcast'})
         prop = _GateProp(tmp_path)
         prop.data_skill_1d_pair_path = str(tmp_path)
         prop.whichcasts = ['nowcast']

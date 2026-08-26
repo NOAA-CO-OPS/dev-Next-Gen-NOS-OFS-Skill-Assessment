@@ -123,6 +123,7 @@ from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import series_header
 from ofs_skill.utils.series_continuation import (
     MAX_SEAM_GAP_HOURS,
@@ -136,6 +137,16 @@ from ofs_skill.utils.series_continuation import (
 
 TIMEOUT_SEC = 120 # default API timeout in seconds
 socket.setdefaulttimeout(TIMEOUT_SEC)
+
+# Variable -> ctl/obs/prd name-part mapping. Single source of truth so the
+# obs, ctl-manifest, and reuse gates agree on the ``wl``/``temp``/``salt``/
+# ``cu`` suffixes rather than re-deriving them inline at each site.
+_VAR_TO_NAME = {
+    'water_level': 'wl',
+    'water_temperature': 'temp',
+    'salinity': 'salt',
+    'currents': 'cu',
+}
 
 # Serializes the station ctl file build across variable threads.
 # ``write_obs_ctlfile`` creates the ctl files for ALL variables in a
@@ -405,7 +416,7 @@ def _fetch_and_format_station(
     station_info, station_metadata, variable, name_var, datum, datum_list,
     start_date, end_date, start_date_full, end_date_full, ofs,
     data_observations_1d_station_path, logger, control_files_path, config_file=None,
-    merge_into_existing=False,
+    obs_signature=None, merge_into_existing=False,
 ):
     """Fetch observation data for a single station, format it, and write .obs file.
 
@@ -623,6 +634,7 @@ def _fetch_and_format_station(
                 retrieve_input.start_date = start_date
                 retrieve_input.end_date = end_date
                 retrieve_input.variable = variable
+                retrieve_input.datum = datum
                 timeseries = retrieve_usgs_station(
                     retrieve_input, logger
                 )
@@ -729,24 +741,48 @@ def _fetch_and_format_station(
                             max_seam_gap_seconds=MAX_SEAM_GAP_HOURS * 3600,
                             seam_window=timedelta(
                                 hours=SEAM_CHECK_WINDOW_HOURS)):
+                        # Re-stamp under the *extended* window's signature.
+                        # Without this the file still carries the shorter
+                        # window it was built for, and the next run reads
+                        # it as stale and deletes it -- undoing the very
+                        # work the continuation just did.
+                        if obs_signature is not None:
+                            cache_manifest.record_artifact(
+                                obs_path, obs_signature,
+                                data_observations_1d_station_path, logger)
                         return station_id
                     logger.warning(
                         'Could not extend %s; it will be regenerated over '
                         'the full window instead.', obs_path)
                     return None
-                with open(obs_path, 'w', encoding='utf-8') as output:
-                    # Header only when there is data: an empty .obs
-                    # must stay 0 bytes so the getsize() blank-file
-                    # checks downstream keep working.
-                    if len(formatted_series) > 0:
+                # FIX: Check for data before stamping the file
+                if len(formatted_series) > 0:
+                    with open(obs_path, 'w', encoding='utf-8') as output:
                         output.write(series_header(name_var))
-                    for line in formatted_series:
-                        output.write(str(line) + '\n')
-                    logger.info(
-                        '%s_%s_%s_station.obs created successfully',
-                        station_id, ofs, name_var
-                    )
-                return station_id
+                        for line in formatted_series:
+                            output.write(str(line) + '\n')
+                        logger.info(
+                            '%s_%s_%s_station.obs created successfully',
+                            station_id, ofs, name_var
+                        )
+                    # Stamp the run signature so a same-parameter rerun
+                    # reuses this file and a changed-parameter run treats
+                    # it as stale. Only reached once the file is known to
+                    # have rows, so an empty series is never stamped.
+                    # Without this the gate finds no entry for any .obs,
+                    # reads every one as stale, and re-fetches the whole
+                    # station set on every run.
+                    if obs_signature is not None:
+                        cache_manifest.record_artifact(
+                            obs_path, obs_signature,
+                            data_observations_1d_station_path, logger)
+                    return station_id
+                else:
+                    # Return None so it gets appended to the `failed` list
+                    logger.info('Formatted %s time series '
+                                'empty for station %s',
+                                variable, station_id)
+                    return None
             else:
                 logger.info('Formatted %s time series '
                             'not found for station %s',
@@ -903,6 +939,15 @@ def _process_variable_obs(
         r'' + control_files_path + '/' + ofs +
         '_' + name_var + '_station.ctl'
     )
+    # A station ctl left from a run with a different window / station-owner
+    # selection encodes the wrong station set; its filename does not record
+    # those parameters, so delete it when the recorded run signature differs
+    # (issue: stale cache reuse across runs). The manifest also covers the
+    # inventory + all sibling ctl files written in the same build pass.
+    obs_ctl_signature = cache_manifest.run_signature(prop, variable=variable)
+    cache_manifest.ensure_fresh(
+        ctl_file_path, obs_ctl_signature, control_files_path,
+        'obs ctl', logger)
     read_station_ctl_file = station_ctl_file_extract(ctl_file_path)
 
     if read_station_ctl_file is not None:
@@ -917,6 +962,23 @@ def _process_variable_obs(
             ctl_file_path, prop, datum, start_date, end_date, path, ofs,
             stationowner, var_list, logger, config_file=config_file,
         )
+        # Record the signature for every station ctl the build produced, so
+        # sibling variables reuse them and a same-parameter rerun stays fast.
+        if read_station_ctl_file is not None:
+            for other_var in var_list:
+                other_name = _VAR_TO_NAME.get(other_var)
+                if other_name is None:
+                    continue
+                other_path = (
+                    r'' + control_files_path + '/' + ofs +
+                    '_' + other_name + '_station.ctl'
+                )
+                if os.path.isfile(other_path):
+                    cache_manifest.record_artifact(
+                        other_path,
+                        cache_manifest.run_signature(prop, variable=other_var),
+                        control_files_path,
+                        logger)
 
     logger.info('Downloading data found in the station ctl files')
 
@@ -1006,9 +1068,34 @@ def _process_variable_obs(
                         data_observations_1d_station_path,
                         f'{station_info[0]}_{ofs}_{name_var}_station.obs',
                     )
+                    # Reuse an existing .obs only if it was written for this
+                    # run's parameters; a file from an earlier window/options
+                    # is deleted and re-fetched (issue: stale cache reuse).
+                    obs_signature = cache_manifest.run_signature(
+                        prop, variable=variable)
                     tail_start = (continuation or {}).get(
                         os.path.normpath(obs_path))
-                    if not os.path.isfile(obs_path) or tail_start is not None:
+                    if tail_start is not None:
+                        # Continuation run: this file is *meant* to cover a
+                        # shorter window than the signature asks for, so the
+                        # window fields alone must not condemn it. Every
+                        # other field still has to match -- a different
+                        # datum or station owner means the rows on disk are
+                        # not the ones we would be extending, and the
+                        # artifact is deleted and refetched in full.
+                        if not cache_manifest.ensure_fresh(
+                                obs_path, obs_signature,
+                                data_observations_1d_station_path, 'obs',
+                                logger,
+                                ignore_keys=(
+                                    cache_manifest.CONTINUATION_WINDOW_KEYS)):
+                            tail_start = None
+                        reusable = False
+                    else:
+                        reusable = cache_manifest.ensure_fresh(
+                            obs_path, obs_signature,
+                            data_observations_1d_station_path, 'obs', logger)
+                    if not reusable:
                         # A station in the continuation plan is fetched
                         # over its missing tail only; every other station
                         # keeps the original all-or-nothing behavior.
@@ -1032,6 +1119,7 @@ def _process_variable_obs(
                             logger,
                             control_files_path,
                             config_file,
+                            obs_signature,
                             tail_start is not None,
                         )
                         futures[future] = station_info[0]
