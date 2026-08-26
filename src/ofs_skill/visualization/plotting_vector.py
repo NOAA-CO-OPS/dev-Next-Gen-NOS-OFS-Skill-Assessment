@@ -39,7 +39,7 @@ from plotly.subplots import make_subplots
 import ofs_skill.visualization.make_static_plots as make_static_plots
 from ofs_skill.visualization.make_static_plots import combine_obs_across_casts
 from ofs_skill.visualization.plotting_functions import (
-    count_title_lines,
+    apply_title_band,
     find_max_data_gap,
     get_error_range,
     get_markerstyles,
@@ -486,25 +486,19 @@ def oned_vector_plot1(
     figheight = 700
     figwidth  = 900
     yoffset = 1.01
-    # Issue #136: each additional whichcast adds another row of legend
-    # entries (Obs + N model traces, all horizontal). The legend grows
-    # upward from y=yoffset (just above the plot area) and overlaps the
-    # title at y=0.97 once it wraps. Track the whichcast count to grow
-    # the top margin so the legend has somewhere to expand into. Same
-    # dynamic-margin pattern as plotting_scalar_ice.py.
+    # Issue #136: the title hangs from the top of the container and grows
+    # down; the horizontal legend stands on the plot area and grows up.
+    # Only the top margin separates them, and the legend's row count
+    # follows the width of its entry labels, not the whichcast count.
     #
     # Issue #221: currents titles are taller than scalar titles — they
     # can carry a depth line and an ADCP-type line (issue #141 work) on
-    # top of the header/station/OFS/date rows, for up to 6 rows. A
-    # margin tuned for the 4-row scalar title leaves the extra title
-    # rows overlapping the legend. Grow the margin by the actual title
-    # height and push the title anchor up so both fit.
+    # top of the header/station/OFS/date rows, for up to 6 rows. Sizing
+    # the band from both blocks covers that case without pushing the
+    # title down toward the legend the way the old anchor nudge did.
+    # apply_title_band sets margin.t and title.y below, once the traces
+    # it measures are all on the figure.
     title_text = get_title(prop, node, station_id, name_var, logger)
-    n_title_lines = count_title_lines(title_text)
-    # Scalar titles are ~4 lines; add 30 px of headroom per extra line.
-    title_extra = 30 * max(0, n_title_lines - 4)
-    tmargin = 150 + 30 * max(0, len(prop.whichcasts) - 1) + title_extra
-    title_y = 0.97 + 0.005 * max(0, n_title_lines - 4)
 
     # Figure Config
     fig.update_layout(
@@ -569,14 +563,11 @@ def oned_vector_plot1(
         title=dict(
             text=title_text,
             font=dict(size=14, color='black', family='Open Sans'),
-            y=title_y,  # grows with title height (issue #221)
             x=0.5, xanchor='center', yanchor='top',
         ),
         transition_ordering='traces first', dragmode='zoom',
         hovermode='x unified', height=figheight, width=figwidth,
-        template='plotly_white', margin=dict(
-            t=tmargin, b=100,
-        ),
+        template='plotly_white', margin=dict(b=100),
         legend=dict(
             orientation='h', yanchor='bottom',
             y=yoffset, xanchor='left', x=-0.05,
@@ -588,6 +579,7 @@ def oned_vector_plot1(
             ),
         ),
     )
+    apply_title_band(fig, title_text, figheight, figwidth, yoffset)
 
     # Add annotation if assumed surface depth (no depth data from API).
     # Fires for USGS/CHS (0.0 is a hard-coded fallback) and for CO-OPS
@@ -993,22 +985,32 @@ def oned_vector_plot2b(
     caption_y = -margin_frac * 0.45
     legend_y = -margin_frac * 0.9
 
+    # Issue #136: figheight scales with the number of rose rows, so a
+    # fixed container fraction drifts the title further down the taller
+    # the grid gets. Anchor it a fixed 20 px from the top instead, and
+    # keep the band at least as tall as the title needs. The legend sits
+    # below the plot area here, so nothing else shares the band.
+    title_text = get_title(prop, node, station_id, name_var, logger)
+
     fig.update_layout(
         title=dict(
-            text=get_title(prop, node, station_id, name_var, logger),
+            text=title_text,
             font=dict(size=14, color='black', family='Arial'),
-            y=0.975,  # new
             x=0.5, xanchor='center', yanchor='top',
         ),
         # This determines the height of the plot based on # of rows
         height=figheight,
         width=figwidth, template='seaborn',
-        margin=dict(l=20, r=20, t=160, b=bottom_margin_px), legend=dict(
+        margin=dict(l=20, r=20, b=bottom_margin_px), legend=dict(
             font=dict(size=14, color='black', family='Arial'),
             orientation='h',
             yanchor='top',
             y=legend_y, xanchor='center', x=0.5,
             bgcolor='rgba(0,0,0,0)', ),
+    )
+    apply_title_band(
+        fig, title_text, figheight, figwidth, 1.0,
+        legend_rows=0, bottom_margin=bottom_margin_px, min_margin=160,
     )
 
     polars = []
@@ -1289,29 +1291,34 @@ def oned_vector_plot3(
     )
 
     # Added extra annotation so that user knows that the legend is interactive
+    caption_yoffset = 1.05
     fig.add_annotation(
         text='Current Vectors',
         xref='paper', yref='paper',
         font=dict(size=15, color='black'),
-        x=0.05, y=1.05,
+        x=0.05, y=caption_yoffset,
         showarrow=False,
     )
 
-    figheight=700
-    figwidth=820,
+    figheight = 700
+    figwidth = 820
+    # Issue #136: currents titles run to six rows, which overruns a fixed
+    # 120 px band and pushes the title onto the plot. The legend here is
+    # vertical and clears the title, but the caption sits just above the
+    # plot area, so reserve its lift plus a text row on top of the title.
+    title_text = get_title(prop, node, station_id, name_var, logger)
     # Update layout
     fig.update_layout(
         title=dict(
-            text=get_title(prop, node, station_id, name_var, logger),
+            text=title_text,
             font=dict(size=14, color='black', family='Arial'),
-            y=0.97,  # new
             x=0.5, xanchor='center', yanchor='top',
         ),
         transition_ordering='traces first', dragmode='zoom',
         xaxis_title='Time',
         height=figheight, width=figwidth,
         template='plotly_white',
-        margin=dict(t=120, b=100),
+        margin=dict(b=100),
         yaxis=dict(
             showticklabels=True,
             ticks='',
@@ -1327,6 +1334,9 @@ def oned_vector_plot3(
             x=1,
             tracegroupgap=0,
         ),
+    )
+    apply_title_band(
+        fig, title_text, figheight, figwidth, caption_yoffset, legend_rows=1
     )
 
     # Set x-axis moving bar
@@ -1553,29 +1563,34 @@ def oned_vector_diff_plot3(
     )
 
     # Added extra annotation so that user knows that the legend is interactive
+    caption_yoffset = 1.05
     fig.add_annotation(
         text='Current Vector Differences',
         xref='paper', yref='paper',
         font=dict(size=15, color='black'),
-        x=0.05, y=1.05,
+        x=0.05, y=caption_yoffset,
         showarrow=False,
     )
 
-    figheight=700
-    figwidth=760,
+    figheight = 700
+    figwidth = 760
+    # Issue #136: currents titles run to six rows, which overruns a fixed
+    # 120 px band and pushes the title onto the plot. The legend here is
+    # vertical and clears the title, but the caption sits just above the
+    # plot area, so reserve its lift plus a text row on top of the title.
+    title_text = get_title(prop, node, station_id, name_var, logger)
     # Update layout
     fig.update_layout(
         title=dict(
-            text=get_title(prop, node, station_id, name_var, logger),
+            text=title_text,
             font=dict(size=14, color='black', family='Arial'),
-            y=0.97,  # new
             x=0.5, xanchor='center', yanchor='top',
         ),
         transition_ordering='traces first', dragmode='zoom',
         xaxis_title='Time',
         height=figheight, width=figwidth,
         template='plotly_white',
-        margin=dict(t=120, b=100),
+        margin=dict(b=100),
         yaxis=dict(
             showticklabels=True,
             ticks='',
@@ -1591,6 +1606,9 @@ def oned_vector_diff_plot3(
             x=1,
             tracegroupgap=0,
         ),
+    )
+    apply_title_band(
+        fig, title_text, figheight, figwidth, caption_yoffset, legend_rows=1
     )
 
     # Set x-axis moving bar

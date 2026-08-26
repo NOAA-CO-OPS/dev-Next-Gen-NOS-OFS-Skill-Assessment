@@ -33,6 +33,7 @@ import ofs_skill.visualization.make_static_plots as make_static_plots
 from ofs_skill.obs_retrieval.get_station_tidal_data import get_station_tidal_data
 from ofs_skill.visualization.make_static_plots import combine_obs_across_casts
 from ofs_skill.visualization.plotting_functions import (
+    apply_title_band,
     find_max_data_gap,
     get_error_range,
     get_markerstyles,
@@ -525,18 +526,19 @@ def oned_scalar_plot(
     figheight = 700
     figwidth  = 950
     yoffset = 1.01
-    # Issue #136: each additional whichcast adds another row of legend
-    # entries (Obs + N model traces, all horizontal). The legend grows
-    # upward from y=yoffset (just above the plot area) and overlaps the
-    # title at y=0.97 once it wraps. Track the whichcast count to grow
-    # the top margin so the legend has somewhere to expand into. Uses
-    # the same dynamic-margin pattern as plotting_scalar_ice.py.
-    tmargin = 150 + 30 * max(0, len(prop.whichcasts) - 1)
+    # Issue #136: the title hangs from the top of the container and grows
+    # down; the horizontal legend stands on the plot area and grows up.
+    # Only the top margin separates them, and the legend's row count
+    # follows the width of its entry labels, not the whichcast count -
+    # a single-whichcast water level plot already wraps to two rows.
+    # Size the band from both blocks so a long title and a wrapped
+    # legend always clear each other. apply_title_band sets margin.t and
+    # title.y below, once the traces it measures are all on the figure.
+    title_text = get_title(prop, node, station_id, name_var, logger)
     fig.update_layout(
         title=dict(
-            text=get_title(prop, node, station_id, name_var, logger),
+            text=title_text,
             font=dict(size=14, color='black', family='Open Sans'),
-            y=0.97,  # new
             x=0.5, xanchor='center', yanchor='top',
         ),
         xaxis=dict(
@@ -574,9 +576,7 @@ def oned_scalar_plot(
         ),
         transition_ordering='traces first', dragmode='zoom',
         hovermode='x unified', height=figheight, width=figwidth,
-        template='plotly_white', margin=dict(
-            t=tmargin, b=100,
-        ),
+        template='plotly_white', margin=dict(b=100),
         legend=dict(
             orientation='h', yanchor='bottom',
             y=yoffset, xanchor='left', x=-0.05,
@@ -588,6 +588,7 @@ def oned_scalar_plot(
             ),
         ),
     )
+    apply_title_band(fig, title_text, figheight, figwidth, yoffset)
     # Add annotation if datum mismatch
     if name_var == 'wl':
         filename = f'{prop.control_files_path}/{prop.ofs}_wl_datum_report.csv'
