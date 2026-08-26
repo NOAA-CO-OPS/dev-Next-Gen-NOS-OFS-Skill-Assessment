@@ -51,6 +51,7 @@ from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
     retrieve_t_and_c_station,
 )
 from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 
 _COOPS_MAX_WORKERS = 6
@@ -492,6 +493,7 @@ def _process_usgs_station(
         retrieve_input.start_date = start_date
         retrieve_input.end_date = end_date
         retrieve_input.variable = variable
+        retrieve_input.datum = datum
         timeseries = retrieve_usgs_station(retrieve_input, logger)
         if isinstance(timeseries, pd.DataFrame) is False:
             logger.info(
@@ -503,7 +505,7 @@ def _process_usgs_station(
             )
 
             if variable == 'water_level':
-                ts_datum = str(timeseries['Datum'][1])
+                ts_datum = str(timeseries['Datum'].iloc[0])
                 ts_datum_upper = ts_datum.upper()
 
                 ofs_base_offsets = {
@@ -560,7 +562,7 @@ def _process_usgs_station(
                         f'{str(id_number)}_{name_var}_'
                         f'{ofs}_USGS "{name}"\n  {y_value:.3f} '
                         f'{x_value:.3f} '
-                        f'{zdiff}  0.0  {str(timeseries["Datum"][1])}\n'
+                        f'{zdiff}  0.0  {ts_datum}\n'
                     )
                 ]
 
@@ -570,7 +572,7 @@ def _process_usgs_station(
                         f'{str(id_number)} {str(id_number)}_'
                         f'{name_var}_{ofs}_USGS "{name}"\n  '
                         f'{y_value:.3f} {x_value:.3f} 0.0  '
-                        f'{timeseries["DEP01"][1]:.2f}  0.0\n'
+                        f'{timeseries["DEP01"].iloc[0]:.2f}  0.0\n'
                     )
                 ]
             elif variable == 'currents':
@@ -579,7 +581,7 @@ def _process_usgs_station(
                         f'{str(id_number)} {str(id_number)}_'
                         f'{name_var}_{ofs}_USGS "{name}"\n  '
                         f'{y_value:.3f} {x_value:.3f} 0.0  '
-                        f'{timeseries["DEP01"][1]:.2f}  0.0  0.00\n'
+                        f'{timeseries["DEP01"].iloc[0]:.2f}  0.0  0.00\n'
                     )
                 ]
     except Exception as ex:
@@ -996,27 +998,54 @@ def _process_variable(
                     ctl_file.extend(result)
 
     try:
-        with open(
-            r'' + f'{control_files_path}/{ofs}_{name_var}_station.ctl',
-            'w',
-            encoding='utf-8',
-        ) as output:
-            # Header only when there is data: an empty ctl must stay
-            # 0 bytes so station_ctl_file_extract keeps returning None
-            # for blank files.
-            if ctl_file:
+        if ctl_file:
+            with open(
+                r'' + f'{control_files_path}/{ofs}_{name_var}_station.ctl',
+                'w',
+                encoding='utf-8',
+            ) as output:
                 output.write(OBS_CTL_HEADER)
-            for i in ctl_file:
-                output.write(str(i))
-            logger.info(
-                '%s_%s_station.ctl created successfully!', ofs, name_var
-            )
+                for i in ctl_file:
+                    output.write(str(i))
+                logger.info(
+                    '%s_%s_station.ctl created successfully!', ofs, name_var
+                )
     except Exception as ex:
         logger.error(
             'Saving station failed: {ex}. Please check the directory path: %s.',
             control_files_path,
         )
         raise Exception('Saving station failed.') from ex
+
+
+def record_inventory_if_populated(inventory, inventory_path,
+                                  inventory_signature, control_files_path,
+                                  logger):
+    """Stamp the inventory's run signature, but only if it holds stations.
+
+    Returns True when the signature was recorded.
+
+    A build that comes back with zero rows must not be certified. One
+    provider outage during the single run that rebuilds an inventory is
+    enough to produce a header-only file, and stamping it tells every later
+    run with the same parameters that the empty station set is correct --
+    along with the 0-byte station ctls built from it. The user sees the run
+    fail, but the only way out is deleting ``control_files/`` by hand, which
+    is the manual step the manifest exists to remove.
+
+    Leaving it unstamped costs one rebuild on the next run and is
+    self-healing, which is the right trade.
+    """
+    if inventory is None or getattr(inventory, 'empty', False):
+        if logger is not None:
+            logger.warning(
+                'Inventory %s has no station rows, so it is not being '
+                'recorded as fresh -- the next run will rebuild it rather '
+                'than reuse an empty station set.', inventory_path)
+        return False
+    cache_manifest.record_artifact(
+        inventory_path, inventory_signature, control_files_path, logger)
+    return True
 
 
 def write_obs_ctlfile(
@@ -1070,6 +1099,18 @@ def write_obs_ctlfile(
         dir_params['1d_station_dir'],
     )
     os.makedirs(data_observations_1d_station_path, exist_ok=True)
+
+    # The station inventory depends on the OFS, the assessment window, and
+    # the station-owner selection, none of which are encoded in its
+    # filename. Delete an inventory left from a run with different
+    # parameters so the reader below rebuilds it instead of reusing the
+    # wrong station set (issue: stale cache reuse across runs).
+    inventory_path = f'{control_files_path}/inventory_all_{ofs}.csv'
+    inventory_signature = cache_manifest.inventory_signature(
+        ofs, start_date, end_date, stationowner, currents_bins_csv)
+    cache_manifest.ensure_fresh(
+        inventory_path, inventory_signature, control_files_path,
+        'inventory', logger)
 
     try:
         dtypes = {
@@ -1133,6 +1174,12 @@ def write_obs_ctlfile(
         except Exception as ex:
             logger.error(f'Error when creating inventory files: {ex}')
             raise Exception('Error when creating inventory files') from ex
+
+    # Record the signature for the (possibly freshly built) inventory so a
+    # same-parameter rerun reuses it and a changed-parameter run rebuilds it.
+    record_inventory_if_populated(
+        inventory, inventory_path, inventory_signature, control_files_path,
+        logger)
 
     logger.info('Downloading data from the Inventory file!')
 
