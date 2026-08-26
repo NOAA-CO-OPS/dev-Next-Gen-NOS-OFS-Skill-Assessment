@@ -44,7 +44,7 @@ def _coerce_cycle_dtypes(df, datecycle):
 
 # Time-axis columns shared by every model-cycle series. Used as the merge key
 # when combining accumulated cycles into a single wide dataframe.
-_TIME_KEYS = ['julian', 'year', 'month', 'day', 'hour', 'minute']
+_TIME_KEYS = ['year', 'month', 'day', 'hour', 'minute']
 
 # Guards the in-memory horizon accumulator, since station/variable extraction
 # in get_node_ofs may run in parallel threads that all append into the same
@@ -100,13 +100,11 @@ def pandas_merge(filepath, df, datecycle, prop):
     # This is especially relevant to server/cron runs!
     if datecycle in prd.columns:
         prd.drop(columns=datecycle, inplace=True)
-    # Merge on the integer date components only. The float julian
-    # column used to be part of the key, so a cached CSV written with
-    # a different julian rounding than the fresh series (e.g. before
-    # the issue #200 precision fix) duplicated every row on the outer
-    # merge. The fresh series' julian column is carried through.
+
+    # Drop cached julian to prevent float-precision merge mismatches
     if 'julian' in prd.columns:
         prd.drop(columns='julian', inplace=True)
+
     df = pd.merge(
         prd,
         df,
@@ -179,6 +177,9 @@ def flush_horizon_series(prop, logger=None):
         # keys. Start from the first cycle and outer-merge the rest.
         base_dc, wide = cycles[0]
         for datecycle, cdf in cycles[1:]:
+            # Drop julian from subsequent cycles to prevent _x / _y suffixes
+            if 'julian' in cdf.columns:
+                cdf = cdf.drop(columns='julian')
             wide = pd.merge(wide, cdf, on=_TIME_KEYS, how='outer')
 
         filepath = os.path.join(prop.data_horizon_1d_node_path, filename)
@@ -194,11 +195,16 @@ def flush_horizon_series(prop, logger=None):
 
                 if stale:
                     prd = prd.drop(columns=stale)
-                # Drop any cycle columns we just recomputed to avoid dupes.
+                    # Drop any cycle columns we just recomputed to avoid dupes.
                 new_cols = [dc for (dc, _) in cycles]
                 overlap = [c for c in new_cols if c in prd.columns]
                 if overlap:
                     prd = prd.drop(columns=overlap)
+
+                # Drop cached julian to prevent float-precision merge mismatches
+                if 'julian' in prd.columns:
+                    prd = prd.drop(columns='julian')
+
                 # Only merge if the old file still has meaningful cycle cols.
                 extra_cols = [c for c in prd.columns if c not in _TIME_KEYS and 'forecast' in c]
                 if extra_cols:

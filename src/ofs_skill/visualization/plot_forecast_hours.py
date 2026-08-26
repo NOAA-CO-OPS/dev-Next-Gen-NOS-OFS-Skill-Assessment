@@ -459,6 +459,8 @@ def make_flag_images(prop, logger):
                 # to prevent y-axis and title clipping
                 left_margin=0.18,
                 title_fontsize=18,
+                cbar_frac=1.0,
+                cbar_gap=0.03,
             )
         # Currents: one scorecard per current station, rows = depth bins
         # sorted b01 -> largest. Split the single cu CF table into per-station
@@ -501,7 +503,7 @@ def make_flag_images(prop, logger):
                             # Longer colorbar (0.625 * 1.5) so the % labels
                             # don't overlap on the single-subplot width, and
                             # nudge it up to reduce the gap to the plot.
-                            cbar_frac=1.2,
+                            cbar_frac=1.0,
                             cbar_gap=0.03,
                         )
                     finally:
