@@ -105,6 +105,7 @@ class ModelProperties:
         self.stationowner: Any = ''
         self.user_input_location: Any = ''
         self.horizonskill: Any = ''
+        self.horizon_extra_plots: Any = False
         self.var_list: Any = ''
         self.filecheck: Any = ''
         # Extension attrs set dynamically by various CLI entrypoints.
