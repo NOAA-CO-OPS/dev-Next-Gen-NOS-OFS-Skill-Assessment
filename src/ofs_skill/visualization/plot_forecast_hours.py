@@ -501,7 +501,7 @@ def make_flag_images(prop, logger):
                             # Longer colorbar (0.625 * 1.5) so the % labels
                             # don't overlap on the single-subplot width, and
                             # nudge it up to reduce the gap to the plot.
-                            cbar_frac=0.94,
+                            cbar_frac=1.2,
                             cbar_gap=0.03,
                         )
                     finally:
