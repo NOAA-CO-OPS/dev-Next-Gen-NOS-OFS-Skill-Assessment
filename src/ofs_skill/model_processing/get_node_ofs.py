@@ -36,6 +36,7 @@ from ofs_skill.model_processing.model_source import get_model_source
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
 from ofs_skill.obs_retrieval import scalar, utils, vector
 from ofs_skill.obs_retrieval.utils import get_parallel_config
+from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import (
     SERIES_HEADER_PREFIX,
     series_header,
@@ -1481,6 +1482,11 @@ def _all_prd_files_complete(prop_local, ofs_ctlfile, name_var,
                     '%s to %s — likely left over from an earlier run. '
                     'Re-extracting.', path, run_window[0], run_window[1])
                 return False
+    # NOTE: parameter-signature staleness (datum/station-owner/bins) is
+    # enforced upstream by ``get_skill._ensure_prd_files`` via the cache
+    # manifest before this resume short-circuit is consulted, so it is not
+    # re-checked here. This helper only judges window coverage + row counts,
+    # keeping it usable in isolation (and matching its unit tests).
     return True
 
 
@@ -1705,7 +1711,7 @@ def get_node_ofs(prop, logger, model_dataset=None):
                                 'input file, then an observation control file '
                                 'must be present! Exiting...', control_file)
                     sys.exit()
-                if os.path.getsize(control_file): # Gets size of obs ctl file!
+                if os.path.isfile(control_file) and os.path.getsize(control_file) > 0: # Gets size of obs ctl file!
                     ofs_ctlfile = ofs_ctlfile_extract(
                         prop_local, name_conventions[0], model, logger)
                     if ofs_ctlfile is None:
@@ -1813,14 +1819,17 @@ def get_node_ofs(prop, logger, model_dataset=None):
 
                 if (prop_local.whichcast == 'forecast_a' and
                     not prop_local.horizonskill):
-                    with open(
+                    prd_path_fa = (
                         r''
                         + f'{prop_local.data_model_1d_node_path}'
                           f'/{ofs_ctlfile[4][i]}_'
                           f'{prop_local.ofs}_{name_conventions[0]}_'
                           f'{ofs_ctlfile[1][i]}_'
                           f'{prop_local.whichcast}_{prop_local.forecast_hr}_'
-                          f'{prop_local.ofsfiletype}_model.prd',
+                          f'{prop_local.ofsfiletype}_model.prd'
+                    )
+                    with open(
+                        prd_path_fa,
                         'w',
                         encoding='utf-8',
                     ) as output:
@@ -1843,6 +1852,14 @@ def get_node_ofs(prop, logger, model_dataset=None):
                             prop_local.forecast_hr,
                             prop_local.ofsfiletype
                         )
+                    cache_manifest.record_artifact(
+                        prd_path_fa,
+                        cache_manifest.run_signature(
+                            prop_local, variable=variable,
+                            extra={'whichcast': prop_local.whichcast,
+                                   'forecast_hr': prop_local.forecast_hr}),
+                        prop.data_model_1d_node_path,
+                        logger)
                 elif (prop_local.horizonskill and os.path.isfile(
                         f'{prop_local.data_model_1d_node_path}/'
                         f'{ofs_ctlfile[-1][i]}_{prop_local.ofs}_{name_conventions[0]}_'
@@ -1881,12 +1898,17 @@ def get_node_ofs(prop, logger, model_dataset=None):
                                      'Error: %s', e_x)
                         return (datum_offset, model_station)
                 else:
-                    with open(
+                    prd_path_std = (
                         r''
-                        +f'{prop_local.data_model_1d_node_path}/{ofs_ctlfile[4][i]}_'
+                        + f'{prop_local.data_model_1d_node_path}/'
+                          f'{ofs_ctlfile[4][i]}_'
                           f'{prop_local.ofs}_'
                           f'{name_conventions[0]}_{ofs_ctlfile[1][i]}'
-                          f'_{prop_local.whichcast}_{prop_local.ofsfiletype}_model.prd',
+                          f'_{prop_local.whichcast}_'
+                          f'{prop_local.ofsfiletype}_model.prd'
+                    )
+                    with open(
+                        prd_path_std,
                         'w',
                         encoding='utf-8',
                     ) as output:
@@ -1907,6 +1929,13 @@ def get_node_ofs(prop, logger, model_dataset=None):
                             prop_local.whichcast,
                             prop_local.ofsfiletype
                         )
+                    cache_manifest.record_artifact(
+                        prd_path_std,
+                        cache_manifest.run_signature(
+                            prop_local, variable=variable,
+                            extra={'whichcast': prop_local.whichcast}),
+                        prop.data_model_1d_node_path,
+                        logger)
 
                 return (datum_offset, model_station)
 
