@@ -374,7 +374,7 @@ def make_station_pair_map(
                 legend_bad_shown = legend_bad_shown or show_legend
             else:
                 legend_ok_shown = legend_ok_shown or show_legend
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 mode='lines',
                 lon=[rec['obs_lon'], rec['model_lon']],
                 lat=[rec['obs_lat'], rec['model_lat']],
@@ -389,7 +389,7 @@ def make_station_pair_map(
 
         # Matched observation station markers.
         if matched:
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 mode='markers',
                 lon=[r['obs_lon'] for r in matched],
                 lat=[r['obs_lat'] for r in matched],
@@ -405,7 +405,7 @@ def make_station_pair_map(
             ))
 
             # Matched model location markers.
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 mode='markers',
                 lon=[r['model_lon'] for r in matched],
                 lat=[r['model_lat'] for r in matched],
@@ -421,7 +421,7 @@ def make_station_pair_map(
 
         # Unmatched observation station markers -- red so they stand out.
         if unmatched:
-            fig.add_trace(go.Scattermapbox(
+            fig.add_trace(go.Scattermap(
                 mode='markers',
                 lon=[r['obs_lon'] for r in unmatched],
                 lat=[r['obs_lat'] for r in unmatched],
@@ -435,14 +435,41 @@ def make_station_pair_map(
                 ],
                 hoverinfo='text',
             ))
+        # Collect all valid latitudes and longitudes
+        all_lats = [r['obs_lat'] for r in with_obs] + [r['model_lat'] for r in matched]
+        all_lons = [r['obs_lon'] for r in with_obs] + [r['model_lon'] for r in matched]
 
-        center_lat = sum(r['obs_lat'] for r in with_obs) / len(with_obs)
-        center_lon = sum(r['obs_lon'] for r in with_obs) / len(with_obs)
+        # Calculate exact center
+        center_lat = (min(all_lats) + max(all_lats)) / 2.0
+        center_lon = (min(all_lons) + max(all_lons)) / 2.0
+
+        # Calculate coordinate range
+        lat_diff = max(all_lats) - min(all_lats)
+        lon_diff = max(all_lons) - min(all_lons)
+
+        if lat_diff == 0 and lon_diff == 0:
+            # Fallback for a single station
+            auto_zoom = 8.0
+        else:
+            import math
+            # Prevent division by zero if all stations share a single axis
+            lat_diff = max(lat_diff, 0.001)
+            lon_diff = max(lon_diff, 0.001)
+
+            # Map tiles use a base-2 logarithmic scale.
+            # 180 degrees (lat) and 360 degrees (lon) represent the full globe.
+            zoom_lat = math.log2(180 / lat_diff)
+            zoom_lon = math.log2(360 / lon_diff)
+
+            # Take the smaller zoom to fit both dimensions, minus 1.5 for edge padding
+            auto_zoom = min(zoom_lat, zoom_lon) - 1.5
 
         fig.update_layout(
-            mapbox_style='carto-positron',
-            mapbox=dict(
-                zoom=6, center=dict(lat=center_lat, lon=center_lon)),
+            map_style='carto-positron',
+            map=dict(
+                center=dict(lat=center_lat, lon=center_lon),
+                zoom=auto_zoom
+            ),
             height=700,
             width=1000,
             title=dict(
