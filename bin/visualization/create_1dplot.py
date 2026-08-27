@@ -1171,7 +1171,10 @@ def create_1dplot(prop, logger):
             'stofs_3d_atl',
             'stofs_3d_pac',
         ):
-            logger.info('No vdatum file for STOFS-2D-Global, as expected.')
+            # Name the OFS actually being run: this fires for all three
+            # STOFS products, so a hardcoded "STOFS-2D-Global" misreports
+            # two of them.
+            logger.info('No vdatum file for %s, as expected.', prop.ofs)
         else:
             logger.error(
                 'Failure checking for datum netcdf file on the NODD S3 '
