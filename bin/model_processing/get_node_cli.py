@@ -91,9 +91,8 @@ def _ensure_obs_ctl(prop1):
     import os
 
     from ofs_skill.obs_retrieval import utils
-    from ofs_skill.obs_retrieval.get_station_observations import (
-        get_station_observations,
-    )
+    from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
+    from ofs_skill.utils import cache_manifest  # Add this import
 
     logger = logging.getLogger('root')
     dir_params = utils.Utils(
@@ -101,17 +100,62 @@ def _ensure_obs_ctl(prop1):
         'directories', logger)
     control_files_path = os.path.join(
         prop1.path, dir_params['control_files_dir'])
-    # Any obs ctl present is taken as "obs already fetched" -- get_node_ofs
-    # will still exit per-variable if a specific one is missing.
-    has_any = os.path.isdir(control_files_path) and any(
-        name.endswith('_station.ctl')
-        for name in os.listdir(control_files_path)
-    )
-    if has_any:
-        return
+
     if not getattr(prop1, 'stationowner', ''):
         prop1.stationowner = 'co-ops,ndbc,usgs,chs'
-    get_station_observations(prop1, None)
+
+    var_list = prop1.var_list.split(',') if isinstance(prop1.var_list, str) else prop1.var_list
+
+    # Convert ISO dates (YYYY-MM-DDThh:mm:ssZ) to expected YYYYMMDD format
+    start_date_fmt = prop1.start_date_full[:10].replace('-', '') if prop1.start_date_full else None
+    end_date_fmt = prop1.end_date_full[:10].replace('-', '') if prop1.end_date_full else None
+
+    # 1. Validate the inventory cache signature
+    # (ensure_fresh will automatically delete the inventory if parameters changed)
+    inventory_sig = cache_manifest.inventory_signature(
+        prop1.ofs, start_date_fmt, end_date_fmt, prop1.stationowner, currents_bins_csv=None
+    )
+    inventory_path = os.path.join(control_files_path, f'inventory_all_{prop1.ofs}.csv')
+
+    cache_manifest.ensure_fresh(
+        inventory_path, inventory_sig, control_files_path, 'inventory', logger
+    )
+
+    # 2. Check if the inventory is present AND all requested variables have their .ctl files
+    var_name_map = {
+        'water_level': 'wl',
+        'water_temperature': 'temp',
+        'salinity': 'salt',
+        'currents': 'cu',
+    }
+
+    missing_data = False
+    if not os.path.isfile(inventory_path):
+        missing_data = True
+    else:
+        for var in var_list:
+            short_name = var_name_map.get(var, var)
+            ctl_path = os.path.join(control_files_path, f'{prop1.ofs}_{short_name}_station.ctl')
+            if not os.path.isfile(ctl_path):
+                missing_data = True
+                break
+
+    # If the inventory is fresh and all requested files exist, skip the API fetch!
+    if not missing_data:
+        return
+
+    # Otherwise, execute the fetch routine
+    write_obs_ctlfile(
+        start_date=start_date_fmt,
+        end_date=end_date_fmt,
+        datum=prop1.datum,
+        path=prop1.path,
+        ofs=prop1.ofs,
+        stationowner=prop1.stationowner,
+        var_list=var_list,
+        logger=logger,
+        config_file=prop1.config_file
+    )
 
 
 def main(argv=None):

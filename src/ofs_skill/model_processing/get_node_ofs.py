@@ -256,29 +256,50 @@ def find_time_gaps(prop, model, logger):
 def ofs_ctlfile_extract(prop, name_var, model, logger):
     """
     The input here is the path, variable name, and logger.
-    Extracts data from an OFS control file. If the file does not exist,
-    it generates it first.
+    Extracts data from an OFS control file. If the file does not exist
+    or is stale according to the cache manifest, it generates it first.
     """
-
+    # 1. Determine the filename based on filetype
     if prop.ofsfiletype == 'fields':
         filename = f'{prop.control_files_path}/{prop.ofs}_{name_var}_model.ctl'
-        if (os.path.isfile(filename)) is False and prop.ctl_flag == 0:
-            write_ofs_ctlfile(prop, model, logger)
-            prop.ctl_flag += 1 # Raise flag -- we've gone through ctl file production
     elif prop.ofsfiletype == 'stations':
         filename = f'{prop.control_files_path}/{prop.ofs}_{name_var}_model_station.ctl'
-        if (os.path.isfile(filename)) is False and prop.ctl_flag == 0:
-            write_ofs_ctlfile(prop, model, logger)
-            prop.ctl_flag += 1 # Raise flag -- we've gone through ctl file production
+    else:
+        logger.error('Invalid filetype inside ofs_ctlfile_extract')
+        return None
 
+    # 2. Check the cache manifest to ensure the file is fresh
+    # This will delete the file if the parameters have changed since it was built
+    signature = cache_manifest.run_signature(prop, variable=name_var)
+    cache_manifest.ensure_fresh(
+        filename,
+        signature,
+        prop.control_files_path,
+        'model_ctl',
+        logger
+    )
+
+    # 3. Build the file if it is missing (or was just deleted for being stale)
+    if (os.path.isfile(filename)) is False and prop.ctl_flag == 0:
+        write_ofs_ctlfile(prop, model, logger)
+        prop.ctl_flag += 1 # Raise flag -- we've gone through ctl file production
+
+        # 4. Record the newly built file in the cache manifest
+        cache_manifest.record_artifact(
+            filename,
+            signature,
+            prop.control_files_path,
+            logger
+        )
+
+    # 5. Extract the file contents
     try:
         with open(
                 filename, encoding='utf-8'
         ) as file:
             model_ctlfile = file.read()
             lines = model_ctlfile.split('\n')
-            # Drop the single header line, if present (legacy files
-            # have none)
+            # Drop the single header line, if present (legacy files have none)
             lines = strip_model_ctl_header(lines)
             lines = [i.split(' ') for i in lines]
             lines = [list(filter(None, i)) for i in lines]
