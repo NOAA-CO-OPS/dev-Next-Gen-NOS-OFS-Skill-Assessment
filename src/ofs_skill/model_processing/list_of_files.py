@@ -61,9 +61,7 @@ def get_nodd_prefix_map(prop: Any, logger: Logger) -> tuple[str, str]:
     """
     _conf = getattr(prop, 'config_file', None)
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
-    netcdf_dir = dir_params['netcdf_dir']
-    if 'stofs' in prop.ofs:
-        netcdf_dir = ''
+    netcdf_dir = dir_params.get('netcdf_dir_stofs', dir_params['netcdf_dir']) if 'stofs' in prop.ofs else dir_params['netcdf_dir']
     posix_dir = PurePosixPath(netcdf_dir)
     windows_dir = PureWindowsPath(netcdf_dir)
     if (
@@ -80,10 +78,14 @@ def get_nodd_prefix_map(prop: Any, logger: Logger) -> tuple[str, str]:
         )
     local_prefix = Path(os.path.join(prop.ofs, netcdf_dir)).as_posix() + '/'
 
+    # Include custom netcdf_dir in the bucket prefix for STOFS models if provided
+    clean_netcdf = netcdf_dir.strip('/')
+    sub_path = f'{clean_netcdf}/' if clean_netcdf else ''
+
     bucket_prefixes = {
-        'stofs_3d_atl': 'STOFS-3D-Atl/',
-        'stofs_3d_pac': 'STOFS-3D-Pac/',
-        'stofs_2d_glo': '',
+        'stofs_3d_atl': f'STOFS-3D-Atl/{sub_path}',
+        'stofs_3d_pac': f'STOFS-3D-Pac/{sub_path}',
+        'stofs_2d_glo': f'{sub_path}',
     }
     bucket_prefix = bucket_prefixes.get(prop.ofs, local_prefix)
     return local_prefix, bucket_prefix
@@ -631,12 +633,14 @@ def list_of_dir(prop: Any, logger: Logger) -> list[str]:
             logger.info('Trying backup dir...')
             dir_params = utils.Utils(_conf).read_config_section(
                 'directories', logger)
-            backup_model_path = os.path.join(
-                dir_params['model_historical_dir_backup'],
-                prop.ofs)
 
-            if 'stofs' not in prop.ofs:
-                backup_model_path = os.path.join(backup_model_path, dir_params['netcdf_dir'])
+            netcdf_dir = dir_params.get('netcdf_dir_stofs', dir_params['netcdf_dir']) if 'stofs' in prop.ofs else dir_params['netcdf_dir']
+
+            backup_model_path = os.path.join(
+                dir_params['model_historical_dir'],
+                prop.ofs,
+                netcdf_dir
+            )
 
             # Construct backup directory path based on OFS type and date
             if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac', 'stofs_2d_glo'):
