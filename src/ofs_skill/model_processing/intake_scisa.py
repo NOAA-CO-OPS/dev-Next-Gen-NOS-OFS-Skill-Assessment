@@ -42,6 +42,7 @@ Revisions:
 from __future__ import annotations
 
 import os
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from logging import Logger
 from typing import Any
@@ -52,6 +53,7 @@ import xarray as xr
 
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_hours
 from ofs_skill.model_processing.model_file_validation import (
+    cached_path_for_url,
     scrub_cached_copies,
     validate_model_files,
 )
@@ -123,6 +125,57 @@ def preprocess_with_filename(ds):
     if not filename:
         filename = 'unknown'
     return ds.assign_coords(filename=filename)
+
+
+def _resolve_remote_stations_files(
+    urlpaths: list,
+    cache_dir: str,
+    logger: Logger,
+) -> list:
+    """Replace remote stations-file URLs with date-keyed local cache copies.
+
+    Every http(s) URL is mapped to the ``cached_path_for_url`` location
+    (``<cache_dir>/<url-date-directory>/<basename>``) and downloaded there
+    when absent; local paths pass through unchanged. The date-directory
+    key is what prevents STOFS points files — whose basenames are
+    identical for every forecast date — from colliding in the cache and
+    silently serving one date's data for another (issue #267).
+
+    Downloads go to a ``.part`` temp name and are moved into place with
+    ``os.replace`` so an interrupted run cannot leave a partial file
+    under the trusted name. A failed download falls back to the direct
+    URL (matching the previous mixed-list behavior) so a transient
+    network error degrades rather than aborts.
+    """
+    resolved = []
+    n_downloaded = 0
+    n_reused = 0
+    for f in urlpaths:
+        if not (isinstance(f, str) and f.startswith('http')):
+            resolved.append(f)
+            continue
+        local_path = cached_path_for_url(f, cache_dir)
+        if os.path.isfile(local_path):
+            n_reused += 1
+        else:
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            try:
+                urllib.request.urlretrieve(f, local_path + '.part')
+                os.replace(local_path + '.part', local_path)
+                n_downloaded += 1
+            except Exception as dl_err:
+                logger.warning(
+                    'Failed to cache %s: %s. Using direct URL.', f, dl_err)
+                resolved.append(f)
+                continue
+        resolved.append(local_path)
+    if n_downloaded or n_reused:
+        logger.info(
+            'Resolved %d remote station file(s) to local cache: '
+            '%d downloaded, %d reused (cache: %s)',
+            n_downloaded + n_reused, n_downloaded, n_reused, cache_dir)
+    return resolved
+
 
 def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     """
@@ -320,93 +373,32 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
             }
         # For https:// URLs, no special storage_options needed
 
-        # Apply fsspec caching for remote URLs to avoid re-downloading
+        # Apply local caching for remote URLs to avoid re-downloading
         if has_remote and not has_s3_proto:
             # For https:// URLs (NODD S3 via HTTPS)
             cache_dir = get_s3_cache_dir(
                 getattr(prop, 'config_file', None), logger)
             os.makedirs(cache_dir, exist_ok=True)
 
-            # Check if all files are remote — simplecache cannot handle
-            # mixed local + remote file lists (fsspec protocol mismatch)
-            all_remote = all(
-                isinstance(f, str) and f.startswith('http')
-                for f in urlpaths
-            )
-
-            if prop.ofsfiletype == 'stations' and all_remote:
-                # simplecache: cache whole files (stations files are small,
-                # typically 1-10 MB each)
-                try:
-                    # A run interrupted mid-download leaves a partial
-                    # file in the cache that fsspec trusts as-is on the
-                    # next run, crashing the open with misleading
-                    # errors (issues #176/#193). Probe existing cached
-                    # copies and delete bad ones so they re-download.
-                    scrub_cached_copies(
-                        urlpaths, cache_dir, time_name, logger)
-                    cached_urlpaths = [
-                        f'simplecache::{url}' for url in urlpaths
-                    ]
-                    urlpaths = cached_urlpaths
-                    s3_storage_opts = {
-                        'storage_options': {
-                            'simplecache': {
-                                'cache_storage': cache_dir,
-                                'same_names': True,
-                            },
-                        }
-                    }
-                    logger.info(
-                        'Using simplecache for %d remote station files '
-                        '(cache: %s)', remote_count, cache_dir,
-                    )
-                except Exception as cache_err:
-                    logger.warning(
-                        'Failed to set up simplecache, falling back to '
-                        'direct access: %s', cache_err,
-                    )
-                    # Restore original urlpaths on failure
-                    urlpaths = file_list
-                    if prop.ofsfiletype == 'stations' \
-                            and prop.whichcast == 'forecast_a':
-                        urlpaths = urlpaths + urlpaths
-            elif prop.ofsfiletype == 'stations' and not all_remote:
-                # Mixed local + remote: download remote files to cache
-                # so all paths are local (fsspec requires uniform protocol)
-                import urllib.request
-                remote_n = sum(1 for f in urlpaths
-                               if isinstance(f, str) and f.startswith('http'))
-                local_n = len(urlpaths) - remote_n
-                logger.info(
-                    'Mixed file list: downloading %d remote files to '
-                    'local cache (%d already local)', remote_n, local_n,
-                )
+            if prop.ofsfiletype == 'stations':
+                # Stations files are small (typically 1-25 MB), so remote
+                # URLs are downloaded to a local cache keyed by the URL's
+                # date directory plus basename (cached_path_for_url).
+                # A basename-only cache (the previous fsspec simplecache
+                # ``same_names=True`` setup) silently served one date's
+                # file for every other date, because STOFS points
+                # filenames are identical in every NODD date directory
+                # (issue #267). Resolving to local paths here also
+                # handles mixed local + remote lists, which fsspec
+                # protocol chaining could not.
+                #
                 # Delete any partial cached copies left by an
                 # interrupted run before trusting them (issues
-                # #176/#193), and download to a temp name so a kill
+                # #176/#193); downloads use a temp name so a kill
                 # mid-download can't leave a partial file behind.
                 scrub_cached_copies(urlpaths, cache_dir, time_name, logger)
-                resolved = []
-                for f in urlpaths:
-                    if isinstance(f, str) and f.startswith('http'):
-                        local_path = os.path.join(
-                            cache_dir, os.path.basename(f))
-                        if not os.path.isfile(local_path):
-                            try:
-                                urllib.request.urlretrieve(
-                                    f, local_path + '.part')
-                                os.replace(local_path + '.part', local_path)
-                            except Exception as dl_err:
-                                logger.warning(
-                                    'Failed to cache %s: %s. '
-                                    'Using direct URL.', f, dl_err)
-                                resolved.append(f)
-                                continue
-                        resolved.append(local_path)
-                    else:
-                        resolved.append(f)
-                urlpaths = resolved
+                urlpaths = _resolve_remote_stations_files(
+                    urlpaths, cache_dir, logger)
             else:
                 # For fields files, caching is skipped (files are 100-500 MB
                 # each and would quickly exhaust local disk)
@@ -416,8 +408,8 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                 )
 
     # Build a preprocess function that knows the original urlpaths,
-    # so it can recover filenames even when simplecache hides them.
-    # Strip simplecache:: prefixes to get the real filenames.
+    # so it can recover filenames even when the source path is hidden
+    # by the open. Strip any fsspec protocol-chain prefixes.
     raw_paths = [
         p.split('::')[-1] if isinstance(p, str) and '::' in p else p
         for p in urlpaths

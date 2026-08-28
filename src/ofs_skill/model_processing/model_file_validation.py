@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import time
 from collections import Counter
 from logging import Logger
@@ -71,6 +72,43 @@ def _is_remote(path: Any) -> bool:
     # Unwrap fsspec protocol chaining (simplecache::https://...)
     tail = path.split('::')[-1] if '::' in path else path
     return tail.startswith(_REMOTE_PREFIXES)
+
+
+# Characters allowed in the cache subdirectory derived from a URL's
+# parent directory; anything else is replaced so a hostile or malformed
+# URL can never traverse outside the cache root.
+_UNSAFE_DIR_CHARS = re.compile(r'[^A-Za-z0-9._-]')
+
+
+def cached_path_for_url(url: Any, cache_dir: str) -> str:
+    """Local cache path for one remote model-file URL.
+
+    The cached copy keeps the URL's basename but is nested under the
+    URL's parent directory name::
+
+        .../stofs_2d_glo.20260701/stofs_2d_glo.t00z.points.cwl.nc
+        -> <cache_dir>/stofs_2d_glo.20260701/stofs_2d_glo.t00z.points.cwl.nc
+
+    STOFS points filenames are identical in every date directory of the
+    NODD bucket, so a cache keyed by basename alone silently serves one
+    date's file for every other date — an old cached copy poisons every
+    later run, and even a clean multi-day run reads day 1's file for
+    days 2..N (issue #267). The parent directory carries the date and
+    disambiguates; non-STOFS filenames embed the date anyway and merely
+    gain a subdirectory level. Keeping the basename unchanged preserves
+    everything downstream that reads filenames (the ``filename``
+    coordinate, format sniffing, the filename-key CSV).
+
+    A parent segment that is empty or sanitizes to ``.``/``..`` falls
+    back to a flat ``<cache_dir>/<basename>`` path.
+    """
+    path = str(url).split('::')[-1].split('?')[0].rstrip('/')
+    parts = path.split('/')
+    basename = parts[-1]
+    parent = _UNSAFE_DIR_CHARS.sub('_', parts[-2]) if len(parts) > 1 else ''
+    if parent in ('', '.', '..'):
+        return os.path.join(cache_dir, basename)
+    return os.path.join(cache_dir, parent, basename)
 
 
 def _static_fingerprint(nc: netCDF4.Dataset,
@@ -207,8 +245,8 @@ def scrub_cached_copies(
         Remote URLs (http(s)/s3) about to be opened through the cache.
         Non-remote entries are ignored.
     cache_dir : str
-        The fsspec ``same_names=True`` cache directory (cached filename
-        equals the URL basename).
+        The cache directory root; each URL maps to the date-keyed path
+        given by ``cached_path_for_url``.
     time_name : str or None
         Name of the time dimension, for the integrity probe.
     logger : Logger
@@ -223,8 +261,7 @@ def scrub_cached_copies(
     for url in urlpaths:
         if not (isinstance(url, str) and _is_remote(url)):
             continue
-        basename = url.split('::')[-1].split('?')[0].rsplit('/', 1)[-1]
-        cached = os.path.join(cache_dir, basename)
+        cached = cached_path_for_url(url, cache_dir)
         if not os.path.isfile(cached):
             continue
         reason, _, _ = _check_file(cached, time_name)
