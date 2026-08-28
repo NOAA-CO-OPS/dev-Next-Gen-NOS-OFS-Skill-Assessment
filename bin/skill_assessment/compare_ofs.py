@@ -16,11 +16,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from create_1dplot import create_1dplot
-from get_shapefile_intersection import get_shapefile_intersection
+
+#from create_1dplot import create_1dplot
+#from get_shapefile_intersection import get_shapefile_intersection
 from plotly.subplots import make_subplots
 
-from ofs_skill.model_processing import model_properties
+from ofs_skill.model_processing import check_model_files, model_properties
 from ofs_skill.obs_retrieval import utils
 
 
@@ -655,7 +656,7 @@ def run_skill_assessment(ofs_name, args, logger, create_1dplot):
     prop.forecast_hr = 'now'
     prop.var_list = args.var_selection
     prop.aux_vars = ''
-    prop.filecheck = True
+    prop.filecheck = False # Set to false to avoid duplicating the check
     prop.config_file = args.config
     prop.user_input_location = False
 
@@ -717,8 +718,26 @@ def main(args):
         if dynamic_dir not in sys.path:
             sys.path.insert(0, dynamic_dir)
 
+    from create_1dplot import create_1dplot
+    from get_shapefile_intersection import get_shapefile_intersection
+
     # loggin'
     logger = setup_logger(args.home_path, args.config)
+
+    logger.info('=== Pre-checking Model Files ===')
+    for ofs_name in [ofs1, ofs2]:
+        pre_prop = model_properties.ModelProperties()
+        pre_prop.ofs = ofs_name
+        pre_prop.path = args.home_path
+        pre_prop.start_date_full = args.start_date
+        pre_prop.end_date_full = args.end_date
+        pre_prop.whichcasts = args.whichcasts.split(',') # check_model_files expects a list
+        pre_prop.ofsfiletype = args.filetype
+        pre_prop.config_file = args.config
+
+        logger.info(f'Verifying files for {ofs_name.upper()}...')
+        check_model_files(pre_prop, logger)
+        logger.info(f'Model file check was successful for {ofs_name.upper()}.')
 
     # Do shapefile Intersection
     logger.info('=== Computing Shapefile Intersection ===')

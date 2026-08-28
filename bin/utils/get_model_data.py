@@ -230,8 +230,10 @@ def list_of_dir(prop, basepath, logger):
         # Add stofs directory structure
         if prop.ofs in ['stofs_3d_atl', 'stofs_2d_glo', 'stofs_3d_pac']:
             day = datetime.strptime(dates[date_index], '%m/%d/%y').day
-            model_dir = f'{basepath}{prop.model_path}/{prop.ofs}.{year}' +\
-                        f'{month:02}{day:02}'
+            model_dir = os.path.join(
+                basepath,
+                f'{prop.ofs}.{year}{month:02}{day:02}'
+            )
         else:
             # Do old directory structure
             if (
@@ -792,16 +794,22 @@ def get_model_data(prop, logger):
 
     # Directory & path set-up -->
     # Root path for saving files
-    prop.model_save_path = os.path.join(dir_params['model_historical_dir'], prop.ofs)
-    if 'stofs' not in prop.ofs:
-        prop.model_save_path = os.path.join(prop.model_save_path, dir_params['netcdf_dir'])
+    netcdf_dir = dir_params.get('netcdf_dir_stofs', dir_params['netcdf_dir']) if 'stofs' in prop.ofs else dir_params['netcdf_dir']
+
+    prop.model_save_path = os.path.join(
+        dir_params['model_historical_dir'],
+        prop.ofs,
+        netcdf_dir
+    )
     prop.model_save_path = Path(prop.model_save_path).as_posix()
 
     # Path to files on the NODD
-    prop.model_nodd_path = os.path.join(prop.ofs)
-    if 'stofs' not in prop.ofs:
-        prop.model_nodd_path = os.path.join(prop.model_nodd_path,
-                                            dir_params['netcdf_dir'])
+    netcdf_dir = dir_params.get('netcdf_dir_stofs', dir_params['netcdf_dir']) if 'stofs' in prop.ofs else dir_params['netcdf_dir']
+
+    prop.model_nodd_path = os.path.join(
+        prop.ofs,
+        netcdf_dir
+    )
     prop.model_nodd_path = Path(prop.model_nodd_path).as_posix()
 
     logger.info('Successfully set up paths.')

@@ -95,10 +95,10 @@ def get_shapefile_intersection(shp1, shp2, home_path, stationowner, logger=None)
 
     if intersection_gdf.empty:
         logger.info(
-            'No overlapping areas were found between the two shapefiles. '
-            'No output created.'
+            'No overlapping areas were found between the two OFS domains. '
+            'No output created. Exiting!'
         )
-        return
+        sys.exit(1)
 
     # Downstream ofs_geometry keeps only the largest polygon — warn when the
     # intersection produces multiple features or a mixed geometry type so
