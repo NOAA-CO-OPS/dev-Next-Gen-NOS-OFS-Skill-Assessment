@@ -70,12 +70,13 @@ def _fake_urlretrieve(_url, dst):
         fil.write(b'data')
 
 
-def write_conf(tmp_path, netcdf_dir):
-    """Write a minimal config with the given netcdf_dir and return its path."""
+def write_conf(tmp_path, netcdf_dir, netcdf_dir_stofs=''):
+    """Write a minimal config with the given netcdf directories and return its path."""
     conf = configparser.ConfigParser()
     conf['directories'] = {
         'home': str(tmp_path),
         'netcdf_dir': netcdf_dir,
+        'netcdf_dir_stofs': netcdf_dir_stofs,
         'model_historical_dir': str(tmp_path / 'example_data'),
     }
     conf['urls'] = {
@@ -89,22 +90,21 @@ def write_conf(tmp_path, netcdf_dir):
     return str(conf_path)
 
 
-def build_urls(tmp_path, ofs, whichcast, netcdf_dir):
+def build_urls(tmp_path, ofs, whichcast, netcdf_dir, netcdf_dir_stofs=''):
     """Run the list_of_dir -> make_file_list -> list_of_urls chain."""
     logger = MockLogger()
     prop = MockProps(ofs=ofs, whichcast=whichcast,
-                     config_file=write_conf(tmp_path, netcdf_dir))
+                     config_file=write_conf(tmp_path, netcdf_dir, netcdf_dir_stofs))
 
-    # NEW LOGIC: Only inject netcdf_dir if it is NOT a STOFS model
+    # NEW LOGIC: Use netcdf_dir_stofs for STOFS models, netcdf_dir for others
     if 'stofs' in ofs:
-        nodd_path = ofs
+        nodd_path = ofs if not netcdf_dir_stofs else f'{ofs}/{netcdf_dir_stofs}'
     else:
         nodd_path = ofs if not netcdf_dir else f'{ofs}/{netcdf_dir}'
 
     dir_list, dates = get_model_data.list_of_dir(prop, nodd_path, logger)
     file_list = get_model_data.make_file_list(prop, dates, dir_list, logger)
     return get_model_data.list_of_urls(file_list, prop, logger)
-
 
 # ---------------------------------------------------------------------------
 # make_file_list: STOFS-3D stations must use the points file name
@@ -125,11 +125,11 @@ def test_make_file_list_stofs3d_stations_points_name(tmp_path, whichcast):
 # list_of_urls: no netcdf/ level on STOFS buckets, bucket prefix swapped
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize('netcdf_dir', ['netcdf', '', 'model_output'])
-def test_list_of_urls_stofs3d_bucket_layout(tmp_path, netcdf_dir):
+@pytest.mark.parametrize('netcdf_dir_stofs', ['netcdf', '', 'model_output'])
+def test_list_of_urls_stofs3d_bucket_layout(tmp_path, netcdf_dir_stofs):
     """STOFS-3D URLs use the STOFS-3D-Atl/ prefix (no netcdf_dir)."""
-    urls = build_urls(tmp_path, 'stofs_3d_atl', 'nowcast', netcdf_dir)
-    # REMOVED the 'sub' variable and injection
+    # Pass empty string for netcdf_dir, pass param to netcdf_dir_stofs
+    urls = build_urls(tmp_path, 'stofs_3d_atl', 'nowcast', '')
     base = 'https://noaa-nos-stofs3d-pds.s3.amazonaws.com/STOFS-3D-Atl/'
     for url in urls:
         assert url.startswith((
@@ -137,10 +137,10 @@ def test_list_of_urls_stofs3d_bucket_layout(tmp_path, netcdf_dir):
             f'{base}stofs_3d_atl.202506',
         ))
 
-@pytest.mark.parametrize('netcdf_dir', ['netcdf', '', 'model_output'])
-def test_list_of_urls_stofs2d_bucket_layout(tmp_path, netcdf_dir):
+@pytest.mark.parametrize('netcdf_dir_stofs', ['netcdf', '', 'model_output'])
+def test_list_of_urls_stofs2d_bucket_layout(tmp_path, netcdf_dir_stofs):
     """STOFS-2D-Global URLs have date directories at the bucket root."""
-    urls = build_urls(tmp_path, 'stofs_2d_glo', 'nowcast', netcdf_dir)
+    urls = build_urls(tmp_path, 'stofs_2d_glo', 'nowcast', netcdf_dir_stofs)
     for url in urls:
         # REMOVED the '{sub}' injection
         assert url.startswith(
@@ -212,21 +212,20 @@ def test_download_single_file_savepath_with_bucket_prefix(tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
-    'ofs,netcdf_dir,expected',
+    'ofs,netcdf_dir,netcdf_dir_stofs,expected',
     [
-        # Local and S3 prefixes now drop netcdf/ for all STOFS variants
-        ('stofs_3d_atl', 'netcdf', ('stofs_3d_atl/', 'STOFS-3D-Atl/')),
-        ('stofs_3d_atl', '', ('stofs_3d_atl/', 'STOFS-3D-Atl/')),
-        ('stofs_3d_pac', 'netcdf', ('stofs_3d_pac/', 'STOFS-3D-Pac/')),
-        ('stofs_2d_glo', 'netcdf', ('stofs_2d_glo/', '')),
-        # Non-STOFS models keep the original behavior
-        ('cbofs', 'netcdf', ('cbofs/netcdf/', 'cbofs/netcdf/')),
+        ('stofs_3d_atl', 'netcdf', '', ('stofs_3d_atl/', 'STOFS-3D-Atl/')),
+        ('stofs_3d_pac', 'netcdf', '', ('stofs_3d_pac/', 'STOFS-3D-Pac/')),
+        ('stofs_2d_glo', 'netcdf', '', ('stofs_2d_glo/', '')),
+        ('cbofs', 'netcdf', '', ('cbofs/netcdf/', 'cbofs/netcdf/')),
     ],
 )
-def test_get_nodd_prefix_map_pairs(tmp_path, ofs, netcdf_dir, expected):
+def test_get_nodd_prefix_map_pairs(tmp_path, ofs, netcdf_dir, netcdf_dir_stofs,
+                                   expected):
     """Prefix pairs reflect the configured netcdf_dir and the OFS bucket."""
     logger = MockLogger()
-    prop = MockProps(ofs=ofs, config_file=write_conf(tmp_path, netcdf_dir))
+    prop = MockProps(ofs=ofs, config_file=write_conf(tmp_path, netcdf_dir,
+                                                     netcdf_dir_stofs))
     assert get_nodd_prefix_map(prop, logger) == expected
 
 
