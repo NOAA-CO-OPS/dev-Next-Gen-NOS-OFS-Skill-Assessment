@@ -197,26 +197,47 @@ class TestTimeseriesCoverage:
         _write_pair_file(pair, WINDOW_START, hours=19)
         assert covers_run_window(pair, WINDOW_START, WINDOW_END)
 
-    def test_unparseable_file_fails_open(self, tmp_path):
-        """A file with no parseable data rows is treated as covering."""
+    def test_file_without_data_rows_is_stale(self, tmp_path):
+        """A file with no parseable data rows carries zero usable data,
+        so it must be flagged stale and regenerated (issue #267: empty
+        .prd files from a failed extraction were reused forever)."""
         pair = tmp_path / 'pair.int'
         pair.write_text('not a data row\nstill not one\n', encoding='utf-8')
-        assert covers_run_window(pair, WINDOW_START, WINDOW_END)
+        assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
 
-    def test_undecodable_binary_file_fails_open(self, tmp_path):
-        """A binary/corrupt cached file must fail open, not raise
-        UnicodeDecodeError out of the check on every run."""
+    def test_empty_file_is_stale(self, tmp_path):
+        """A zero-byte artifact must be flagged stale, not reused."""
+        pair = tmp_path / 'pair.int'
+        pair.write_text('', encoding='utf-8')
+        assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
+
+    def test_header_only_file_is_stale(self, tmp_path):
+        """A header line with no data rows (the shape written by a
+        failed model extraction) must be flagged stale."""
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=0)
+        assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
+
+    def test_undecodable_binary_file_is_stale(self, tmp_path):
+        """A binary/corrupt cached file has no usable data rows either;
+        it must be flagged stale without raising UnicodeDecodeError."""
         pair = tmp_path / 'pair.int'
         pair.write_bytes(b'\x00\xff\xfe\x93 not utf-8 \x81\x82')
-        assert covers_run_window(pair, WINDOW_START, WINDOW_END)
+        assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
 
-    def test_overflowing_date_field_fails_open(self, tmp_path):
-        """A corrupt row whose date field parses to inf must be skipped,
-        not raise OverflowError."""
+    def test_unopenable_path_fails_open(self, tmp_path):
+        """A path that cannot be opened at all (OS-level failure) still
+        fails open — deletion/regeneration would likely fail too."""
+        assert covers_run_window(tmp_path, WINDOW_START, WINDOW_END)
+
+    def test_overflowing_date_field_is_stale_not_crash(self, tmp_path):
+        """A corrupt row whose date field parses to inf must not raise
+        OverflowError; with no parseable rows left, the file counts as
+        having no usable data and is flagged stale."""
         pair = tmp_path / 'pair.int'
         pair.write_text('2461127.25 1e999 3 28 18 0 7.4 5.3 -2.1\n',
                         encoding='utf-8')
-        assert covers_run_window(pair, WINDOW_START, WINDOW_END)
+        assert not covers_run_window(pair, WINDOW_START, WINDOW_END)
 
     def test_rolling_window_stale_file_fails(self, tmp_path):
         """Yesterday's 7-day file overlaps ~86% of today's 7-day window
