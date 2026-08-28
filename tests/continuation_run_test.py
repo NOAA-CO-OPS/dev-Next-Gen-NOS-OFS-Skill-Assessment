@@ -203,17 +203,33 @@ class TestClassifyCoverage:
             path, WINDOW_START, WINDOW_END + timedelta(days=30),
             now=NOW) == COVERS
 
-    def test_unreadable_file_fails_open(self, tmp_path):
-        """An undecodable file is COVERS so existing error paths run."""
+    def test_undecodable_file_is_stale(self, tmp_path):
+        """A file that opens but holds no parseable rows is STALE.
+
+        Issue #267: an artifact with zero usable data was reused
+        forever, silently producing no pairs. It carries nothing to
+        continue from either, so it is regenerated rather than extended.
+        """
         path = tmp_path / 'binary.obs'
         path.write_bytes(b'\xff\xfe\x00\x01')
         assert classify_coverage(
-            path, WINDOW_START, WINDOW_END, now=NOW) == COVERS
+            path, WINDOW_START, WINDOW_END, now=NOW) == STALE
 
-    def test_empty_file_fails_open(self, tmp_path):
+    def test_empty_file_is_stale(self, tmp_path):
         """A 0-byte artifact carries no window and must not be extended."""
         path = tmp_path / 'blank.obs'
         path.write_text('', encoding='utf-8')
+        assert classify_coverage(
+            path, WINDOW_START, WINDOW_END, now=NOW) == STALE
+
+    def test_unopenable_file_fails_open(self, tmp_path):
+        """A path that cannot be opened at all stays COVERS.
+
+        Regeneration would hit the same OS-level failure, so the file
+        keeps flowing through the pre-existing error handling instead of
+        being deleted and re-fetched on every run.
+        """
+        path = tmp_path / 'missing_dir' / 'gone.obs'
         assert classify_coverage(
             path, WINDOW_START, WINDOW_END, now=NOW) == COVERS
 

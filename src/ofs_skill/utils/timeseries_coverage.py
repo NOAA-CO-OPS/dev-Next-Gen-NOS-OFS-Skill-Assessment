@@ -131,6 +131,22 @@ def read_first_last_timestamps(path):
     return first, last
 
 
+def _has_no_data_rows(path):
+    """True when the file opens but holds no parseable data rows.
+
+    Distinguishes an artifact with no usable data — empty, header-only,
+    or corrupt content, all safe and useful to regenerate — from one
+    that cannot even be opened (an OS-level failure, where deletion and
+    regeneration would likely fail too). Decoding errors are tolerated
+    per byte so a corrupt binary file still counts as "no data rows".
+    """
+    try:
+        with open(path, encoding='utf-8', errors='replace') as file_handle:
+            return all(row_datetime(line) is None for line in file_handle)
+    except OSError:
+        return False
+
+
 def classify_coverage(path, start_dt, end_dt, *, logger=None, now=None,
                       tolerance=STALENESS_TOLERANCE):
     """Classify a cached artifact's coverage of the run window.
@@ -148,14 +164,26 @@ def classify_coverage(path, start_dt, end_dt, *, logger=None, now=None,
     be the head of the requested series but stops short of the end, so
     only ``[last_row, end]`` is missing.
 
-    Fails open (returns ``COVERS``) when the file cannot be parsed, so
-    unreadable files keep flowing through the pre-existing error handling
-    instead of being regenerated on every run, and when the reachable
-    part of the window is shorter than ``tolerance`` (too little data can
-    exist to judge either way).
+    A file that opens but contains no parseable data rows -- empty,
+    header-only, or corrupt -- is ``STALE``: it carries zero usable
+    data, so regenerating it can only help, and there is no prefix in it
+    to continue from. Empty ``.prd`` files written during a failed model
+    extraction were previously reused forever here, silently producing
+    zero pairs on every subsequent run (issue #267).
+
+    Fails open (returns ``COVERS``) when the file cannot even be opened
+    (an OS-level error, where regeneration would likely fail too) and
+    when the reachable part of the window is shorter than ``tolerance``
+    (too little data can exist to judge either way).
     """
     first, last = read_first_last_timestamps(path)
     if first is None or last is None:
+        if _has_no_data_rows(path):
+            if logger is not None:
+                logger.warning(
+                    '%s contains no parseable data rows; treating it as '
+                    'stale so it is regenerated.', path)
+            return STALE
         if logger is not None:
             logger.warning(
                 'Could not read timestamps from %s; '
