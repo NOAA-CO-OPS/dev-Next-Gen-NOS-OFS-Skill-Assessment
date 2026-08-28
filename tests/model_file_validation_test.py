@@ -320,10 +320,14 @@ BUCKET = 'https://noaa-nos-ofs-pds.s3.amazonaws.com/cbofs/netcdf'
 
 
 def test_scrub_removes_partial_cached_copy(tmp_path):
+    # Cached copies live under the URL's parent-directory key
+    # (cached_path_for_url, issue #267) — here the URL parent is
+    # 'netcdf'.
     cache = tmp_path / 'cache'
-    cache.mkdir()
-    good = _write_nc3(cache, 'a.nc')
-    partial = _truncate(_write_nc3(cache, 'b.nc'), 0.4)
+    subdir = cache / 'netcdf'
+    subdir.mkdir(parents=True)
+    good = _write_nc3(subdir, 'a.nc')
+    partial = _truncate(_write_nc3(subdir, 'b.nc'), 0.4)
     urls = [f'{BUCKET}/a.nc', f'{BUCKET}/b.nc', f'{BUCKET}/notcached.nc']
     removed = scrub_cached_copies(urls, str(cache), 'time', LOG)
     assert removed == 1
@@ -334,8 +338,9 @@ def test_scrub_removes_partial_cached_copy(tmp_path):
 
 def test_scrub_handles_simplecache_prefix_and_local_entries(tmp_path):
     cache = tmp_path / 'cache'
-    cache.mkdir()
-    partial = _truncate(_write_nc3(cache, 'c.nc'), 0.4)
+    subdir = cache / 'netcdf'
+    subdir.mkdir(parents=True)
+    partial = _truncate(_write_nc3(subdir, 'c.nc'), 0.4)
     local_file = _write_nc3(tmp_path, 'local.nc')
     urls = [f'simplecache::{BUCKET}/c.nc', local_file]
     removed = scrub_cached_copies(urls, str(cache), 'time', LOG)
@@ -348,8 +353,9 @@ def test_scrub_handles_simplecache_prefix_and_local_entries(tmp_path):
 
 def test_scrub_noop_when_cache_healthy(tmp_path):
     cache = tmp_path / 'cache'
-    cache.mkdir()
-    good = _write_nc3(cache, 'a.nc')
+    subdir = cache / 'netcdf'
+    subdir.mkdir(parents=True)
+    good = _write_nc3(subdir, 'a.nc')
     removed = scrub_cached_copies(
         [f'{BUCKET}/a.nc'], str(cache), 'time', LOG)
     assert removed == 0
