@@ -32,8 +32,8 @@ cp conf/ofs_dps.conf.example conf/ofs_dps.conf
 # 3a. (Preferred) Ensure use_s3_fallback=True is set in conf/ofs_dps.conf, and the skill
 #     assessment routine will read and stream model files from the
 #     NODD S3 bucket on demand when local files are missing.
- 
-# 3b. (Alternate) If you prefer to download model data locally: 
+
+# 3b. (Alternate) If you prefer to download model data locally:
 #     Download model data for your OFS and date range
 python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -ws nowcast -t stations
 python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -ws forecast_b -t stations
@@ -41,6 +41,8 @@ python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2
 # 4. Run the 1D skill assessment
 python ./bin/visualization/create_1dplot.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -d MLLW -ws nowcast,forecast_b
 ```
+
+Water level runs convert between vertical datums, which needs a PROJ grid on disk and outbound HTTPS to the NOAA vdatum bucket. `make setup` handles the download; if you set the environment up by hand, or datum conversions fail with `ProjError` 1029, see [Vertical datum grids and network access](CONTRIBUTING.md#vertical-datum-grids-and-network-access).
 
 Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/10.-Graphical-User-Interfaces-(GUI)). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/01.-Setup-and-Installation).
 

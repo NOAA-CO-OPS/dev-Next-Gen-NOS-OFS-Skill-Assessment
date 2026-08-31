@@ -27,6 +27,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
+import pyproj.exceptions
 
 from ofs_skill.obs_retrieval import retrieve_properties, utils, vdatum_resilient
 from ofs_skill.obs_retrieval.chs_utils import (
@@ -274,6 +275,43 @@ def _emit_coops_currents_entries(
     return entries
 
 
+def _log_station_failure(provider, variable, station_id, exc, logger):
+    """Log a station that could not be written to the control file.
+
+    A station is dropped here for two very different reasons, and until
+    now both were reported as an INFO-level "data not found" line naming
+    the data provider. That made a genuinely empty station and a broken
+    vertical datum environment look identical in the log, which is how
+    the missing GEOID18 grid (issues #127, #216, #295) went unnoticed for
+    months while it quietly removed every station needing a conversion.
+
+    A ``ProjError`` is never a data-availability problem: the observations
+    were retrieved successfully and the datum conversion is what failed.
+    Report it at ERROR, name it for what it is, and keep the provider's
+    "data not found" wording for the real no-data case.
+    """
+    if isinstance(exc, pyproj.exceptions.ProjError):
+        logger.error(
+            '%s %s station %s DROPPED from the control file: the '
+            'observations were retrieved but the vertical datum '
+            'conversion failed. This is an environment fault, not '
+            'missing data -- see the vdatum.convert error above for the '
+            'required PROJ grid or network fix. Exception: %s',
+            provider,
+            variable,
+            str(station_id),
+            exc,
+        )
+        return
+    logger.info(
+        '%s %s data not found for station %s. Exception: %s',
+        provider,
+        variable,
+        str(station_id),
+        exc,
+    )
+
+
 def _process_coops_station(
     id_number,
     name,
@@ -464,12 +502,7 @@ def _process_coops_station(
                 logger,
             )
     except Exception as ex:
-        logger.info(
-            'CO-OPS %s data not found for station %s. Exception: %s',
-            variable,
-            str(id_number),
-            ex,
-        )
+        _log_station_failure('CO-OPS', variable, id_number, ex, logger)
     return []
 
 
@@ -585,12 +618,7 @@ def _process_usgs_station(
                     )
                 ]
     except Exception as ex:
-        logger.info(
-            'USGS %s data not found for station %s. Exception: %s',
-            variable,
-            str(id_number),
-            ex,
-        )
+        _log_station_failure('USGS', variable, id_number, ex, logger)
     return []
 
 
@@ -678,12 +706,7 @@ def _process_ndbc_station(
                 )
             ]
     except Exception as ex:
-        logger.info(
-            'NDBC %s data not found for station %s. Exception: %s',
-            variable,
-            str(id_number),
-            ex,
-        )
+        _log_station_failure('NDBC', variable, id_number, ex, logger)
     return []
 
 
@@ -822,12 +845,15 @@ def _process_chs_station(
             ]
 
     except Exception as ex:
-        logger.error(
-            'CHS %s data not processed for station %s. Exception: %s',
-            variable,
-            str(id_number),
-            ex,
-        )
+        if isinstance(ex, pyproj.exceptions.ProjError):
+            _log_station_failure('CHS', variable, id_number, ex, logger)
+        else:
+            logger.error(
+                'CHS %s data not processed for station %s. Exception: %s',
+                variable,
+                str(id_number),
+                ex,
+            )
 
     return []
 
