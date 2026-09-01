@@ -7,6 +7,7 @@
 
 import copy
 import gc
+import glob
 import logging
 import logging.config
 import os
@@ -23,7 +24,11 @@ from pandas.errors import EmptyDataError
 from ofs_skill.model_processing import do_horizon_skill
 from ofs_skill.model_processing.get_fcst_cycle import get_fcst_dates
 from ofs_skill.model_processing.get_node_ofs import get_node_ofs
-from ofs_skill.model_processing.station_ledger import StationLedger
+from ofs_skill.model_processing.station_ledger import (
+    PAIRING_STAGES,
+    StationLedger,
+)
+from ofs_skill.model_processing.station_ledger_inventory import reconcile_inventory
 from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.get_station_observations import get_station_observations
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
@@ -359,6 +364,93 @@ def _ledger_drop(prop: Any, station_id: str, stage: str, reason: str) -> None:
     ledger.drop(station_id, stage=stage, reason=reason)
 
 
+def _attach_ledger_view(prop: Any, variable: str) -> None:
+    """Attach a per-variable view of the run's station-drop ledger.
+
+    One :class:`StationLedger` is created per run (per OFS) and shared by
+    every variable and whichcast; each pass records through a view that
+    stamps its own ``variable``/``whichcast``/``filetype`` onto the records.
+    That is what lets the whole run land in a single
+    ``station_ledger_{ofs}.csv`` instead of one file per combination
+    (issue #224). Best-effort: the workflow runs identically if ledger
+    construction fails.
+    """
+    root = getattr(prop, 'station_ledger_root', None)
+    if root is None:
+        try:
+            root = StationLedger(
+                ofs=getattr(prop, 'ofs', ''),
+                run_start=str(getattr(prop, 'start_date_full', '') or ''),
+                run_end=str(getattr(prop, 'end_date_full', '') or ''),
+            )
+        except (TypeError, ValueError):  # pragma: no cover - defensive only
+            root = None
+        prop.station_ledger_root = root
+    if root is None:  # pragma: no cover - defensive only
+        prop.station_ledger = None
+        return
+    try:
+        prop.station_ledger = root.for_context(
+            variable=variable,
+            whichcast=getattr(prop, 'whichcast', ''),
+            filetype=getattr(prop, 'ofsfiletype', ''),
+        )
+    except (TypeError, ValueError):  # pragma: no cover - defensive only
+        prop.station_ledger = None
+
+
+def _note_legacy_ledger_files(prop: Any, logger: logging.Logger) -> None:
+    """Log once that pre-#224 per-variable ledger CSVs are superseded.
+
+    The files are left in place -- deleting a user's artifacts is out of
+    proportion to the clutter they cause.
+    """
+    if getattr(prop, '_legacy_ledger_notice_done', False):
+        return
+    prop._legacy_ledger_notice_done = True  # pylint: disable=protected-access
+    try:
+        pattern = os.path.join(
+            prop.control_files_path, f'station_ledger_{prop.ofs}_*.csv')
+        legacy = sorted(glob.glob(pattern))
+    except (OSError, TypeError, ValueError):  # pragma: no cover - defensive
+        return
+    if legacy:
+        logger.info(
+            '%d per-variable station ledger file(s) from an earlier release '
+            'are superseded by the combined station_ledger_%s.csv and may be '
+            'deleted: %s',
+            len(legacy), prop.ofs, ', '.join(os.path.basename(f) for f in legacy),
+        )
+
+
+def _emit_ledger(prop: Any, logger: logging.Logger) -> None:
+    """Log this variable's accounting and refresh the combined ledger CSV.
+
+    The per-variable summary keeps the familiar operator log output, while
+    the CSV is written once per OFS and merged with whatever is already on
+    disk so a second invocation (another whichcast, or a cached-control-file
+    pass) adds to the file rather than replacing it.
+    """
+    view = getattr(prop, 'station_ledger', None)
+    if view is not None:
+        view.log_summary(logger)
+    root = getattr(prop, 'station_ledger_root', None)
+    if root is None:
+        return
+    try:
+        csv_path = os.path.join(
+            prop.control_files_path, f'station_ledger_{prop.ofs}.csv')
+        written = root.to_csv(csv_path, merge_existing=True)
+        if written:
+            logger.info('Station accounting ledger written to %s', written)
+        else:
+            logger.debug('Station ledger CSV could not be written to %s',
+                         csv_path)
+        _note_legacy_ledger_files(prop, logger)
+    except (OSError, TypeError, ValueError):  # pragma: no cover - defensive
+        logger.debug('Failed to write station ledger CSV', exc_info=True)
+
+
 def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                           station_id_to_idx, prop, name_var, logger):
     """
@@ -622,16 +714,46 @@ def skill(read_station_ctl_file, read_ofs_ctl_file, prop, name_var, logger):
 
     ledger = getattr(prop, 'station_ledger', None)
     if ledger is not None:
-        ledger.note_stage(
-            'obs_ctl',
-            count_in=len(read_station_ctl_file[0]),
-            note='stations with retrievable obs data (obs station ctl file)',
-        )
-        ledger.note_stage(
-            'model_ctl',
-            count_out=len(read_ofs_ctl_file[-1]),
-            note='obs stations matched to a model location (model ctl file)',
-        )
+        # The inventory reconciliation records ``obs_ctl`` in units of
+        # inventory *stations* (in -> out). Only fall back to the bare
+        # control-file line count when it did not run.
+        if not ledger.has_stage('obs_ctl'):
+            ledger.note_stage(
+                'obs_ctl',
+                count_in=len(read_station_ctl_file[0]),
+                note=(
+                    'obs station ctl file entries (inventory reconciliation '
+                    'did not run for this context)'
+                ),
+            )
+        # Recorded unconditionally and under its own stage name because the
+        # unit differs: currents control files carry one line per ADCP bin,
+        # so this is the denominator ``model_ctl`` and ``skill_csv`` are
+        # counted in. Letting it share the ``obs_ctl`` stage name made the
+        # chain read 3 stations out -> 18 stations in (issue #224).
+        if not ledger.has_stage('obs_ctl_lines'):
+            ledger.note_stage(
+                'obs_ctl_lines',
+                count_out=len(read_station_ctl_file[0]),
+                note=(
+                    'lines in the obs station ctl file (one per station, or '
+                    'one per ADCP bin for currents)'
+                ),
+            )
+        # Cast-independent: the model control file is built once and reused
+        # by every whichcast, so guard against one identical row per cast.
+        if not ledger.has_stage('model_ctl'):
+            ledger.note_stage(
+                'model_ctl',
+                count_out=len(read_ofs_ctl_file[-1]),
+                note='obs stations matched to a model location (model ctl file)',
+            )
+        # The pairing loop below always executes these three stages, but
+        # they only ever emit rows when something is dropped. Declare them
+        # so a clean pass supersedes an earlier run's drop rows instead of
+        # letting them survive as a stale explanation (issue #224).
+        for pairing_stage in PAIRING_STAGES:
+            ledger.mark_stage_run(pairing_stage)
 
     # O(1) station ID -> obs-row lookup, computed once and shared with workers
     station_id_to_idx = {
@@ -1045,22 +1167,18 @@ def get_skill(prop, logger):
     )
 
     def _skill_for_variable(variable, p):
+        """Process one variable and always emit the accounting ledger."""
+        _attach_ledger_view(p, variable)
+        try:
+            _skill_for_variable_body(variable, p)
+        finally:
+            # The blank-obs-ctl early return and any exception raised
+            # mid-variable must still leave the combined ledger on disk.
+            _emit_ledger(p, logger)
+
+    def _skill_for_variable_body(variable, p):
         """Process skill assessment for a single variable."""
         name_var = name_convent(variable)
-
-        # Attach a fresh station-drop ledger for this variable so every
-        # stage (matching, pairing, temporal overlap) can record why a
-        # station did or did not survive to the final CSV. Best-effort:
-        # the workflow runs identically if ledger construction fails.
-        try:
-            p.station_ledger = StationLedger(
-                ofs=getattr(p, 'ofs', ''),
-                variable=variable,
-                whichcast=getattr(p, 'whichcast', ''),
-                filetype=getattr(p, 'ofsfiletype', ''),
-            )
-        except (TypeError, ValueError):  # pragma: no cover - defensive only
-            p.station_ledger = None
 
         # =================================================================
         # This will try to read the station ctl file for the given ofs and
@@ -1086,6 +1204,24 @@ def get_skill(prop, logger):
             get_station_observations(p, logger)
         read_station_ctl_file = \
             station_ctl_file_extract(ctl_path)
+
+        # Reconcile the inventory against the obs ctl file so the ledger
+        # explains the very first reduction too -- stations that never
+        # reach the control file (issue #224). Done from the two files
+        # rather than inside the ctl writer so it also runs on the common
+        # cached-control-file pass, where the writer never executes.
+        reconcile_inventory(
+            getattr(p, 'station_ledger', None),
+            os.path.join(
+                p.control_files_path, f'inventory_all_{p.ofs}.csv'),
+            (
+                [row[0] for row in read_station_ctl_file[0]]
+                if read_station_ctl_file is not None else []
+            ),
+            variable,
+            logger,
+        )
+
         if read_station_ctl_file is not None:
             logger.info(
                 'Station ctl file (%s_%s_station.ctl) found in "%s/". '
@@ -1257,42 +1393,6 @@ def get_skill(prop, logger):
                 p.ofs,
                 variable,
             )
-
-        # Emit the station accounting ledger for this variable so the
-        # obs->matched->paired->CSV reductions are explained in one place
-        # rather than scattered across per-station INFO/ERROR lines.
-        ledger = getattr(p, 'station_ledger', None)
-        if ledger is not None:
-            ledger.log_summary(logger)
-            try:
-                csv_path = os.path.join(
-                    p.control_files_path,
-                    f'station_ledger_{p.ofs}_{name_var}_'
-                    f'{p.whichcast}_{p.ofsfiletype}.csv',
-                )
-                # A pass that ran fresh node matching is authoritative and
-                # always (re)writes the CSV. A pass that reused cached ctl
-                # files (node matching never ran) only writes when it has
-                # drops of its own to report or no CSV exists yet —
-                # otherwise it would overwrite a richer ledger from the
-                # matching pass with a header-only file.
-                if (
-                    ledger.has_stage('node_match')
-                    or ledger.has_drops
-                    or not os.path.isfile(csv_path)
-                ):
-                    written = ledger.to_csv(csv_path)
-                    if written:
-                        logger.info('Station accounting ledger written to %s',
-                                    written)
-                else:
-                    logger.debug(
-                        'Station ledger CSV at %s left in place: this pass '
-                        'reused cached station matching and recorded no '
-                        'drops', csv_path)
-            except (OSError, ValueError):  # pragma: no cover - defensive only
-                logger.debug('Failed to write station ledger CSV',
-                             exc_info=True)
 
     # Variable processing runs sequentially here. Variable parallelism
     # is handled inside get_node_ofs (which loads the model once and
