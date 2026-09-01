@@ -93,8 +93,10 @@ from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_ex
 from ofs_skill.obs_retrieval.utils import get_parallel_config
 from ofs_skill.skill_assessment.get_skill import get_skill
 from ofs_skill.utils import cache_manifest
+from ofs_skill.utils.series_continuation import DEFAULT_CONTINUE_OVERLAP_HOURS
 from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
+    created_this_run,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -705,6 +707,7 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
     """
     casts_needing_skill = set()
     run_window = parse_run_window(prop, logger)
+    continue_run = getattr(prop, 'continue_run', False)
     for i in range(len(read_ofs_ctl_file[1])):
         for cast in prop.whichcasts:
             current_cast = cast.lower()
@@ -714,14 +717,33 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
                 f'{read_ofs_ctl_file[1][i]}_{current_cast}_'
                 f'{prop.ofsfiletype}_pair.int'
             )
+            # A continuation run is about to extend the .obs/.prd this
+            # pair was built from, so whatever is here is by definition
+            # out of date -- and pairing is cheap next to the fetch and
+            # extraction it follows. Dropping every pair file (rather
+            # than only the ones that fail the coverage check) is what
+            # makes the result identical to a from-scratch run instead
+            # of merely close to it.
+            if (continue_run and os.path.isfile(pair_file)
+                    and not created_this_run(pair_file)):
+                # Only pairs left over from the earlier, shorter run.
+                # This function runs once per variable while get_skill
+                # re-pairs every variable, so without the
+                # created_this_run guard each variable would delete the
+                # pairs the previous variable's get_skill just wrote and
+                # force another full re-pair.
+                logger.info(
+                    'Continuation run: removing %s so pairing and skill '
+                    'are recomputed over the extended series.', pair_file)
+                remove_stale_artifact(
+                    pair_file, prop.data_skill_1d_pair_path, logger)
             # Pair filenames do not encode the run window, so a file left
             # over from an earlier run would be cropped to 0-1 points at
             # plot time. Delete it and regenerate instead.
-            if (
-                os.path.isfile(pair_file)
-                and run_window is not None
-                and not covers_run_window(pair_file, run_window[0], run_window[1], logger=logger)
-            ):
+            elif (os.path.isfile(pair_file) and run_window is not None
+                    and not covers_run_window(
+                        pair_file, run_window[0], run_window[1],
+                        logger=logger)):
                 logger.warning(
                     'Paired dataset %s does not cover the run window '
                     '%s to %s and is likely left over from an earlier '
@@ -1094,6 +1116,34 @@ def create_1dplot(prop, logger):
             'please set a start date that is before the current date.'
         )
         raise SystemExit(1)
+
+    # Continuation-run guards. Both excluded modes key their artifacts on
+    # something other than the assessment window -- forecast_a reshuffles
+    # the window per cycle and puts forecast_hr in the .prd name, and
+    # forecast-horizon runs write per-cycle CSVs instead of .prd files --
+    # so 'the tail missing from this window' is not a question either one
+    # can answer. Fall back to normal behavior rather than half-applying.
+    if getattr(prop, 'continue_run', False):
+        unsupported = None
+        if 'forecast_a' in prop.whichcasts:
+            unsupported = 'forecast_a'
+        elif prop.horizonskill:
+            unsupported = 'forecast-horizon (-hs)'
+        if unsupported is not None:
+            logger.warning(
+                'Continuation runs are not supported for %s runs; '
+                'ignoring --Continue_Run and regenerating as usual.',
+                unsupported)
+            prop.continue_run = False
+        else:
+            logger.info(
+                'Continuation run enabled: artifacts covering the start '
+                'of %s to %s will be extended with their missing tail '
+                '(re-fetching the last %g h before the seam) instead of '
+                'being regenerated.',
+                prop.start_date_full, prop.end_date_full,
+                getattr(prop, 'continue_overlap_hours',
+                        DEFAULT_CONTINUE_OVERLAP_HOURS))
 
     if prop.path is None:
         prop.path = dir_params['home']
@@ -1512,6 +1562,11 @@ def _run_pipeline(run_args):
     prop1.currents_bins_csv = run_args.Currents_Bins_Csv
     prop1.filecheck = run_args.Disable_Model_File_Check
     prop1.config_file = run_args.config
+    # getattr, not attribute access: the GUI builds its own params
+    # object, so a flag it does not know about must not crash a launch.
+    prop1.continue_run = getattr(run_args, 'Continue_Run', False)
+    prop1.continue_overlap_hours = getattr(
+        run_args, 'Continue_Overlap', DEFAULT_CONTINUE_OVERLAP_HOURS)
 
     # This can only be changed if directly running get_node_ofs.py!
     prop1.user_input_location = False
@@ -1614,10 +1669,13 @@ def main(argv=None):
         required=False,
         default=None,
         help='Optional path to a CSV that pins which CO-OPS ADCP bins are '
-        'processed and/or overrides their depth/orientation/name. '
-        'Columns: station_id,bin,depth,orientation,name. See the wiki: '
-        'https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment/wiki/CO%E2%80%90OPS-ADCP-current-processing',
-    )
+             'processed and/or overrides their depth/orientation/name. '
+             'Columns: station_id,bin,depth,orientation,name. See the wiki: '
+             # argparse %-expands help text, so the percent-encoded
+             # non-breaking hyphen in this URL has to be escaped or
+             # --help raises TypeError before printing anything.
+             'https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment'
+             '/wiki/CO%%E2%%80%%90OPS-ADCP-current-processing')
     parser.add_argument(
         '-df',
         '--Disable_Model_File_Check',
@@ -1628,8 +1686,30 @@ def main(argv=None):
         'but there are no corresponding model output NetCdfs.',
     )
     parser.add_argument(
-        '-c', '--config', help='Path to configuration file (default: conf/ofs_dps.conf)'
-    )
+        '-cr',
+        '--Continue_Run',
+        action='store_true',
+        help='Continue a previous assessment instead of regenerating it. '
+        'Pass the FULL window (-s = the original start, -e = the new end); '
+        'observations and model extractions that already cover the start of '
+        'that window are extended with only their missing tail, and pairing, '
+        'skill statistics and plots are recomputed over the whole series. '
+        'Artifacts that do not line up with the requested window are '
+        'regenerated from scratch as usual. Not supported for forecast_a or '
+        'forecast-horizon (-hs) runs.')
+    parser.add_argument(
+        '-co',
+        '--Continue_Overlap',
+        required=False,
+        type=float,
+        default=DEFAULT_CONTINUE_OVERLAP_HOURS,
+        help='Hours of already-retrieved data a continuation run re-fetches '
+        'before the seam, so late provider QC revisions replace what is on '
+        f'disk (default: {DEFAULT_CONTINUE_OVERLAP_HOURS:g}). Used with '
+        '--Continue_Run only.')
+    parser.add_argument(
+        '-c', '--config',
+        help='Path to configuration file (default: conf/ofs_dps.conf)')
 
     args = parser.parse_args(argv)
 
