@@ -45,8 +45,6 @@ Revisions:
 """
 import argparse
 import json
-import logging
-import logging.config
 import os
 import shlex
 import sys
@@ -88,19 +86,9 @@ def validate_and_initialize_parameters(prop):
     """
     # Setup logger
     _conf = getattr(prop, 'config_file', None)
-    config_file = utils.Utils(_conf).get_config_file()
-    log_config_file = (Path(__file__).parent.parent.parent / 'conf' / 'logging.conf').resolve()
-
-    if not os.path.isfile(log_config_file):
-        sys.exit('Logging config file not found. Abort!')
-    if not os.path.isfile(config_file):
-        sys.exit('Main config file not found. Abort!')
-
-    logging.config.fileConfig(log_config_file)
-    logger = logging.getLogger('root')
+    logger = utils.init_root_logger(
+        getattr(prop, 'path', None), utils.Utils(_conf).get_config_file())
     logger.info('Run command: %s', _format_run_command())
-    logger.info('Using config %s', config_file)
-    logger.info('Using log config %s', log_config_file)
     logger.info('--- Starting Visualization Process ---')
 
     # Load directory parameters
@@ -443,9 +431,9 @@ def _run_pipeline(run_args):
                 logger.error('Problem calling plotting_2d.plot_2d - ABORT')
                 logger.error('Exception: %s', e)
 
-            conf_settings = utils.Utils().read_config_section(
-                'settings', logger,
-            )
+            conf_settings = utils.Utils(
+                getattr(prop1, 'config_file', None),
+            ).read_config_section('settings', logger)
             static_plots = conf_settings.get(
                 'static_plots', 'False',
             ).lower() in ('true', '1', 'yes')

@@ -80,13 +80,10 @@ Remarks:
 """
 # Libraries:
 import argparse
-import logging
-import logging.config
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from pathlib import Path
 
 import geopandas as gpd
 import pandas as pd
@@ -339,18 +336,7 @@ def ofs_inventory_stations(ofs, start_date, end_date, path, stationowner,
     """
 
     if logger is None:
-        log_config_file = 'conf/logging.conf'
-        log_config_file = (Path(__file__).parent.parent.parent.parent/\
-                           log_config_file).resolve()
-
-        # Check if log file exists
-        if not os.path.isfile(log_config_file):
-            sys.exit(-1)
-
-        # Creater logger
-        logging.config.fileConfig(log_config_file)
-        logger = logging.getLogger('root')
-        logger.info('Using log config %s', log_config_file)
+        logger = utils.init_root_logger(path)
 
     logger.info('--- Starting Inventory Retrieval Process ---')
 

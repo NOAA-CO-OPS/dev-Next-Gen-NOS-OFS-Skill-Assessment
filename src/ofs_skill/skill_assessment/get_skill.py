@@ -7,8 +7,6 @@
 
 import copy
 import gc
-import logging
-import logging.config
 import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -724,31 +722,13 @@ def get_skill(prop, logger):
             ``logger`` is ``None``.
     """
 
+    _conf = getattr(prop, 'config_file', None)
     if logger is None:
-        config_file = utils.Utils().get_config_file()
-        log_config_file = utils.resolve_asset_path(
-            prop.path, 'conf', 'logging.conf')
-
-        # Check if log file exists
-        if not os.path.isfile(log_config_file):
-            print(f'Logging config not found: {log_config_file}. Abort!',
-                  file=sys.stderr)
-            sys.exit(-1)
-        # Check if config file exists
-        if not os.path.isfile(config_file):
-            print(f'Configuration file not found: {config_file}. Abort!',
-                  file=sys.stderr)
-            sys.exit(-1)
-
-        # Creater logger
-        logging.config.fileConfig(log_config_file)
-        logger = logging.getLogger('root')
-        logger.info('Using config %s', config_file)
-        logger.info('Using log config %s', log_config_file)
+        logger = utils.init_root_logger(
+            prop.path, utils.Utils(_conf).get_config_file())
 
     logger.info('--- Starting skill assessment process ---')
 
-    _conf = getattr(prop, 'config_file', None)
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
     prop.datum_list = (utils.Utils(_conf).read_config_section('datums', logger)\
                        ['datum_list']).split(' ')
