@@ -354,7 +354,20 @@ def _preload_static_coords(model, model_source, logger):
     candidate_coords = {
         'fvcom': ['lon', 'lat', 'lonc', 'latc', 'siglay', 'h', 'z'],
         'roms': ['lon_rho', 'lat_rho', 'mask_rho', 's_rho', 'h'],
-        'schism': ['lon', 'lat', 'station_name', 'zcoords', 'h'],
+        # SCHISM fields files carry SCHISM_hgrid_node_x/y rather than
+        # lon/lat — without them this pre-load found nothing on a fields
+        # run (observed: 'Pre-loaded 0 static coord(s)'), leaving the
+        # per-station datum lookups in format_waterlevel to contend on the
+        # HDF5 file lock once station threading became reachable for fields.
+        'schism': [
+            'lon',
+            'lat',
+            'station_name',
+            'zcoords',
+            'h',
+            'SCHISM_hgrid_node_x',
+            'SCHISM_hgrid_node_y',
+        ],
         'adcirc': ['lon', 'lat'],
     }
     names = candidate_coords.get(model_source, [])
@@ -434,6 +447,74 @@ def _resample_time_vars_only(model, time_name, time_step, logger):
 _BATCH_EXTRACT_TIME_CHUNK = 1000
 
 
+# Memory budget for a single dask.compute inside _batch_extract, in bytes.
+# Peak resident memory during extraction is roughly
+#     (concurrent computes) x (dask worker threads) x (one decompressed chunk)
+# and is INDEPENDENT of the time window, so _BATCH_EXTRACT_TIME_CHUNK cannot
+# bound it — num_workers is the knob. It only matters for "fat" chunks: a
+# SCHISM fields chunk is the whole spatial domain for one timestep (STOFS-3D
+# Atl: 3052121 nodes x 49 layers x 4 B = ~598 MB), so an unbounded threaded
+# scheduler on a 32-core host would try to hold ~19 GB per compute.
+_EXTRACT_MEM_BUDGET_BYTES = 8 * 1024**3
+# Never serialize below this: num_workers is also the read-concurrency knob,
+# and over NODD/S3 these chunks arrive as range requests. Dropping to 1-2
+# workers would trade a memory win for a wall-clock regression.
+_EXTRACT_MIN_WORKERS = 4
+# Chunks at or below this size are "thin" (stations files, out2d elevation);
+# leave those on dask's default scheduling, byte-identical to before.
+_EXTRACT_FAT_CHUNK_BYTES = 64 * 1024**2
+
+
+def _extract_num_workers(model, var_name, logger=None, n_vars=1, slots=None):
+    """Cap dask worker threads so fat-chunk extractions cannot exhaust RAM.
+
+    Returns ``None`` (dask's default) for thin chunks, so stations-file
+    behaviour is unchanged.
+
+    The budget is a whole-process one, so it is divided by BOTH multipliers
+    the naive form misses:
+
+    * ``slots`` — ``_extract_guard`` admits ``parallel_extract_slots``
+      concurrent computes under h5netcdf (default 2), which is precisely the
+      engine used for the SCHISM fields files this targets.
+    * ``n_vars`` — ``_batch_extract_multi`` fuses u and v into ONE compute,
+      so two fat chunks are resident per worker, not one.
+
+    Without both, a STOFS-3D-Atl currents run would compute 14 workers from
+    an 8 GiB budget and then actually peak near 33 GB.
+    """
+    try:
+        darr = model[var_name].data
+        chunksize = getattr(darr, 'chunksize', None)
+        if chunksize is None:
+            return None
+        itemsize = model[var_name].dtype.itemsize
+        chunk_bytes = int(np.prod(chunksize)) * int(itemsize)
+    except Exception:  # pragma: no cover - defensive; never block extraction
+        return None
+
+    if chunk_bytes <= _EXTRACT_FAT_CHUNK_BYTES:
+        return None
+
+    concurrent = max(1, int(slots or 1))
+    per_worker_bytes = chunk_bytes * max(1, int(n_vars))
+    budget = _EXTRACT_MEM_BUDGET_BYTES // concurrent
+    workers = int(min(max(_EXTRACT_MIN_WORKERS, budget // per_worker_bytes), 32))
+    if logger is not None:
+        logger.info(
+            'Fat chunks for %s (%.0f MB each, %d var(s), %d concurrent '
+            'compute slot(s)); capping dask workers at %d (~%.1f GB peak '
+            'across all slots)',
+            var_name,
+            chunk_bytes / 1024**2,
+            n_vars,
+            concurrent,
+            workers,
+            workers * per_worker_bytes * concurrent / 1024**3,
+        )
+    return workers
+
+
 def _batch_extract(
     model,
     var_name,
@@ -496,6 +577,7 @@ def _batch_extract(
 
     probe_da = model[var_name]
     has_dask = hasattr(probe_da.data, 'dask')
+    n_workers = _extract_num_workers(model, var_name, logger, slots=extract_slots)
 
     # Eager (non-Dask) path: per-station numpy materialization. No need
     # to chunk; the previous code path also handled this case in one go.
@@ -516,7 +598,7 @@ def _batch_extract(
         # implementation exactly when the dataset fits in one window.
         lazy = _select(probe_da, 0, n_time)
         with guard:
-            computed = dask.compute(*[s.data for s in lazy])
+            computed = dask.compute(*[s.data for s in lazy], num_workers=n_workers)
         return np.stack(computed, axis=1)
 
     n_chunks = (n_time + chunk - 1) // chunk
@@ -538,7 +620,7 @@ def _batch_extract(
         # for thread-unsafe engines, parallel_extract_slots concurrent
         # computes under h5netcdf (memory cap). See _extract_guard.
         with guard:
-            computed = dask.compute(*[s.data for s in lazy])
+            computed = dask.compute(*[s.data for s in lazy], num_workers=n_workers)
         parts.append(np.stack(computed, axis=1))
         if logger is not None:
             logger.info(
@@ -607,6 +689,9 @@ def _batch_extract_multi(
     # Use the first variable as the probe for the time axis. All vars
     # must share the same time dim by assumption — checked below.
     probe_var = var_names[0]
+    n_workers = _extract_num_workers(
+        model, probe_var, logger, n_vars=len(var_names), slots=extract_slots
+    )
     time_dim = model[probe_var].dims[0]
     n_time = int(model[probe_var].sizes[time_dim])
     for v in var_names[1:]:
@@ -648,7 +733,7 @@ def _batch_extract_multi(
         per_var_lazy = [_select_one(model[v], 0, n_time) for v in var_names]
         flat = [s.data for lst in per_var_lazy for s in lst]
         with guard:
-            computed = dask.compute(*flat)
+            computed = dask.compute(*flat, num_workers=n_workers)
         results = []
         for vi, _ in enumerate(var_names):
             start = vi * n
@@ -674,7 +759,7 @@ def _batch_extract_multi(
         per_var_lazy = [_select_one(model[v], t0, t1) for v in var_names]
         flat = [s.data for lst in per_var_lazy for s in lst]
         with guard:
-            computed = dask.compute(*flat)
+            computed = dask.compute(*flat, num_workers=n_workers)
         for vi in range(len(var_names)):
             start = vi * n
             parts_per_var[vi].append(np.stack(computed[start : start + n], axis=1))
@@ -707,6 +792,86 @@ def _extract_concurrency_kwargs(prop):
     }
 
 
+def _fields_scalar_layout(prop, model_var):
+    """Resolve the (variable, idx_first) layout for a scalar FIELDS extraction.
+
+    Returns ``(actual_var, idx_first)``, or ``None`` when this combination is
+    not expressible as a batched extraction and must stay on the sequential
+    per-station path.
+
+    The layouts here mirror ``format_temp_salt``/``format_waterlevel`` exactly
+    — that is the contract. SCHISM alone carries three different orders under
+    one ``model_source``:
+
+    * STOFS fields  -> ``[:, node, layer]``  (idx_first=True)
+    * SECOFS fields -> ``[:, layer, node]``  (idx_first=False)
+    * STOFS stations-> ``[:, station]``      (2-D, handled by the is_2d probe)
+
+    Every wrong permutation returns a correctly-shaped array of wrong numbers,
+    because both dims are large enough that a transposition does not raise.
+    """
+    src = prop.model_source
+    if src == 'fvcom':
+        return (model_var, False)
+    if src == 'adcirc':
+        # Only water level exists for STOFS-2D-Global; format_temp_salt and
+        # format_currents raise ValueError for temp/salt/currents. Returning a
+        # layout for those would batch a variable the sequential path refuses
+        # to produce.
+        return (model_var, False) if model_var == 'zeta' else None
+    if src == 'roms':
+        # ROMS fields is [:, layer, i, j] via roms_nodes()'s unravel_index —
+        # a 4-D selection _batch_extract cannot express. Excluded by policy,
+        # not by exception: for node numbers < len(s_rho) the wrong indexing
+        # would NOT raise, it would silently return the wrong location.
+        return None
+    if src == 'schism':
+        if 'stofs' in prop.ofs:
+            if model_var == 'zeta':
+                return ('elevation', False)  # out2d; 2-D, no layer axis
+            return ('temperature' if model_var == 'temp' else model_var, True)
+        if 'secofs' in prop.ofs:
+            # Substring test mirrors format_temp_salt's own `'secofs' in
+            # prop.ofs`. NB: SECOFS keeps 'temp' on disk — it must NOT be
+            # renamed to 'temperature' the way STOFS is.
+            return (model_var, False)
+        if model_var == 'zeta':
+            # format_waterlevel's SCHISM fields branch is NOT split on
+            # stofs/secofs — it handles every SCHISM OFS with a plain 2-D
+            # [:, node] read of 'zeta'. So loofs2 fields water level is
+            # batchable even though its temp/salt/currents are not.
+            return (model_var, False)
+        # Other SCHISM (e.g. loofs2) temp/salt has no fields branch in
+        # format_temp_salt at all — it would UnboundLocalError. Do not batch
+        # what the sequential path cannot do either.
+        return None
+    return None
+
+
+def _fields_current_layout(prop):
+    """Resolve ``(var_names, idx_first)`` for a FIELDS currents extraction.
+
+    Mirrors ``format_currents``. Returns ``None`` when not batchable.
+    """
+    src = prop.model_source
+    if src == 'fvcom':
+        return (['u', 'v'], False)
+    if src == 'roms':
+        return None  # 4-D [:, layer, i, j] — see _fields_scalar_layout
+    if src == 'schism':
+        if 'stofs' in prop.ofs:
+            return (['horizontalVelX', 'horizontalVelY'], True)
+        if prop.ofs in ('secofs',):
+            # Exact match, mirroring format_currents' own `prop.ofs in
+            # ['secofs']`. format_temp_salt uses a substring test instead;
+            # the two are inconsistent upstream, so each layout resolver
+            # copies the predicate of the function it mirrors rather than
+            # silently picking the looser one.
+            return (['u', 'v'], False)
+        return None
+    return None
+
+
 def _precompute_current_data(prop, model, ofs_ctlfile, logger):
     """Batch-extract current (u/v) station data in a single Dask compute call.
 
@@ -720,6 +885,22 @@ def _precompute_current_data(prop, model, ofs_ctlfile, logger):
     indices = [int(ofs_ctlfile[1][i]) for i in range(n_stations)]
     depths = [int(ofs_ctlfile[2][i]) for i in range(n_stations)]
     extract_kwargs = _extract_concurrency_kwargs(prop)
+
+    if prop.ofsfiletype == 'fields':
+        layout = _fields_current_layout(prop)
+        if layout is None:
+            return None
+        var_names, idx_first = layout
+        u_data, v_data = _batch_extract_multi(
+            model,
+            var_names,
+            indices,
+            depths,
+            idx_first=idx_first,
+            logger=logger,
+            **extract_kwargs,
+        )
+        return {'u_data': u_data, 'v_data': v_data}
 
     if prop.model_source == 'fvcom':
         u_data, v_data = _batch_extract_multi(
@@ -757,6 +938,32 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
     n_stations = len(ofs_ctlfile[1])
     indices = [int(ofs_ctlfile[1][i]) for i in range(n_stations)]
     depths = [int(ofs_ctlfile[2][i]) for i in range(n_stations)]
+
+    if prop.ofsfiletype == 'fields':
+        # Resolved before the stations-oriented rename block below: that
+        # block renames temp->temperature for ALL schism, which KeyErrors on
+        # SECOFS (it carries 'temp' on disk). Fields name resolution lives
+        # entirely in _fields_scalar_layout.
+        layout = _fields_scalar_layout(prop, model_var)
+        if layout is None:
+            return None
+        fields_var, idx_first = layout
+        extract_kwargs = _extract_concurrency_kwargs(prop)
+        if model[fields_var].ndim < 3:
+            scalar_data = _batch_extract(
+                model, fields_var, indices, None, logger=logger, **extract_kwargs
+            )
+        else:
+            scalar_data = _batch_extract(
+                model,
+                fields_var,
+                indices,
+                depths,
+                idx_first=idx_first,
+                logger=logger,
+                **extract_kwargs,
+            )
+        return {'scalar_data': scalar_data}
 
     actual_var = model_var
     if prop.model_source == 'roms' and model_var == 'salinity':
@@ -841,13 +1048,22 @@ def _precompute_stations_data(prop, model, ofs_ctlfile, model_var, logger):
     if model_var in ('u', 'u_east', 'horizontalVelX', 'currents'):
         # Current variables — need u and v
         current_result = _precompute_current_data(prop, model, ofs_ctlfile, logger)
+        if current_result is None:
+            return None
         result.update(current_result)
     else:
         # Scalar variables (temp, salt, water level)
         scalar_result = _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger)
+        if scalar_result is None:
+            return None
         result.update(scalar_result)
 
-    logger.info('Pre-computed batch extraction for %d stations, var=%s', n_stations, model_var)
+    logger.info(
+        'Pre-computed batch extraction for %d stations, var=%s, filetype=%s',
+        n_stations,
+        model_var,
+        prop.ofsfiletype,
+    )
     return result
 
 
@@ -856,10 +1072,15 @@ def format_temp_salt(prop, model, ofs_ctlfile, model_var, i, precomputed=None):
     extract temperature and salinity time series from concatenated model data
     """
 
-    if precomputed is not None and prop.ofsfiletype == 'stations':
+    if precomputed is not None:
         model_time = precomputed['model_time']
         model_obs = precomputed['scalar_data'][:, i].copy()
-        if prop.model_source == 'schism':
+        # Sentinel masking is a STATIONS-only behaviour today. The fields
+        # code path has never masked, so gating it on ofsfiletype keeps the
+        # batch path byte-identical to the sequential one it replaces.
+        # (Extending masking to fields is a real but separate fix — it moves
+        # published skill numbers and needs cache invalidation.)
+        if prop.model_source == 'schism' and prop.ofsfiletype == 'stations':
             model_obs = _mask_schism_sentinels(
                 model_obs, model_var, ofs_ctlfile[4][i], prop.ofs, logger
             )
@@ -976,12 +1197,18 @@ def format_currents(prop, model, ofs_ctlfile, i, precomputed=None):
     extract current velocity time series from concatenated model data
     """
 
-    if precomputed is not None and prop.ofsfiletype == 'stations':
+    if precomputed is not None:
         mfp = ModelFormatProperties()
         mfp.model_time = precomputed['model_time']
+        # .copy() is load-bearing: these are views into an array shared by
+        # every station. _mask_schism_sentinels used to copy internally, but
+        # it no longer runs on the fields path, so without an explicit copy
+        # any later in-place op here is a cross-station race under the
+        # station-level ThreadPoolExecutor.
         u_i = precomputed['u_data'][:, i]
         v_i = precomputed['v_data'][:, i]
-        if prop.model_source == 'schism':
+        # STATIONS-only, as in format_temp_salt — keeps fields byte-identical.
+        if prop.model_source == 'schism' and prop.ofsfiletype == 'stations':
             station_id = ofs_ctlfile[4][i]
             u_i = _mask_schism_sentinels(u_i, 'currents_uv', station_id, prop.ofs, logger)
             v_i = _mask_schism_sentinels(v_i, 'currents_uv', station_id, prop.ofs, logger)
@@ -1150,13 +1377,25 @@ def format_waterlevel(prop, model, ofs_ctlfile, model_var, i, logger, precompute
     datum_offset = get_datum_offset_func(prop, int(ofs_ctlfile[1][i]), model, id_number, logger)
     logger.info(f'Datum offset for station {id_number} (node {ofs_ctlfile[1][i]}): {datum_offset}')
 
-    if precomputed is not None and prop.ofsfiletype == 'stations':
+    if precomputed is not None:
         model_time = precomputed['model_time']
         model_obs = precomputed['scalar_data'][:, i].copy()
         if prop.model_source == 'schism':
+            if prop.ofsfiletype == 'fields':
+                # The sequential SCHISM fields branch adds the ctl depth
+                # column before the datum shift. It is +0.0 in the standard
+                # pipeline (index_nearest_depth returns 0.0 for wl) but not
+                # for user-supplied or legacy ctl files, so it must not be
+                # silently dropped here.
+                model_obs = model_obs + ofs_ctlfile[3][i]
             if datum_offset > -999 and datum_offset < 999:
                 sign = 1 if 'stofs' in prop.ofs else -1
                 model_obs = model_obs + sign * datum_offset
+        elif prop.model_source == 'adcirc':
+            # adcirc carries the upper guard too — do not fold it into the
+            # generic branch below.
+            if datum_offset > -999 and datum_offset < 999:
+                model_obs = model_obs - datum_offset
         else:
             if datum_offset > -999:
                 model_obs = model_obs - datum_offset
@@ -1853,18 +2092,32 @@ def get_node_ofs(prop, logger, model_dataset=None):
                     )
                     return
 
-            # Batch-extract all station data if using stations files
+            # Batch-extract all station data. Applies to BOTH stations and
+            # fields files: the win is that each backing chunk is read and
+            # decompressed once for all N stations instead of once per
+            # station. That matters most for SCHISM fields, where one HDF5
+            # chunk is the entire spatial domain for a timestep (~600 MB),
+            # so the per-station path re-inflates the whole domain N times.
             precomputed = None
-            if prop_local.ofsfiletype == 'stations':
+            if prop_local.ofsfiletype in ('stations', 'fields'):
                 try:
                     precomputed = _precompute_stations_data(
                         prop_local, model, ofs_ctlfile, name_conventions[-1], logger
                     )
+                    if precomputed is None:
+                        logger.info(
+                            'No batch extraction layout for %s %s %s files; '
+                            'using per-station extraction.',
+                            prop_local.ofs,
+                            prop_local.model_source,
+                            prop_local.ofsfiletype,
+                        )
                 except Exception as ex:
                     logger.warning(
                         'Batch precomputation failed, falling back to '
                         'per-station extraction: %s',
                         ex,
+                        exc_info=True,
                     )
                     precomputed = None
 
@@ -2073,6 +2326,14 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         except Exception as ex:
                             logger.error('Station processing failed for %s: %s', variable, ex)
             else:
+                logger.info(
+                    'Processing %d stations sequentially for %s '
+                    '(parallel_stations=%s, batch precompute=%s)',
+                    n_stations,
+                    variable,
+                    bool(parallel_cfg.get('parallel_stations')),
+                    'on' if precomputed is not None else 'off',
+                )
                 for i in range(n_stations):
                     datum_offset, model_station = _process_single_station(
                         i,
