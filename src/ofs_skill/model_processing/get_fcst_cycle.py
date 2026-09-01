@@ -293,7 +293,7 @@ def get_fcst_dates(prop, logger):
             else:
                 sdate = prop.start_date_full.split('-')[0]
                 sdate = sdate[0:4] + '-' + sdate[4:6] + '-' + sdate[6:]
-        except AttributeError:
+        except (AttributeError, TypeError):
             if not use_s3_fallback and prop.forecast_hr == 'now':
                 logger.error('Please enable S3 fallback in the ofs_dps.conf '
                              'file to run forecast_a in "now" mode!')
@@ -304,6 +304,11 @@ def get_fcst_dates(prop, logger):
         try:
             int(prop.forecast_hr[:-1])
         except ValueError:
+            if 'now' not in str(prop.forecast_hr).lower():
+                logger.error(
+                    "Invalid forecast cycle %r: use 'now' or a cycle hour "
+                    "such as '06z'. Abort!", prop.forecast_hr)
+                raise SystemExit(1)
             logger.warning('Cannot run forecast_a in "now" mode without using '
                            'S3 fallback enabled! Changing forecast cycle to '
                            '00Z, or nearest cycle to 00Z...')
@@ -329,7 +334,7 @@ def get_fcst_dates(prop, logger):
             sdatetime = sdatetime + \
                 timedelta(hours=int(dist[np.nanargmin(np.abs(dist))]))
             # Display warning
-            prop.forecast_hr = sdatetime.strftime('%H')
+            prop.forecast_hr = sdatetime.strftime('%H') + 'z'
             logger.warning(
                 f'Adjusted input forecast cycle hour from {requested_hour} to '
                 f'{prop.forecast_hr} for {prop.ofs}')
@@ -342,6 +347,12 @@ def get_fcst_dates(prop, logger):
         url_root = url_params[get_s3_bucket(prop.ofs)]
         bucket_name = url_root.split('//')[1].split('.')[0]
         fcst_start = get_most_recent_file_date(bucket_name,prop.ofs,logger)
+
+    else:
+        logger.error('Cannot resolve forecast cycle from forecast_hr=%r '
+                     '(use_s3_fallback=%s). Abort!',
+                     prop.forecast_hr, use_s3_fallback)
+        raise SystemExit(1)
 
     # Calculate end date based on forecast length
     try:

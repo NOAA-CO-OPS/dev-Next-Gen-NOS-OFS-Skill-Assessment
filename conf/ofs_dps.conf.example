@@ -209,9 +209,6 @@ parallel_stations=False
 # Plotting parallelism: generate station plots in parallel
 parallel_plotting=False
 
-# Forecast cycle parallelism: process forecast_a cycles concurrently
-parallel_forecast_cycles=False
-
 # Obs variable parallelism: download obs for all variables concurrently
 parallel_obs_variables=False
 
