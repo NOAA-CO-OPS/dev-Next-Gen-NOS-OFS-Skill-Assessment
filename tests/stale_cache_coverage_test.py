@@ -30,6 +30,7 @@ Covers:
 
 import importlib.util
 import logging
+import random
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -38,6 +39,7 @@ import pandas as pd
 import pytest
 
 from ofs_skill.utils.timeseries_coverage import (
+    _row_datetime,
     covers_run_window,
     parse_run_window,
     read_first_last_timestamps,
@@ -78,6 +80,32 @@ def _write_pair_file(path, start, hours, header=True):
 def _make_logger():
     """Return a plain logger for functions that require one."""
     return logging.getLogger('stale_cache_test')
+
+
+def _read_first_last_full_scan(path):
+    """Reference reader: parse every line, keep the first and last hit.
+
+    This is the behaviour ``read_first_last_timestamps`` shipped with
+    before it was narrowed to parsing only the ends of the file. It is
+    kept here so the narrowed implementation can be held to exact
+    agreement with it -- the function gates artifact deletion, so a
+    difference in what it reports means either fresh files being deleted
+    or stale ones being served.
+    """
+    first = None
+    last = None
+    try:
+        with open(path, encoding='utf-8') as file_handle:
+            for line in file_handle:
+                stamp = _row_datetime(line)
+                if stamp is None:
+                    continue
+                if first is None:
+                    first = stamp
+                last = stamp
+    except (OSError, UnicodeDecodeError):
+        return None, None
+    return first, last
 
 
 def _paired_df(start, hours):
@@ -260,6 +288,152 @@ class TestTimeseriesCoverage:
         assert covers_run_window(
             pair, WINDOW_START, WINDOW_END,
             now=WINDOW_START - timedelta(hours=1))
+
+    def test_read_first_last_ignores_trailing_blank_lines(self, tmp_path):
+        """Blank lines after the data must not hide the last timestamp."""
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=5)
+        with pair.open('a', encoding='utf-8') as handle:
+            handle.write('\n\n   \n')
+        first, last = read_first_last_timestamps(pair)
+        assert first == WINDOW_START
+        assert last == WINDOW_START + timedelta(hours=4)
+
+    def test_read_first_last_ignores_trailing_malformed_row(self, tmp_path):
+        """A truncated final row is skipped in favour of the last good
+        one -- a run killed mid-write must not look shorter than it is."""
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=5)
+        with pair.open('a', encoding='utf-8') as handle:
+            handle.write('2461127.25 2026 3\n')
+        first, last = read_first_last_timestamps(pair)
+        assert first == WINDOW_START
+        assert last == WINDOW_START + timedelta(hours=4)
+
+    def test_read_first_last_single_data_row(self, tmp_path):
+        """One data row is both the first and the last timestamp."""
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=1)
+        assert read_first_last_timestamps(pair) == (
+            WINDOW_START, WINDOW_START)
+
+    def test_read_first_last_empty_file(self, tmp_path):
+        """An empty file reports no timestamps rather than raising."""
+        pair = tmp_path / 'pair.int'
+        pair.write_text('', encoding='utf-8')
+        assert read_first_last_timestamps(pair) == (None, None)
+
+    def test_read_first_last_missing_file(self, tmp_path):
+        """A missing file fails open with no timestamps."""
+        assert read_first_last_timestamps(
+            tmp_path / 'absent.int') == (None, None)
+
+    def test_read_first_last_undecodable_bytes_anywhere(self, tmp_path):
+        """Undecodable bytes in the middle still fail open.
+
+        The ends of this file parse cleanly, so a reader that only
+        looked at the ends -- or that read a fixed-size head and tail --
+        would report timestamps where the previous one reported none,
+        and a file that used to be kept could start being deleted. The
+        file is deliberately far larger than any plausible buffer so a
+        partial read cannot pass this by accident.
+        """
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=4000)
+        raw = pair.read_bytes()
+        assert len(raw) > 128 * 1024, 'file must exceed any partial read'
+        midpoint = len(raw) // 2
+        corrupted = raw[:midpoint] + b'\xff\xfe' + raw[midpoint:]
+        pair.write_bytes(corrupted)
+        assert read_first_last_timestamps(pair) == (None, None)
+        assert read_first_last_timestamps(pair) == \
+            _read_first_last_full_scan(pair)
+
+    @pytest.mark.parametrize('case', [
+        'header_hourly', 'no_header', 'trailing_blanks', 'trailing_garbage',
+        'single_row', 'empty', 'no_parseable_rows', 'crlf', 'binary',
+        'leading_garbage', 'overflow_row',
+    ])
+    def test_read_first_last_matches_full_scan(self, tmp_path, case):
+        """Narrowed reader agrees with the full-scan reference exactly."""
+        pair = tmp_path / f'{case}.int'
+        if case == 'header_hourly':
+            _write_pair_file(pair, WINDOW_START, hours=12)
+        elif case == 'no_header':
+            _write_pair_file(pair, WINDOW_START, hours=12, header=False)
+        elif case == 'trailing_blanks':
+            _write_pair_file(pair, WINDOW_START, hours=12)
+            with pair.open('a', encoding='utf-8') as handle:
+                handle.write('\n \n\n')
+        elif case == 'trailing_garbage':
+            _write_pair_file(pair, WINDOW_START, hours=12)
+            with pair.open('a', encoding='utf-8') as handle:
+                handle.write('partial row 2026\n')
+        elif case == 'single_row':
+            _write_pair_file(pair, WINDOW_START, hours=1, header=False)
+        elif case == 'empty':
+            pair.write_text('', encoding='utf-8')
+        elif case == 'no_parseable_rows':
+            pair.write_text('header only\nstill nothing\n', encoding='utf-8')
+        elif case == 'crlf':
+            _write_pair_file(pair, WINDOW_START, hours=12)
+            pair.write_bytes(
+                pair.read_text(encoding='utf-8').replace(
+                    '\n', '\r\n').encode('utf-8'))
+        elif case == 'binary':
+            pair.write_bytes(b'\x00\xff\xfe\x93 not utf-8 \x81\x82')
+        elif case == 'leading_garbage':
+            _write_pair_file(pair, WINDOW_START, hours=12)
+            pair.write_text(
+                'junk\n\n' + pair.read_text(encoding='utf-8'),
+                encoding='utf-8')
+        elif case == 'overflow_row':
+            _write_pair_file(pair, WINDOW_START, hours=12)
+            with pair.open('a', encoding='utf-8') as handle:
+                handle.write('2461127.25 1e999 3 28 18 0 7.4 5.3 -2.1\n')
+
+        assert read_first_last_timestamps(pair) == \
+            _read_first_last_full_scan(pair)
+
+    def test_read_first_last_matches_full_scan_on_random_files(
+            self, tmp_path):
+        """Seeded sweep of ragged files: ends-only must equal full scan.
+
+        The parametrized cases above cover the shapes seen in practice;
+        this covers the ones that have not been seen yet. Files are
+        assembled from a mix of good rows, blanks, whitespace-only
+        lines, short rows, non-numeric rows, and out-of-range dates, in
+        random order, with and without a trailing newline.
+        """
+        pieces = [
+            None,  # placeholder for a real data row, filled in below
+            '', '   ', '\t', 'Julian days, Year, Month, Day, Hours, Minutes',
+            '2461127.25 2026 3', 'not a row at all',
+            '2461127.25 2026 13 40 99 99 1.0 2.0 3.0',
+            '2461127.25 1e999 3 28 18 0 7.4 5.3 -2.1',
+            '2461127.25 abc 3 28 18 0 7.4',
+        ]
+        rng = random.Random(2371)
+        for trial in range(400):
+            lines = []
+            for _ in range(rng.randint(0, 14)):
+                choice = rng.choice(pieces)
+                if choice is None:
+                    stamp = WINDOW_START + timedelta(
+                        hours=rng.randrange(0, 72))
+                    lines.append(
+                        f'2461127.25 {stamp.year} {stamp.month} '
+                        f'{stamp.day} {stamp.hour} {stamp.minute} '
+                        f'{rng.uniform(-3, 3):.4f} 5.3 -2.1')
+                else:
+                    lines.append(choice)
+            text = '\n'.join(lines)
+            if trial % 2 == 0 and lines:
+                text += '\n'
+            path = tmp_path / f'r{trial}.int'
+            path.write_text(text, encoding='utf-8')
+            assert read_first_last_timestamps(path) == \
+                _read_first_last_full_scan(path), text
 
     def test_late_starting_file_fails(self, tmp_path):
         """A file whose data begins well after the window start (e.g. a
