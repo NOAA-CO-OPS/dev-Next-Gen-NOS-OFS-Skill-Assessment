@@ -221,6 +221,18 @@ def make_2d_skill_maps(
         colorscale = 'deep'
         min_val = 10*(np.floor(np.nanmin(df[get_stat_name(maptype)])/10))
         max_val = 10*(np.ceil(np.nanmax(df[get_stat_name(maptype)])/10))
+        # For a nearly-isothermal field the floor/ceil-to-10 heuristic can
+        # collapse to a single value (min_val == max_val), which plotly
+        # rejects and renders as a blank colorbar. Fall back to the raw data
+        # range (widened by 1 unit if still degenerate) so the map stays
+        # readable.
+        if min_val >= max_val:
+            data_min = float(np.nanmin(df[get_stat_name(maptype)]))
+            data_max = float(np.nanmax(df[get_stat_name(maptype)]))
+            if data_min == data_max:
+                data_min -= 1.0
+                data_max += 1.0
+            min_val, max_val = data_min, data_max
         range_color = [min_val, max_val]
         tickvals = np.arange(range_color[0], range_color[1]+2, 2)
         cbartitle = get_stat_name(maptype) + ' (\u00b0C)'

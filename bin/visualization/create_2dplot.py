@@ -67,6 +67,32 @@ from ofs_skill.model_processing import (
 from ofs_skill.obs_retrieval import utils
 from ofs_skill.visualization import plotting_2d
 
+# Config string values treated as True (case-insensitive, whitespace-trimmed).
+# Mirrors ConfigParser.getboolean()'s truthy set minus 'on'; kept consistent
+# across the [settings] booleans this module resolves (make_plotly_2d_maps,
+# static_plots).
+_TRUTHY = frozenset(('true', '1', 'yes'))
+
+
+def _coerce_bool(value: object, default: str = 'False') -> bool:
+    """Coerce a config-file value to a bool.
+
+    ``'true'``, ``'1'`` and ``'yes'`` (case-insensitive, surrounding
+    whitespace ignored) map to ``True``; everything else, including a missing
+    value, maps to ``False``.
+
+    Args:
+        value: Raw config value, typically the result of ``dict.get(key)``.
+            ``None`` is treated as absent and falls back to ``default``.
+        default: String used when ``value`` is ``None``.
+
+    Returns:
+        The coerced boolean.
+    """
+    if value is None:
+        value = default
+    return str(value).strip().lower() in _TRUTHY
+
 
 def _format_run_command():
     """Reconstruct the exact python command used to launch this run.
@@ -412,6 +438,11 @@ def _run_pipeline(run_args):
 
     prop1, logger = validate_and_initialize_parameters(prop1)
 
+    # Resolve optional [settings] toggles once, honoring the run's config file.
+    conf_settings = utils.Utils(prop1.config_file).read_config_section('settings', logger)
+    prop1.make_plotly_2d_maps = _coerce_bool(conf_settings.get('make_plotly_2d_maps'))
+    prop1.static_plots = _coerce_bool(conf_settings.get('static_plots'))
+
     for i in prop1.whichcasts:
         try:
             prop1.whichcast = i.lower()
@@ -443,13 +474,7 @@ def _run_pipeline(run_args):
                 logger.error('Problem calling plotting_2d.plot_2d - ABORT')
                 logger.error('Exception: %s', e)
 
-            conf_settings = utils.Utils().read_config_section(
-                'settings', logger,
-            )
-            static_plots = conf_settings.get(
-                'static_plots', 'False',
-            ).lower() in ('true', '1', 'yes')
-            if static_plots:
+            if prop1.static_plots:
                 logger.info('Generating static 2D offline maps...')
                 # Honor the configured data_dir/visual_dir rather than a
                 # hardcoded 'data'. visuals_2d_station_path is already
