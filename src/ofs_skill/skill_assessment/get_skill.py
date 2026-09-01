@@ -34,7 +34,10 @@ from ofs_skill.tidal_analysis.extremes import extract_water_level_extrema
 from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import series_rows_to_skip, strip_model_ctl_header
 from ofs_skill.utils.timeseries_coverage import (
+    clamp_window_to_coverage,
     covers_run_window,
+    created_this_run,
+    dataset_time_bounds,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -914,11 +917,16 @@ def get_skill(prop, logger):
                         name_var+'_station.obs'))
             if os.path.isfile(obs_path):
                 if os.path.getsize(obs_path) > 0:
+                    # A file this process fetched is not "left over from
+                    # an earlier run" no matter what it covers — the
+                    # provider has no more data. Re-deleting it would
+                    # just re-fetch the identical series.
                     obs_sig = cache_manifest.run_signature(
                         p, variable=_NAME_TO_VARIABLE.get(name_var, name_var))
                     stale_params = not cache_manifest.artifact_is_fresh(
                         obs_path, obs_sig)
                     if (run_window is not None
+                            and not created_this_run(obs_path)
                             and not covers_run_window(
                                 obs_path, run_window[0], run_window[1],
                                 logger=logger_)):
@@ -973,8 +981,18 @@ def get_skill(prop, logger):
         window, so files left over from an earlier run would be reused
         verbatim. Delete stale files first, then extract once so all
         missing files are recreated for the current window.
+
+        The window checked against is clamped to the model catalog's
+        actual time coverage when the dataset is in hand: if the archive
+        cannot reach the requested window edges (files dropped after a
+        mid-window model-configuration change, or archive gaps), a fresh
+        extraction can never satisfy the raw window and deletion would
+        loop forever re-extracting identical data.
         """
         run_window = parse_run_window(p, logger_)
+        run_window = clamp_window_to_coverage(
+            run_window, dataset_time_bounds(cached_model),
+            logger=logger_, label=name_var)
         needs_model = False
         for i in range(0, len(read_ofs_ctl_file[-1])):
             if p.whichcast == 'forecast_a':
@@ -992,6 +1010,9 @@ def get_skill(prop, logger):
                     f'{p.ofsfiletype}_model.prd'
                 )
             if os.path.isfile(prd_path):
+                # Never delete a file the current process extracted:
+                # regeneration would reproduce it byte-for-byte, at the
+                # cost of a full extraction pass per variable.
                 prd_extra = {'whichcast': p.whichcast}
                 if p.whichcast == 'forecast_a':
                     prd_extra['forecast_hr'] = p.forecast_hr
@@ -1001,6 +1022,7 @@ def get_skill(prop, logger):
                 stale_params = not cache_manifest.artifact_is_fresh(
                     prd_path, prd_sig)
                 if (run_window is not None
+                        and not created_this_run(prd_path)
                         and not covers_run_window(
                             prd_path, run_window[0], run_window[1],
                             logger=logger_)):

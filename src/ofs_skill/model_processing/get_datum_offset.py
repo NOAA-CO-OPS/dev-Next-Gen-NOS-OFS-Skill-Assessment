@@ -50,6 +50,71 @@ from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_ex
 # before it use Correction1. The secofs_vdatums.nc file is stamped this date.
 SECOFS_MODELZERO_TRANSITION = '04/30/2026'
 
+# Paths already reported missing by ``_open_secofs_vdatums``. The open is
+# attempted once per station, so without this the same missing-file error
+# (plus, previously, a multi-frame HDF5-DIAG stack) repeats hundreds of
+# times and buries the rest of the log.
+_MISSING_VDATUM_REPORTED = set()
+
+
+def _open_secofs_vdatums(corrections_path: str,
+                         logger: Logger) -> xr.Dataset | None:
+    """Open ``secofs_vdatums.nc`` next to the SECOFS corrections file.
+
+    Checks existence before handing the path to xarray: probing a
+    missing file through the netCDF engines emits an HDF5-DIAG stack
+    per attempt, and this path runs once per station. The first missing
+    occurrence logs at ERROR, repeats at DEBUG.
+    """
+    head, _ = os.path.split(corrections_path)
+    nc_path = os.path.join(head, 'secofs_vdatums.nc')
+    if not os.path.isfile(nc_path):
+        if nc_path in _MISSING_VDATUM_REPORTED:
+            logger.debug('SECOFS vdatum file %s still missing.', nc_path)
+        else:
+            _MISSING_VDATUM_REPORTED.add(nc_path)
+            logger.error(
+                'Error finding SECOFS vdatum file -- datum conversion '
+                'is not possible. Expected %s (from the local_vdatum '
+                'path in ofs_dps.conf).', nc_path)
+        return None
+    try:
+        return xr.open_dataset(nc_path)
+    except (OSError, ValueError) as ex:
+        logger.error('Error reading SECOFS vdatum file %s (%s) -- datum '
+                     'conversion is not possible.', nc_path, ex)
+        return None
+
+
+def validate_secofs_local_vdatum(prop: Any, logger: Logger) -> None:
+    """Abort at parameter-validation time if SECOFS datum data is absent.
+
+    The generic datum availability check probes the vdatum file on the
+    NODD bucket, but SECOFS water-level conversion reads a *local*
+    corrections file (``directories.local_vdatum`` in ofs_dps.conf)
+    with ``secofs_vdatums.nc`` beside it as fallback. A wrong path (for
+    example the example config's ``Add_path_to`` placeholder) otherwise
+    surfaces only hours into the run, once per station, as ``-9994``
+    offsets — and the run still completes with unusable water levels.
+    """
+    dir_params = utils.Utils(
+        getattr(prop, 'config_file', None)).read_config_section(
+            'directories', logger)
+    path = dir_params.get('local_vdatum')
+    if not path:
+        logger.error(
+            'No local_vdatum path configured in ofs_dps.conf. SECOFS '
+            'water level datum conversion is not possible. Abort!')
+        raise SystemExit(1)
+    head, _ = os.path.split(path)
+    nc_path = os.path.join(head, 'secofs_vdatums.nc')
+    if not os.path.isfile(path) and not os.path.isfile(nc_path):
+        logger.error(
+            'SECOFS datum data not found: neither the corrections file '
+            '(%s) nor the vdatum grid (%s) exists. Check the '
+            'local_vdatum path in ofs_dps.conf. Abort!', path, nc_path)
+        raise SystemExit(1)
+
 
 def _close_quietly(obj: Any) -> None:
     """Close an xarray dataset (or anything with ``close``) without raising.
@@ -532,24 +597,12 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
                     wl_corr = float(vdatums[vdatums['ID']==int(id_number)][corr_col])*-1
                     return wl_corr
                 except (FileNotFoundError, TypeError, UnicodeDecodeError, ValueError):
-                    filename = 'secofs_vdatums.nc'
-                    head, tail = os.path.split(path)
-                    path = os.path.join(head, filename)
-                    try:
-                        vdatums = xr.open_dataset(path)
-                    except FileNotFoundError:
-                        logger.error('Error finding SECOFS vdatum file -- datum conversion '
-                                      'is not possible.')
+                    vdatums = _open_secofs_vdatums(path, logger)
+                    if vdatums is None:
                         return -9994
             else:
-                filename = 'secofs_vdatums.nc'
-                head, tail = os.path.split(path)
-                path = os.path.join(head, filename)
-                try:
-                    vdatums = xr.open_dataset(path)
-                except FileNotFoundError:
-                    logger.error('Error finding SECOFS vdatum file -- datum conversion '
-                                  'is not possible.')
+                vdatums = _open_secofs_vdatums(path, logger)
+                if vdatums is None:
                     return -9994
 
         # Set water levels to user-specified datum
