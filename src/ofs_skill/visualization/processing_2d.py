@@ -183,7 +183,10 @@ def parse_leaflet_json(model, netcdf_file_sat, prop1,
                Must have: model_source, ofs, whichcast, start/end dates
         write_model: Write the model 2D JSONs. Set False when an
             earlier call already wrote them for this window (both L3C
-            and SPoRT present), so the model output is not rewritten.
+            and SPoRT present). This also skips loading the model
+            variables, which is the dominant cost of this function, so a
+            dual-source run pays for the model read once rather than
+            twice.
 
     Returns:
         Status string indicating completion
@@ -223,6 +226,10 @@ def parse_leaflet_json(model, netcdf_file_sat, prop1,
     lon_grid = None
     lat_grid = None
     sst_in_model = None
+    ssh_in_model = None
+    sss_in_model = None
+    ssu_in_model = None
+    ssv_in_model = None
     if prop1.model_source == 'roms':
         logger.info('--- '+'ROMS: Calculating regular grid'+' ---')
         logger.info('Loading mask_rho...')
@@ -238,17 +245,26 @@ def parse_leaflet_json(model, netcdf_file_sat, prop1,
         [lat_grid, lon_grid] = resample_latlon(lats[mask], lons[mask], prop1)
         logger.info('Loading ocean_time...')
         ocean_dtime = np.array(model['ocean_time'], dtype='datetime64[ns]')
-        logger.info('Loading temperature data (this may take a while)...')
-        sst_in_model = np.squeeze(np.asarray(model.variables['temp'][:][:,-1,:,:],))
-        logger.info('Loading sea surface height...')
-        ssh_in_model = np.squeeze(np.asarray(model.variables['zeta'][:]))
-        logger.info('Loading salinity data...')
-        sss_in_model = np.squeeze(np.asarray(model.variables['salt'][:][:,-1,:,:]))
-        logger.info('Loading u velocity...')
-        ssu_in_model = np.squeeze(np.asarray(model.variables['u_east'][:][:,-1,:,:]))
-        logger.info('Loading v velocity...')
-        ssv_in_model = np.squeeze(np.asarray(model.variables['v_north'][:][:,-1,:,:]))
-        # -1 index for surface level
+        # Only the target grid and the time axis are needed to interpolate
+        # satellite data; the model variables below are needed solely to
+        # write the model JSONs. Loading them forces the whole
+        # (time, eta, xi) stack into memory, which is the dominant cost of
+        # this function -- skip it when this pass is not writing them.
+        if write_model:
+            logger.info('Loading temperature data (this may take a while)...')
+            sst_in_model = np.squeeze(np.asarray(model.variables['temp'][:][:,-1,:,:],))
+            logger.info('Loading sea surface height...')
+            ssh_in_model = np.squeeze(np.asarray(model.variables['zeta'][:]))
+            logger.info('Loading salinity data...')
+            sss_in_model = np.squeeze(np.asarray(model.variables['salt'][:][:,-1,:,:]))
+            logger.info('Loading u velocity...')
+            ssu_in_model = np.squeeze(np.asarray(model.variables['u_east'][:][:,-1,:,:]))
+            logger.info('Loading v velocity...')
+            ssv_in_model = np.squeeze(np.asarray(model.variables['v_north'][:][:,-1,:,:]))
+            # -1 index for surface level
+        else:
+            logger.info('Model variables already loaded and written for this '
+                        'window; skipping the model data load.')
         logger.info('--- '+'ROMS: finished calculating regular grid'+' ---')
 
     elif prop1.model_source == 'fvcom':
@@ -259,13 +275,19 @@ def parse_leaflet_json(model, netcdf_file_sat, prop1,
         lats_c = np.asarray(model.variables['latc'][:])
         [lat_grid, lon_grid] = resample_latlon(lats, lons, prop1)
         ocean_dtime = np.array(model['time'], dtype='datetime64[ns]')
-        # 0 index for surface level
-        sst_in_model = np.asarray(model.variables['temp'][:][:,0,:])
-        # 0 index for surface level
-        ssh_in_model = np.asarray(model.variables['zeta'][:])
-        sss_in_model = np.asarray(model.variables['salinity'][:][:,0,:])
-        ssu_in_model = np.asarray(model.variables['u'][:][:,0,:])
-        ssv_in_model = np.asarray(model.variables['v'][:][:,0,:])
+        # See the ROMS branch above: these are only needed to write the
+        # model JSONs.
+        if write_model:
+            # 0 index for surface level
+            sst_in_model = np.asarray(model.variables['temp'][:][:,0,:])
+            # 0 index for surface level
+            ssh_in_model = np.asarray(model.variables['zeta'][:])
+            sss_in_model = np.asarray(model.variables['salinity'][:][:,0,:])
+            ssu_in_model = np.asarray(model.variables['u'][:][:,0,:])
+            ssv_in_model = np.asarray(model.variables['v'][:][:,0,:])
+        else:
+            logger.info('Model variables already loaded and written for this '
+                        'window; skipping the model data load.')
         logger.info('--- '+'FVCOM: finished calculating regular grid'+' ---')
 
     ocean_dtime = [
