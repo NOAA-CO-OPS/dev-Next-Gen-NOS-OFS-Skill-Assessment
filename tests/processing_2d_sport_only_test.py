@@ -173,3 +173,73 @@ def test_no_satellite_run_still_writes_model_json(tmp_path):
     n_model, n_obs = _counts(prop)
     assert n_model > 0
     assert n_obs == 0
+
+
+class _SpyVariables:
+    """dict-like proxy that records which variables are read."""
+
+    def __init__(self, variables, log):
+        self._variables = variables
+        self._log = log
+
+    def __getitem__(self, key):
+        self._log.append(key)
+        return self._variables[key]
+
+    def __contains__(self, key):
+        return key in self._variables
+
+
+class _SpyDataset:
+    """xarray Dataset proxy recording variable access.
+
+    Lets a test assert on what the function actually *reads*, which is
+    where the cost is -- loading the model stack forces the whole
+    (time, ...) array into memory.
+    """
+
+    def __init__(self, dataset):
+        self._dataset = dataset
+        self.accessed: list[str] = []
+
+    @property
+    def variables(self):
+        return _SpyVariables(self._dataset.variables, self.accessed)
+
+    def __getitem__(self, key):
+        self.accessed.append(key)
+        return self._dataset[key]
+
+
+HEAVY_VARS = {'temp', 'zeta', 'salinity', 'u', 'v'}
+
+
+@pytest.mark.integration
+def test_write_model_false_skips_the_model_data_load(tmp_path):
+    """The dual-source case must not pay for the model read twice.
+
+    Loading the model variables dominates this function's run time, and
+    the satellite interpolation needs only the target grid and the time
+    axis -- so a pass that is not writing model JSONs should not load
+    them.
+    """
+    prop = _prop(tmp_path)
+    spy = _SpyDataset(_model_file(tmp_path))
+    processing_2d.parse_leaflet_json(
+        spy, _sport_file(tmp_path), prop, write_model=False)
+
+    loaded = HEAVY_VARS & set(spy.accessed)
+    assert not loaded, f'model variables loaded despite write_model=False: {loaded}'
+    # The cheap coordinate reads the satellite branch does need.
+    assert {'lon', 'lat'} <= set(spy.accessed)
+
+
+@pytest.mark.integration
+def test_write_model_true_loads_the_model_data(tmp_path):
+    """Control for the test above: the writing pass does load them."""
+    prop = _prop(tmp_path)
+    spy = _SpyDataset(_model_file(tmp_path))
+    processing_2d.parse_leaflet_json(
+        spy, _sport_file(tmp_path), prop, write_model=True)
+
+    assert HEAVY_VARS <= set(spy.accessed)
