@@ -48,6 +48,7 @@ import os
 import re
 import time
 from collections import Counter
+from collections.abc import Collection
 from logging import Logger
 from typing import Any
 
@@ -111,22 +112,34 @@ def cached_path_for_url(url: Any, cache_dir: str) -> str:
     return os.path.join(cache_dir, parent, basename)
 
 
-def _static_fingerprint(nc: netCDF4.Dataset,
-                        time_name: str | None) -> str:
-    """Hash the values of the file's small static (non-time) variables.
+def _static_fingerprints(nc: netCDF4.Dataset,
+                         time_name: str | None,
+                         ignore: Collection[str] = (),
+                         ) -> dict[str, str]:
+    """Hash each of the file's small static (non-time) variables.
 
     Multi-file concat with ``data_vars='minimal'`` requires static
-    variables (station x/y/lon/lat, names, sigma levels, ...) to be
+    variables (station lon/lat, names, sigma levels, ...) to be
     IDENTICAL across every file in the batch; a model configuration
     change mid-window (e.g. relocated stations after an outage) makes
     xarray raise ``MergeError: conflicting values for variable 'x'``.
     Hashing these values per file lets the batch-consistency step spot
-    the change and drop the minority deployment with a clear warning
-    instead of crashing the combine. Variables above the size cap are
-    skipped to keep the probe cheap.
+    the change instead of crashing the combine.
+
+    Hashing **per variable** rather than over the whole set means the
+    caller can also say *which* variables disagree, which is the
+    difference between "the window spans a configuration change" and
+    "station bathymetry was corrected at one gauge".
+
+    ``ignore`` skips the batch's ``drop_variables``: they never reach
+    the combine, so a difference in them is not a difference in the
+    batch. Variables above the size cap are skipped to keep the probe
+    cheap. See issue #311.
     """
-    md5 = hashlib.md5()
+    out: dict[str, str] = {}
     for name in sorted(nc.variables):
+        if name in ignore:
+            continue
         var = nc.variables[name]
         if time_name and time_name in var.dimensions:
             continue
@@ -137,8 +150,16 @@ def _static_fingerprint(nc: netCDF4.Dataset,
             payload = np.asarray(var[:]).tobytes()
         except Exception:  # noqa: BLE001 - unreadable static var:
             continue       # other checks decide the file's fate
+        out[name] = hashlib.md5(payload).hexdigest()
+    return out
+
+
+def _combined_fingerprint(per_var: dict[str, str]) -> str:
+    """Collapse per-variable hashes into one batch-group key."""
+    md5 = hashlib.md5()
+    for name in sorted(per_var):
         md5.update(name.encode())
-        md5.update(payload)
+        md5.update(per_var[name].encode())
     return md5.hexdigest()
 
 
@@ -146,7 +167,8 @@ def _check_file(
     path: str,
     time_name: str | None,
     fingerprint: bool = False,
-) -> tuple[str | None, dict, str | None]:
+    ignore: Collection[str] = (),
+) -> tuple[str | None, dict, dict[str, str] | None]:
     """Validate one local file.
 
     Returns ``(reason, dims, static_fp)`` — ``reason`` is None when the
@@ -197,7 +219,7 @@ def _check_file(
                     return ('time axis not strictly increasing at step '
                             f'{bad} of {tvals.size} — zero-filled or '
                             'truncated file?'), {}, None
-        static_fp = (_static_fingerprint(nc, time_name)
+        static_fp = (_static_fingerprints(nc, time_name, ignore)
                      if fingerprint else None)
         return None, dims, static_fp
     finally:
@@ -286,12 +308,33 @@ def scrub_cached_copies(
     return removed
 
 
+def _differing_static_vars(
+    vars_by_path: dict[str, dict[str, str]],
+) -> list[str]:
+    """Names of static variables that are not identical across files.
+
+    Variables absent from some files count as differing, so a batch
+    where one deployment stopped writing a variable is reported too.
+    """
+    names: set[str] = set()
+    for per_var in vars_by_path.values():
+        names.update(per_var)
+    changed = []
+    for name in sorted(names):
+        seen = {per_var.get(name) for per_var in vars_by_path.values()}
+        if len(seen) > 1:
+            changed.append(name)
+    return changed
+
+
 def validate_model_files(
     file_list: list,
     engine: str,
     time_name: str | None,
     ofsfiletype: str,
     logger: Logger,
+    ignore_vars: Collection[str] = (),
+    reconcile_statics: bool = False,
 ) -> tuple[list, list[tuple[str, str]], dict[str, dict]]:
     """
     Drop unreadable, incomplete, or structurally inconsistent files.
@@ -312,6 +355,15 @@ def validate_model_files(
         remove_extra_stations downstream).
     logger : Logger
         Logger instance; one WARNING per dropped file plus a summary.
+    ignore_vars : collection of str
+        Variables excluded from the static-metadata fingerprint --
+        pass the batch's ``drop_variables`` so the fingerprint
+        describes the batch as the combine will actually see it.
+    reconcile_statics : bool
+        True when the open path reconciles conflicting static variables
+        itself (``compat='override'``) instead of requiring them to
+        match. Static differences are then reported but no file is
+        dropped for them, so no model data is lost (issue #311).
 
     Returns
     -------
@@ -353,7 +405,8 @@ def validate_model_files(
     fingerprint = ofsfiletype == 'stations'
     checks = []
     for i, path in enumerate(local, 1):
-        checks.append(_check_file(path, time_name, fingerprint))
+        checks.append(_check_file(
+            path, time_name, fingerprint, ignore_vars))
         if i % _PROGRESS_EVERY == 0 and i < len(local):
             logger.info('Validated %d/%d model files (%.0f s elapsed)',
                         i, len(local), time.perf_counter() - start)
@@ -362,12 +415,14 @@ def validate_model_files(
 
     dropped: list[tuple[str, str]] = []
     surviving: dict[str, dict] = {}
+    vars_by_path: dict[str, dict[str, str]] = {}
     fp_by_path: dict[str, str] = {}
     for path, (reason, dims, static_fp) in zip(local, checks):
         if reason is None:
             surviving[path] = dims
             if static_fp is not None:
-                fp_by_path[path] = static_fp
+                vars_by_path[path] = static_fp
+                fp_by_path[path] = _combined_fingerprint(static_fp)
         else:
             dropped.append((path, reason))
 
@@ -390,37 +445,62 @@ def validate_model_files(
                     (path, f'dimension mismatch with batch: {detail}'))
                 del surviving[path]
                 fp_by_path.pop(path, None)
+                vars_by_path.pop(path, None)
 
     # Static-metadata consistency: with identical dimensions, files can
-    # still disagree on static VALUES (station x/y/lon/lat, names, sigma
+    # still disagree on static VALUES (station lon/lat, names, sigma
     # levels) after a model configuration change mid-window — xarray's
     # minimal-mode concat then dies with "MergeError: conflicting values
-    # for variable 'x'". Drop the minority deployment, but only when the
-    # batch has a clear majority and every file has the same station
-    # count (differing counts are the legitimate remove_extra_stations
-    # case, where coordinate arrays trivially differ).
+    # for variable 'x'".
+    #
+    # When the open path reconciles those conflicts itself
+    # (``reconcile_statics``), nothing is dropped: every time step is
+    # kept and the static values come from the first file. All this step
+    # does then is say which variables disagreed, so a real change is
+    # visible in the log instead of silently overridden.
+    #
+    # Otherwise fall back to dropping the minority deployment, and only
+    # when the batch has a clear majority and every file has the same
+    # station count (differing counts are the legitimate
+    # remove_extra_stations case, where coordinate arrays trivially
+    # differ).
     station_sizes = {dims.get('station') for dims in surviving.values()}
-    if (fingerprint and len(fp_by_path) > 1
-            and len(station_sizes) == 1):
+    if fingerprint and len(fp_by_path) > 1 and len(station_sizes) == 1:
         fp_counts = Counter(fp_by_path.values())
-        top_fp, top_n = fp_counts.most_common(1)[0]
-        if len(fp_counts) > 1 and top_n * 2 >= len(fp_by_path):
-            for path, fp in sorted(fp_by_path.items()):
-                if fp != top_fp:
-                    dropped.append((path, (
-                        'static station metadata (coordinates/names/'
-                        'sigma levels) differs from the batch majority '
-                        '— the model configuration likely changed '
-                        'mid-window; consider splitting the assessment '
-                        'window at the change date')))
-                    del surviving[path]
-        elif len(fp_counts) > 1:
+        if len(fp_counts) > 1 and reconcile_statics:
+            changed = _differing_static_vars(vars_by_path)
             logger.warning(
-                'Static station metadata varies across %d groups of '
-                'files with no clear majority — the multi-file combine '
-                'may fail with a MergeError. The assessment window '
-                'likely spans multiple model configurations.',
-                len(fp_counts))
+                'Static station metadata is not identical across the '
+                '%d model file(s) in this batch — %d distinct '
+                'group(s), differing in: %s. No files are dropped; '
+                'every time step is kept and these variables are taken '
+                'from the first file in the batch. Values that affect '
+                'results (e.g. station bathymetry "h" or sigma levels) '
+                'changing here means the window spans that change.',
+                len(fp_by_path), len(fp_counts),
+                ', '.join(changed) or 'unknown')
+        elif len(fp_counts) > 1:
+            top_fp, top_n = fp_counts.most_common(1)[0]
+            if top_n * 2 >= len(fp_by_path):
+                for path, fp in sorted(fp_by_path.items()):
+                    if fp != top_fp:
+                        dropped.append((path, (
+                            'static station metadata (coordinates/names/'
+                            'sigma levels) differs from the batch '
+                            'majority — the model configuration likely '
+                            'changed mid-window; consider splitting the '
+                            'assessment window at the change date')))
+                        del surviving[path]
+            else:
+                logger.warning(
+                    'Static station metadata varies across %d groups of '
+                    'files with no clear majority — the multi-file '
+                    'combine may fail with a MergeError. Differing '
+                    'variables: %s. The assessment window likely spans '
+                    'multiple model configurations.',
+                    len(fp_counts),
+                    ', '.join(_differing_static_vars(vars_by_path))
+                    or 'unknown')
 
     if not dropped:
         return list(file_list), [], dict(surviving)
