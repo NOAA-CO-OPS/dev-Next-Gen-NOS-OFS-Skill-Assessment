@@ -57,7 +57,18 @@ from ofs_skill.utils.file_headers import OBS_CTL_HEADER
 _COOPS_MAX_WORKERS = 6
 _COOPS_CURRENTS_MAX_WORKERS = 2
 _NDBC_MAX_WORKERS = 6
-_CHS_MAX_WORKERS = 1
+# One CHS station costs 8 requests (1 UUID lookup + 7 month-long data
+# chunks), against the 30 requests/minute CHS publishes -- a ceiling of
+# ~3.75 stations/minute. A single worker only demands ~12.6 req/min, since
+# most of a station's ~38s is spent transferring rather than waiting, so it
+# leaves most of the budget unused. Three workers saturate the cap with
+# headroom; more only adds queuing and memory (each in-flight station holds
+# ~54k rows) without raising throughput.
+#
+# This is safe only because chs_utils.RateLimiter serializes admission
+# under a lock -- the limiter is global, so it throttles this stage and the
+# observation stage together and the cap holds regardless of worker count.
+_CHS_MAX_WORKERS = 3
 
 # CHS observed water level is referenced to chart datum, labeled 'IGLD' by
 # retrieve_chs_station. Great-Lakes OFS have an explicit offset path below;

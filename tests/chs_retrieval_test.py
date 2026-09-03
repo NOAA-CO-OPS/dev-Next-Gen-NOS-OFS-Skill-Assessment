@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
+import requests
 
 from ofs_skill.obs_retrieval import retrieve_chs_station as retrieve_chs_station_module
 from ofs_skill.obs_retrieval.inventory_chs_station import (
@@ -470,6 +471,7 @@ class TestRequestResolution:
         retrieve_chs_station_module._fetch_chs_window(
             'abc123', 'wlo',
             datetime(2026, 3, 1), datetime(2026, 4, 1),
+            logging.getLogger('chs_resolution_test'),
         )
 
         url = mock_get.call_args[0][0]
@@ -489,6 +491,7 @@ class TestRequestResolution:
         result = retrieve_chs_station_module._fetch_chs_window(
             'abc123', 'wlo',
             datetime(2026, 3, 1), datetime(2026, 4, 1),
+            logging.getLogger('chs_resolution_test'),
         )
 
         assert result.empty
@@ -504,3 +507,65 @@ class TestUnsupportedVariable:
             '20250101', '20250102', 'test_st', 'ice_concentration', logger)
 
         assert result is None
+
+
+class TestWindowHttpErrors:
+    """A failed window must degrade to no data, not abort the station."""
+
+    @staticmethod
+    def _response(status):
+        response = Mock()
+        error = requests.HTTPError(f'{status}')
+        error.response = Mock(status_code=status)
+        response.raise_for_status = Mock(side_effect=error)
+        return response
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_missing_time_series_returns_empty(self, mock_get, logger):
+        """404 means the station does not publish that code at all.
+
+        searvey returned a frame with an 'errors' column here; raising
+        instead would abort every station lacking the code.
+        """
+        mock_get.return_value = self._response(404)
+
+        result = retrieve_chs_station_module._fetch_chs_window(
+            'abc123', 'wlo',
+            datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+        )
+
+        assert result.empty
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_rate_limited_window_warns(self, mock_get, logger, caplog):
+        """429 drops data, so unlike a 404 it must be visible in the log."""
+        mock_get.return_value = self._response(429)
+
+        with caplog.at_level(logging.WARNING):
+            result = retrieve_chs_station_module._fetch_chs_window(
+                'abc123', 'wlo',
+                datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+            )
+
+        assert result.empty
+        assert any('429' in r.getMessage() for r in caplog.records)
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_station_survives_a_failed_window(self, mock_get, logger):
+        """One bad window must not lose the rest of the station."""
+        good = _make_chs_api_response([1.0, 1.5])
+        good_response = Mock(
+            json=Mock(return_value=good.to_dict('records')),
+            raise_for_status=Mock(),
+        )
+        mock_get.side_effect = [
+            self._response(500), good_response, good_response,
+            good_response, good_response, good_response, good_response,
+        ]
+
+        result = retrieve_chs_station(
+            '20260226', '20260904', '000000000000000000000065',
+            'water_level', logger)
+
+        assert result is not None
+        assert not result.empty

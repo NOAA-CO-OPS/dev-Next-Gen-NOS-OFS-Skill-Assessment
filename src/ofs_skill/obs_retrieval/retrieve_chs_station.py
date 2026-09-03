@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from logging import Logger
 
 import pandas as pd
+import requests
 
 from ofs_skill.obs_retrieval.chs_utils import (
     CHS_IWLS_BASE_URL,
@@ -101,13 +102,18 @@ def _make_date_chunks(start_date, end_date, interval_hours):
     return date_list
 
 
-def _fetch_chs_window(id_number, time_series_code, start, end):
+def _fetch_chs_window(id_number, time_series_code, start, end, logger):
     """
     Fetch one CHS data window at ``_CHS_RESOLUTION``.
 
     searvey's ``fetch_chs_station`` cannot be used here because it does not
     expose the ``resolution`` parameter and rejects any interval longer than
     7 days. Rate limiting is applied by ``chs_get``.
+
+    Returns an empty frame rather than raising, so one unavailable code or
+    one failed window degrades to "no data" for that station instead of
+    aborting the whole run -- the behaviour searvey provided by returning a
+    frame with an ``errors`` column.
     """
     url = (
         f'{CHS_IWLS_BASE_URL}/stations/{id_number}/data'
@@ -116,8 +122,39 @@ def _fetch_chs_window(id_number, time_series_code, start, end):
         f'&from={datetime.strftime(start, "%Y-%m-%dT%H:%M:%SZ")}'
         f'&to={datetime.strftime(end, "%Y-%m-%dT%H:%M:%SZ")}'
     )
-    response = chs_get(url, timeout=30)
-    response.raise_for_status()
+    try:
+        response = chs_get(url, timeout=30)
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        status = (
+            exc.response.status_code if exc.response is not None else None
+        )
+        if status == 404:
+            # The station does not publish this time-series code at all.
+            # Expected while probing fallback codes (wt1 -> wt2), so this
+            # is not worth a warning.
+            logger.debug(
+                'CHS station %s does not publish time series %s.',
+                str(id_number), time_series_code,
+            )
+        else:
+            # 429 (rate limit) and 5xx land here. Data is dropped either
+            # way, but say so -- searvey swallowed these silently.
+            logger.warning(
+                'CHS request failed with HTTP %s for station %s code %s '
+                '(%s to %s); this window is treated as having no data.',
+                status, str(id_number), time_series_code,
+                start.date(), end.date(),
+            )
+        return pd.DataFrame()
+    except requests.RequestException as exc:
+        logger.warning(
+            'CHS request errored for station %s code %s (%s to %s): %s; '
+            'this window is treated as having no data.',
+            str(id_number), time_series_code, start.date(), end.date(), exc,
+        )
+        return pd.DataFrame()
+
     payload = response.json()
     # A successful query returns a JSON list of observations; an error
     # response is an object, which must not be treated as data.
@@ -126,7 +163,7 @@ def _fetch_chs_window(id_number, time_series_code, start, end):
     return pd.DataFrame(payload)
 
 
-def _fetch_chs_chunked(date_list, id_number, time_series_code):
+def _fetch_chs_chunked(date_list, id_number, time_series_code, logger):
     """
     Fetch CHS data in ``_CHS_CHUNK_HOURS`` chunks for a single time series code.
 
@@ -140,7 +177,7 @@ def _fetch_chs_chunked(date_list, id_number, time_series_code):
         if start >= end:
             continue
         data_station = _fetch_chs_window(
-            id_number, time_series_code, start, end
+            id_number, time_series_code, start, end, logger
         )
         if 'errors' in data_station.columns or data_station.empty:
             continue
@@ -188,7 +225,7 @@ def _retrieve_chs_scalar(date_list, id_number, variable, logger):
 
     data_all = None
     for code in codes:
-        data_all = _fetch_chs_chunked(date_list, id_number, code)
+        data_all = _fetch_chs_chunked(date_list, id_number, code, logger)
         if data_all is not None:
             logger.info(
                 'CHS %s data found using code %s for station %s',
@@ -212,10 +249,14 @@ def _retrieve_chs_scalar(date_list, id_number, variable, logger):
 def _retrieve_chs_currents(date_list, id_number, logger):
     """Retrieve CHS current speed and direction, merge into single DataFrame."""
     for speed_code, dir_code in _CURRENT_SENSOR_PAIRS:
-        speed_data = _fetch_chs_chunked(date_list, id_number, speed_code)
+        speed_data = _fetch_chs_chunked(
+            date_list, id_number, speed_code, logger
+        )
         if speed_data is None:
             continue
-        dir_data = _fetch_chs_chunked(date_list, id_number, dir_code)
+        dir_data = _fetch_chs_chunked(
+            date_list, id_number, dir_code, logger
+        )
         if speed_data is not None and dir_data is not None:
             logger.info(
                 'CHS currents found using matched pair %s/%s for station %s',
