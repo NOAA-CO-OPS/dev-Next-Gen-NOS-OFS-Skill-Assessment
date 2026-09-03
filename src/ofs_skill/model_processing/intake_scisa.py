@@ -94,6 +94,27 @@ def _extract_filename_from_encoding(ds):
 FVCOM_DROP_VARIABLES = ('x', 'y')
 
 
+def station_dims_compatible(station_dims) -> tuple[bool, int | None]:
+    """Are all files' station counts equal, and if not, which is smallest?
+
+    Returns ``(compatible, reference_index)``. ``reference_index`` is the
+    index of the file with the fewest stations when they disagree (the
+    reference ``remove_extra_stations`` slices the batch down to), and
+    None when they all match.
+
+    This used to be ``np.nanmax(np.diff(station_dims)) != 0``, which only
+    catches an *increase*: for [279, 279, 275] the diffs are [0, -4] and
+    the maximum is 0, so a batch whose station count drops partway
+    through -- and never recovers -- was reported as compatible. The
+    direct combine then failed on the station dimension instead of being
+    routed to ``remove_extra_stations``. Comparing the set of sizes
+    catches a change in either direction. See issue #311.
+    """
+    if len(set(station_dims)) > 1:
+        return False, int(np.argmin(station_dims))
+    return True, None
+
+
 def make_preprocess_with_filename(urlpaths):
     """Create a preprocess function that maps datasets to filenames.
 
@@ -370,9 +391,9 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
             if f in file_dims and 'station' in file_dims[f]
         ]
         if len(station_dims) == len(urlpaths):
-            if np.nanmax(np.diff(station_dims)) != 0:
-                dim_compat = False
-                dim_ref = int(np.argmin(station_dims))
+            dim_compat, ref_idx = station_dims_compatible(station_dims)
+            if not dim_compat:
+                dim_ref = ref_idx
             logger.info(
                 'Station dimension check reused validation probes for '
                 '%d files (compatible=%s)', len(urlpaths), dim_compat)
@@ -1390,7 +1411,9 @@ def get_station_dim(engine: str, urlpaths: list[str],
             },
         )
         ds = source.read()
-        dim = ds.dims['station']
+        # ``Dataset.dims`` is documented to become a set of names; use
+        # ``sizes``, which is the name -> length mapping.
+        dim = ds.sizes['station']
         ds.close()
         return dim
 
@@ -1404,13 +1427,11 @@ def get_station_dim(engine: str, urlpaths: list[str],
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         station_dim = list(executor.map(_read_dim, urlpaths))
 
-    dim_compat = True
     dim_ref: Any = []
-
-    if np.nanmax(np.diff(station_dim)) != 0:
-        dim_compat = False
-        # Get reference dataset index
-        dim_ref = int(np.argmin(station_dim))
+    dim_compat, ref_idx = station_dims_compatible(station_dim)
+    if not dim_compat:
+        # Reference dataset index: the file with the fewest stations
+        dim_ref = ref_idx
     return dim_compat, dim_ref
 
 
