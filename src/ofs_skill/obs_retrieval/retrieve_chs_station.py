@@ -18,14 +18,31 @@ from datetime import datetime, timedelta
 from logging import Logger
 
 import pandas as pd
-from searvey._chs_api import fetch_chs_station
 
 from ofs_skill.obs_retrieval.chs_utils import (
     CHS_IWLS_BASE_URL,
     chs_get,
-    chs_rate_limiter,
     is_chs_uuid,
 )
+
+# CHS caps a single data request at 7 days multiplied by the resolution,
+# to a maximum of 31 days: 1-minute data is limited to a week, while any
+# resolution of 5 minutes or coarser reaches the 31-day maximum. See
+# https://tides.gc.ca/en/web-services-offered-canadian-hydrographic-service
+#
+# The API defaults to ONE_MINUTE when no resolution is given, which is what
+# searvey's fetch_chs_station requested (it never sends the parameter, and
+# hardcodes the matching 7-day cap). Over a 190-day window that is 28
+# requests per station per code, against a documented 30 req/min budget --
+# roughly one station per minute.
+#
+# FIVE_MINUTES is the finest resolution that still reaches the 31-day
+# maximum, cutting the same window to 7 requests. It is finer than the
+# 6-minute CO-OPS water level these stations are assessed alongside and
+# finer than the model output they are compared against, so nothing the
+# skill assessment consumes is lost.
+_CHS_RESOLUTION = 'FIVE_MINUTES'
+_CHS_CHUNK_HOURS = 31 * 24
 
 # CHS time series codes per variable, in priority order (try first, fallback)
 _SCALAR_CODE_MAP = {
@@ -84,20 +101,46 @@ def _make_date_chunks(start_date, end_date, interval_hours):
     return date_list
 
 
+def _fetch_chs_window(id_number, time_series_code, start, end):
+    """
+    Fetch one CHS data window at ``_CHS_RESOLUTION``.
+
+    searvey's ``fetch_chs_station`` cannot be used here because it does not
+    expose the ``resolution`` parameter and rejects any interval longer than
+    7 days. Rate limiting is applied by ``chs_get``.
+    """
+    url = (
+        f'{CHS_IWLS_BASE_URL}/stations/{id_number}/data'
+        f'?time-series-code={time_series_code}'
+        f'&resolution={_CHS_RESOLUTION}'
+        f'&from={datetime.strftime(start, "%Y-%m-%dT%H:%M:%SZ")}'
+        f'&to={datetime.strftime(end, "%Y-%m-%dT%H:%M:%SZ")}'
+    )
+    response = chs_get(url, timeout=30)
+    response.raise_for_status()
+    payload = response.json()
+    # A successful query returns a JSON list of observations; an error
+    # response is an object, which must not be treated as data.
+    if not isinstance(payload, list):
+        return pd.DataFrame()
+    return pd.DataFrame(payload)
+
+
 def _fetch_chs_chunked(date_list, id_number, time_series_code):
     """
-    Fetch CHS data in 7-day chunks for a single time series code.
+    Fetch CHS data in ``_CHS_CHUNK_HOURS`` chunks for a single time series code.
 
-    Includes global module rate limiting: Max 5 req/sec AND Max 30 req/min.
+    Includes global module rate limiting: Max 3 req/sec AND Max 30 req/min.
     """
     data_all_append = []
     for start, end in zip(date_list, date_list[1:]):
-        chs_rate_limiter.wait()  # Apply rate limiting to external library call
-        data_station = fetch_chs_station(
-            station_id=str(id_number),
-            time_series_code=time_series_code,
-            start_date=datetime.strftime(start, '%Y-%m-%d'),
-            end_date=datetime.strftime(end, '%Y-%m-%d'),
+        # _make_date_chunks can emit a zero-length final chunk when the
+        # window ends exactly on a boundary; requesting it wastes a call
+        # against the rate limit and returns nothing.
+        if start >= end:
+            continue
+        data_station = _fetch_chs_window(
+            id_number, time_series_code, start, end
         )
         if 'errors' in data_station.columns or data_station.empty:
             continue
@@ -237,8 +280,10 @@ def retrieve_chs_station(
     start_date_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
     end_date_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
 
-    if (end_date_dt - start_date_dt).days > 7:
-        date_list = _make_date_chunks(start_date_dt, end_date_dt, 7 * 24)
+    if (end_date_dt - start_date_dt).days > _CHS_CHUNK_HOURS / 24:
+        date_list = _make_date_chunks(
+            start_date_dt, end_date_dt, _CHS_CHUNK_HOURS
+        )
     else:
         date_list = [start_date_dt, end_date_dt]
 

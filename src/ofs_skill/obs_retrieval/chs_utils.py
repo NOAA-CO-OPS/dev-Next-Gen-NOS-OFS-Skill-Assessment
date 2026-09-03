@@ -1,9 +1,13 @@
 """
 Shared Canadian Hydrographic Service (CHS) HTTP utilities.
 
-Enforces rolling rate limits across all CHS API interactions:
-    - Max 5 requests per second
+Enforces rolling rate limits across all CHS API interactions, matching the
+limits CHS publishes at
+https://tides.gc.ca/en/web-services-offered-canadian-hydrographic-service:
+    - Max 3 requests per second
     - Max 30 requests per minute
+
+Exceeding either returns HTTP 429.
 """
 
 import re
@@ -25,7 +29,7 @@ def is_chs_uuid(val: Any) -> bool:
     return bool(isinstance(val, str) and _CHS_OBJECT_ID_RE.match(val))
 
 class RateLimiter:
-    """Enforces dual rolling rate limits: 5/sec and 30/min."""
+    """Enforces dual rolling rate limits: 3/sec and 30/min."""
 
     def __init__(self):
         self.second_history = deque()
@@ -41,7 +45,7 @@ class RateLimiter:
             self.minute_history.popleft()
 
         wait_time = 0.0
-        if len(self.second_history) >= 5:
+        if len(self.second_history) >= 3:
             wait_time = max(wait_time, 1.0 - (now - self.second_history[0]))
         if len(self.minute_history) >= 30:
             wait_time = max(wait_time, 60.0 - (now - self.minute_history[0]))

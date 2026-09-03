@@ -58,6 +58,20 @@ _COOPS_MAX_WORKERS = 6
 _COOPS_CURRENTS_MAX_WORKERS = 2
 _NDBC_MAX_WORKERS = 6
 _CHS_MAX_WORKERS = 1
+
+# CHS observed water level is referenced to chart datum, labeled 'IGLD' by
+# retrieve_chs_station. Great-Lakes OFS have an explicit offset path below;
+# every other OFS must route through vdatum, which has no conversion from
+# this datum to a tidal datum such as MLLW.
+_CHS_WATER_LEVEL_DATUM = 'IGLD'
+
+_GLOFS_DATUMS = {
+    'leofs': 173.5,
+    'lmhofs': 176.0,
+    'lsofs': 183.2,
+    'loofs': 74.2,
+    'loofs2': 74.2,
+}
 _USGS_MAX_WORKERS_WITH_KEY = 4
 _USGS_MAX_WORKERS_NO_KEY = 2
 
@@ -687,6 +701,45 @@ def _process_ndbc_station(
     return []
 
 
+def _chs_water_level_datum_supported(ofs, datum, x_value, y_value, logger):
+    """
+    Can CHS water level be aligned to ``datum`` for this OFS?
+
+    The answer depends only on ``(ofs, datum)`` -- never on the observations
+    themselves -- so it is resolved once, before any station is retrieved,
+    rather than once per station after each station's data has already been
+    downloaded. A 6-month NECOFS run spends roughly a minute per CHS station,
+    so discovering this per station costs hours and yields nothing.
+
+    Returns ``(supported, reason)`` where ``reason`` is the underlying
+    ValueError when the conversion is unavailable, and None otherwise.
+    """
+    if ofs in _GLOFS_DATUMS:
+        return True, None
+    if _CHS_WATER_LEVEL_DATUM.upper() == str(datum).upper():
+        return True, None
+
+    ldatum = _normalize_vdatum_name(datum).lower()
+    try:
+        vdatum_resilient.convert(
+            _CHS_WATER_LEVEL_DATUM.lower(),
+            ldatum,
+            y_value,
+            x_value,
+            10,
+            epoch=None,
+            station_id='chs-datum-precheck',
+            logger=logger,
+        )
+    except ValueError as exc:
+        # Unsupported datum vocabulary -- the same failure every CHS water
+        # level station in this run would hit. Anything else (a transient
+        # grid or network problem) is not a reason to skip the provider, so
+        # only ValueError short-circuits.
+        return False, exc
+    return True, None
+
+
 def _process_chs_station(
     id_number,
     name,
@@ -724,13 +777,7 @@ def _process_chs_station(
             meta_offset = metadata.get('offset')
             station_datum = str(data_station['Datum'].iloc[0])
 
-            glofs_datums = {
-                'leofs': 173.5,
-                'lmhofs': 176.0,
-                'lsofs': 183.2,
-                'loofs': 74.2,
-                'loofs2': 74.2,
-            }
+            glofs_datums = _GLOFS_DATUMS
 
             if meta_offset is not None:
                 expected_offset = glofs_datums.get(ofs)
@@ -972,6 +1019,30 @@ def _process_variable(
 
     # --- CHS stations (parallel) ---
     chs_stations = stations_with_var.loc[stations_with_var['Source'] == 'CHS']
+    if not chs_stations.empty and variable == 'water_level':
+        reference = chs_stations.iloc[0]
+        supported, reason = _chs_water_level_datum_supported(
+            ofs, datum, reference['X'], reference['Y'], logger
+        )
+        if not supported:
+            logger.warning(
+                'Skipping all %d CHS water level station(s): CHS observed '
+                'water level is referenced to chart datum (%s), and there is '
+                'no conversion path from %s to the requested datum (%s) for '
+                '%s. Every one of these stations would be discarded after '
+                'being retrieved, so they are not retrieved at all. To '
+                'include them, re-run with a datum reachable from %s; to '
+                'silence this, exclude CHS via -so. Underlying error: %s',
+                len(chs_stations),
+                _CHS_WATER_LEVEL_DATUM,
+                _CHS_WATER_LEVEL_DATUM.lower(),
+                datum,
+                ofs,
+                _CHS_WATER_LEVEL_DATUM,
+                reason,
+            )
+            chs_stations = chs_stations.iloc[0:0]
+
     if not chs_stations.empty:
         futures = []
         with ThreadPoolExecutor(max_workers=_CHS_MAX_WORKERS) as executor:
