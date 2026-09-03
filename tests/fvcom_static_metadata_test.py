@@ -25,7 +25,11 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from ofs_skill.model_processing.intake_scisa import FVCOM_DROP_VARIABLES
+from ofs_skill.model_processing.intake_scisa import (
+    FVCOM_DROP_VARIABLES,
+    get_station_dim,
+    station_dims_compatible,
+)
 from ofs_skill.model_processing.model_file_validation import (
     _differing_static_vars,
     validate_model_files,
@@ -228,3 +232,63 @@ def test_differing_static_vars_identifies_only_changed_names():
 def test_differing_static_vars_counts_missing_as_changed():
     per_path = {'a': {'lat': 'aa', 'h': 'cc'}, 'b': {'lat': 'aa'}}
     assert _differing_static_vars(per_path) == ['h']
+
+
+# --------------------------------------------------------------------
+# Station-count compatibility (issue #311)
+# --------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    'dims, compatible, ref',
+    [
+        ([279, 279, 279], True, None),            # all equal
+        ([275, 279, 279], False, 0),              # count increases
+        ([279, 279, 275], False, 2),              # count DECREASES
+        ([279, 275, 279], False, 1),              # dips and recovers
+        ([279, 275, 271], False, 2),              # decreases twice
+        ([279, 279], True, None),                 # the minimum batch
+    ],
+)
+def test_station_dims_compatible(dims, compatible, ref):
+    """A change in station count must be caught in either direction.
+
+    The previous test was ``np.nanmax(np.diff(dims)) != 0``, which for
+    [279, 279, 275] gives diffs [0, -4] and a maximum of 0 -- reporting
+    a shrinking batch as compatible.
+    """
+    assert station_dims_compatible(dims) == (compatible, ref)
+
+
+def test_station_dims_compatible_rejects_the_old_max_diff_logic():
+    """Pin the exact case the old expression missed."""
+    dims = [279, 279, 275]
+    assert np.nanmax(np.diff(dims)) == 0      # what the old check saw
+    assert station_dims_compatible(dims)[0] is False
+
+
+@pytest.mark.integration
+def test_get_station_dim_detects_a_shrinking_batch(tmp_path):
+    """End to end: a batch whose station count drops must not be routed
+    to the direct combine, which would fail on the station dimension."""
+    files = [
+        _write(tmp_path, 'a.nc', _fvcom_stations_ds('2026-05-14T00')),
+        _write(tmp_path, 'b.nc', _fvcom_stations_ds('2026-05-14T01')),
+        _write(tmp_path, 'c.nc',
+               _fvcom_stations_ds('2026-05-14T02').isel(
+                   station=slice(0, N_STATION - 2))),
+    ]
+    compat, ref = get_station_dim(
+        'netcdf4', files, list(FVCOM_DROP_VARIABLES), LOG)
+    assert compat is False
+    assert ref == 2, 'reference should be the file with the fewest stations'
+
+
+@pytest.mark.integration
+def test_get_station_dim_accepts_a_uniform_batch(tmp_path):
+    files = [
+        _write(tmp_path, 'a.nc', _fvcom_stations_ds('2026-05-14T00')),
+        _write(tmp_path, 'b.nc', _fvcom_stations_ds('2026-05-14T01')),
+    ]
+    compat, _ = get_station_dim(
+        'netcdf4', files, list(FVCOM_DROP_VARIABLES), LOG)
+    assert compat is True
