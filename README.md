@@ -32,8 +32,8 @@ cp conf/ofs_dps.conf.example conf/ofs_dps.conf
 # 3a. (Preferred) Ensure use_s3_fallback=True is set in conf/ofs_dps.conf, and the skill
 #     assessment routine will read and stream model files from the
 #     NODD S3 bucket on demand when local files are missing.
- 
-# 3b. (Alternate) If you prefer to download model data locally: 
+
+# 3b. (Alternate) If you prefer to download model data locally:
 #     Download model data for your OFS and date range
 python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -ws nowcast -t stations
 python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -ws forecast_b -t stations
@@ -62,10 +62,19 @@ Full documentation lives in the [project wiki](../../wiki):
 - [Great Lakes Ice Skill Assessment](../../wiki/09.-Great-Lakes-Ice-Skill-Assessment) — ice concentration and extent skill for the GLOFS models
 - [Graphical User Interfaces](../../wiki/10.-Graphical-User-Interfaces-(GUI)) — the GUI launcher and tool GUIs
 - [Troubleshooting](../../wiki/11.-Troubleshooting) — common errors and how to fix them
+- [HF Radar Surface Currents](../../wiki/12.-HF-Radar-Surface-Currents) — retrieving gridded HF radar surface current observations for an OFS domain
 
-**Development and analysis**
-- [Code Development Tips](../../wiki/A.-Code-Development-Tips)
+**Development**
+- [Architecture and Data Flow](../../wiki/I.-Architecture-and-Data-Flow) — how a run moves through the package: which module owns which stage, what each writes to disk, and the cross-cutting mechanisms
+- [Code Development Tips](../../wiki/A.-Code-Development-Tips) — pre-commit hooks, code style, docstrings, logging and config conventions
+- [Testing Guide](../../wiki/J.-Testing-Guide) — running the suite, markers, fixtures and mocks, coverage, writing a new test
+- [Continuous Integration](../../wiki/K.-Continuous-Integration) — the GitHub Actions workflows, reproducing them locally, reading a failure
 - [Contributing Code: Pull Request Template](../../wiki/B.-Contributing-Code:-Pull-Request-Template)
+- [Reviewing and Testing Pull Requests](../../wiki/F.-Reviewing-and-Testing-Pull-Requests)
+- [Publishing a Release](../../wiki/H.-Publishing-a-Release)
+- [Syncing the Wiki to the Public Repository](../../wiki/G.-Syncing-the-Wiki-to-the-Public-Repository)
+
+**Analysis**
 - [Parallelization and Performance Optimization Guide](../../wiki/C.-Parallelization-and-Performance-Optimization-Guide)
 - [Harmonic Analysis](../../wiki/D.-Harmonic-Analysis)
 - [CO-OPS ADCP Current Processing](../../wiki/E.-CO‐OPS-ADCP-current-processing)
