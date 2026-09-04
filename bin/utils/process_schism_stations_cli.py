@@ -1,376 +1,644 @@
 """
-OFS Skill Assessment Comparison Tool
-
-This script compares the performance of two Operational Forecast Systems (OFS)
-by evaluating them on a shared set of overlapping stations. The workflow includes:
-1. Identifying overlapping stations via shapefile intersection.
-2. Isolating the assessment to only those overlapping stations by temporarily
-   modifying the station inventory files (with fail-safe in-memory backups).
-3. Running 1D skill assessments (`create_1dplot`) for both models.
-4. Generating comparative Plotly time series for paired variables.
-5. Generating Plotly statistical comparisons (RMSE, Bias, Central Frequency) across all stations,
-   including interactive Map views with dropdowns.
-
-Created on Mon Jul  6 13:58:20 2026
+This script gathers up raw SCHISM station output and processes it to
+OFS-standard NetCDF files that contain all variables needed for the skill
+assessment package, including water level, salinity, water temp, and current
+velocity.
 
 @author: PWL
+Created on Fri Jan 23 15:01:50 2026
 """
 
 import argparse
-import glob
+import logging
 import logging.config
-import math
 import os
 import shutil
 import sys
+from datetime import datetime, timedelta
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from netCDF4 import Dataset, date2num
+from pyproj import Transformer
 
 from ofs_skill.model_processing import model_properties
+from ofs_skill.model_processing.model_source import get_model_source
+from ofs_skill.obs_retrieval import utils
 
 
-def fetch_error_range(short_var, base_path, logger):
-    """Helper to resolve target error range robustly."""
-    class MockProp:
-        def __init__(self, path):
-            self.path = path
-
-    try:
-        from ofs_skill.visualization.plotting_functions import get_error_range
-        return get_error_range(short_var, MockProp(base_path), logger)[0]
-    except ImportError:
-        pass
-
-    try:
-        from plotting_functions import get_error_range
-        return get_error_range(short_var, MockProp(base_path), logger)[0]
-    except ImportError:
-        pass
-
-    logger.warning('Could not import get_error_range. Using direct CSV fallback.')
-    config_path = os.path.join(base_path, 'conf', 'error_ranges.csv')
-    defaults = {
-        'salt': 3.5, 'temp': 3.0, 'wl': 0.15, 'cu': 0.26,
-        'ice_conc': 10.0, 'cu_dir': 22.5
-    }
-
-    if os.path.exists(config_path):
-        try:
-            df_err = pd.read_csv(config_path)
-            match = df_err[df_err['name_var'] == short_var]
-            if not match.empty:
-                return float(match.iloc[0]['X1'])
-        except Exception as e:
-            logger.warning(f'Error reading {config_path}: {e}')
-
-    return defaults.get(short_var, 0)
-
-
-def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, whichcasts,
-                         home_path, datum, logger):
-    """Ingests paired datasets for overlapping stations and creates interactive Plotly time series."""
-    try:
-        inventory = pd.read_csv(overlap_csv)
-        station_col = 'ID' if 'ID' in inventory.columns else inventory.columns[0]
-        overlap_stations = inventory[station_col].astype(str).unique().tolist()
-    except Exception as e:
-        logger.error(f'Failed to read inventory CSV: {e}')
-        return
-
-    pair_dir = os.path.join(home_path, 'data', 'skill', '1d_pair')
-    visual_dir = os.path.join(home_path, 'data', 'visual', 'comparisons')
-    os.makedirs(visual_dir, exist_ok=True)
-
-    vars_to_process = var_selection.split(',')
-    casts_to_process = [c.strip() for c in whichcasts.split(',')]
-
-    for var in vars_to_process:
-        var = var.strip()
-        display_var = var.replace('_', ' ').title()
-        var_map = {'water_level': 'wl', 'water_temperature': 'temp', 'salinity': 'salt', 'currents': 'cu'}
-        short_var = var_map.get(var, var)
-
-        if short_var == 'wl':
-            y_title = f'Water Level ({datum})'
-            unit = 'm'
-        elif short_var == 'temp':
-            y_title = 'Water Temperature (C)'
-            unit = '\u00b0C'
-        elif short_var == 'cu':
-            y_title = 'Current Speed (knots)'
-            unit = 'knots'
-        elif short_var == 'salt':
-            y_title = 'Salinity (PSU)'
-            unit = 'PSU'
-        else:
-            y_title = display_var
-            unit = ''
-
-        col_names = (
-            ['Julian', 'year', 'month', 'day', 'hour', 'minute', 'OBS_SPD', 'OFS_SPD', 'BIAS_SPD', 'OBS_DIR', 'OFS_DIR', 'BIAS_DIR']
-            if short_var == 'cu' else
-            ['Julian', 'year', 'month', 'day', 'hour', 'minute', 'OBS', 'OFS', 'BIAS']
-        )
-
-        target_err = fetch_error_range(short_var, home_path, logger)
-        if short_var == 'cu':
-            target_err *= 1.943844
-
-        for cast in casts_to_process:
-            cast_file = cast.lower()
-            cast_title = cast_file.replace('_b', '')
-
-            for station in overlap_stations:
-                depth_bins = ['']
-                if short_var == 'cu':
-                    found_ofs1 = glob.glob(os.path.join(pair_dir, f'{ofs1}_{short_var}_{station}_*_{cast}_*_pair.int'))
-                    if not found_ofs1:
-                        continue
-                    depth_bins = list({os.path.basename(f)[len(f'{ofs1}_{short_var}_{station}_'):].split(f'_{cast}_')[0].split('_')[0] for f in found_ofs1})
-
-                for depth_bin in depth_bins:
-                    station_key = f'{station}_{depth_bin}' if depth_bin else station
-                    ofs1_files = glob.glob(os.path.join(pair_dir, f'{ofs1}_{short_var}_{station_key}*_{cast}_*_pair.int'))
-                    ofs2_files = glob.glob(os.path.join(pair_dir, f'{ofs2}_{short_var}_{station_key}*_{cast}_*_pair.int'))
-
-                    if not ofs1_files or not ofs2_files:
-                        continue
-
-                    try:
-                        df1 = pd.read_csv(ofs1_files[0], sep=r'\s+', names=col_names, header=0)
-                        df2 = pd.read_csv(ofs2_files[0], sep=r'\s+', names=col_names, header=0)
-
-                        df1['DateTime'] = pd.to_datetime(df1[['year', 'month', 'day', 'hour', 'minute']])
-                        df2['DateTime'] = pd.to_datetime(df2[['year', 'month', 'day', 'hour', 'minute']])
-
-                        if short_var == 'cu':
-                            df1['OBS'], df1['OFS'] = df1['OBS_SPD'] * 1.943844, df1['OFS_SPD'] * 1.943844
-                            df2['OBS'], df2['OFS'] = df2['OBS_SPD'] * 1.943844, df2['OFS_SPD'] * 1.943844
-
-                        merged = pd.merge(df1[['DateTime', 'OBS', 'OFS']], df2[['DateTime', 'OFS']], on='DateTime', suffixes=(f'_{ofs1}', f'_{ofs2}'))
-                        if merged.empty:
-                            continue
-
-                        merged[f'Error_{ofs1}'] = merged[f'OFS_{ofs1}'] - merged['OBS']
-                        merged[f'Error_{ofs2}'] = merged[f'OFS_{ofs2}'] - merged['OBS']
-
-                        ts_hover = f'<b>Time:</b> %{{x|%m/%d/%Y %H:%M}}<br><b>%{{data.name}}:</b> %{{y:.2f}} {unit}<extra></extra>'
-                        fig_ts = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3])
-
-                        fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged['OBS'], name='Observation', hovertemplate=ts_hover, line=dict(color='red')), row=1, col=1)
-                        fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'OFS_{ofs1}'], name=ofs1.upper(), hovertemplate=ts_hover, line=dict(color='#d55e00')), row=1, col=1)
-                        fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'OFS_{ofs2}'], name=ofs2.upper(), hovertemplate=ts_hover, line=dict(color='#0072b2')), row=1, col=1)
-
-                        if target_err > 0:
-                            fig_ts.add_trace(go.Scatter(x=[merged['DateTime'].min(), merged['DateTime'].max(), merged['DateTime'].max(), merged['DateTime'].min()], y=[target_err, target_err, -target_err, -target_err], fill='toself', fillcolor='rgba(255, 165, 0, 0.3)', line=dict(color='rgba(255,255,255,0)'), name='Target Error', hoverinfo='skip'), row=2, col=1)
-
-                        fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs1}'], name=f'{ofs1.upper()} Error', hovertemplate=ts_hover, line=dict(color='#d55e00')), row=2, col=1)
-                        fig_ts.add_trace(go.Scatter(x=merged['DateTime'], y=merged[f'Error_{ofs2}'], name=f'{ofs2.upper()} Error', hovertemplate=ts_hover, line=dict(color='#0072b2')), row=2, col=1)
-
-                        fig_ts.update_layout(title=dict(text=f'Time Series: {station_key} - {display_var} ({cast_title})'), template='plotly_white')
-                        fig_ts.update_yaxes(title_text=y_title, row=1, col=1)
-                        fig_ts.update_yaxes(title_text='Error', row=2, col=1)
-
-                        fig_ts.write_html(os.path.join(visual_dir, f'{ofs1}_vs_{ofs2}_{short_var}_{station_key}_{cast_file}_timeseries.html'))
-
-                    except Exception as e:
-                        logger.error(f'Error plotting TS for {station_key}: {e}')
-
-
-def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
-                              start_date, end_date, logger, make_bar_plots=False):
-    """Reads skill stat CSVs and plots interactive 1-to-1 scatters with bounded thresholds."""
-    start_str = start_date.replace('T', ' ').replace('Z', '')
-    end_str = end_date.replace('T', ' ').replace('Z', '')
-
-    variable_keywords = {'water_level_hw': 'Water Level high tide', 'water_level': 'Water Level', 'currents': 'Current speed'}
-    cast_keywords = {'nowcast': 'Nowcast', 'forecast_b': 'Forecast (B)', 'hindcast': 'Hindcast'}
-
-    stats_dir = os.path.join(home_path, 'data', 'skill', 'stats')
-    vis_dir = os.path.join(home_path, 'data', 'visual', 'comparisons')
-    os.makedirs(vis_dir, exist_ok=True)
-
-    ofs1_file, ofs2_file = os.path.join(stats_dir, f'skill_{ofs1}_all_stations.csv'), os.path.join(stats_dir, f'skill_{ofs2}_all_stations.csv')
-    if not os.path.exists(ofs1_file) or not os.path.exists(ofs2_file):
-        return
-
-    try:
-        merged = pd.merge(pd.read_csv(ofs1_file).astype({'ID': str}), pd.read_csv(ofs2_file).astype({'ID': str}), on=['ID', 'variable', 'type'], suffixes=(f'_{ofs1}', f'_{ofs2}'))
-        if merged.empty:
-            return
-
-        stats_to_plot = {'rmse': 'RMSE', 'bias': 'Bias', 'central_freq': 'Central Frequency'}
-        vars_to_process = list(dict.fromkeys(var_selection.split(',')))
-        casts_to_process = [c.strip() for c in whichcasts.split(',')]
-
-        for var in vars_to_process:
-            csv_var = variable_keywords.get(var, var)
-            for cast in casts_to_process:
-                csv_cast = cast_keywords.get(cast, cast)
-                var_data = merged[(merged['variable'] == csv_var) & (merged['type'] == csv_cast)].reset_index(drop=True)
-                if var_data.empty:
-                    continue
-
-                display_var = var.replace('_', ' ').title()
-                base_var = 'wl' if 'water_level' in var else var
-                target_err = fetch_error_range(base_var, home_path, logger)
-                lon_col, lat_col = f'X_{ofs1}' if f'X_{ofs1}' in var_data.columns else 'X', f'Y_{ofs1}' if f'Y_{ofs1}' in var_data.columns else 'Y'
-
-                fig_map = go.Figure()
-                stat_traces_map, map_trace_idx = {k: [] for k in stats_to_plot}, 0
-
-                if not var_data[lon_col].dropna().empty:
-                    mean_lon, mean_lat = var_data[lon_col].dropna().mean(), var_data[lat_col].dropna().mean()
-                    lon_diff, lat_diff = var_data[lon_col].max() - var_data[lon_col].min(), var_data[lat_col].max() - var_data[lat_col].min()
-                    zoom_level = min(math.log2(360 / lon_diff) if lon_diff > 0 else 15.0, math.log2(180 / lat_diff) if lat_diff > 0 else 15.0) - 0.25
-                else:
-                    mean_lon, mean_lat, zoom_level = -95, 38, 4
-
-                for stat_key, stat_display in stats_to_plot.items():
-                    stat1, stat2 = f'{stat_key}_{ofs1}', f'{stat_key}_{ofs2}'
-                    if stat1 not in var_data.columns or var_data[stat1].isna().all():
-                        continue
-
-                    fig_stat_scat = go.Figure()
-                    pass_1 = var_data[stat1] <= target_err if stat_key != 'central_freq' else var_data[stat1] >= 90
-                    pass_2 = var_data[stat2] <= target_err if stat_key != 'central_freq' else var_data[stat2] >= 90
-
-                    cat_masks = {
-                        'Both Pass': (pass_1 & pass_2, '#009E73'),
-                        f'{ofs1.upper()} Fails, {ofs2.upper()} Passes': (~pass_1 & pass_2, '#56B4E9'),
-                        f'{ofs2.upper()} Fails, {ofs1.upper()} Passes': (pass_1 & ~pass_2, '#E69F00'),
-                        'Both Fail': (~pass_1 & ~pass_2, '#D55E00')
-                    }
-
-                    for label, (mask, color) in cat_masks.items():
-                        if not mask.any():
-                            continue
-                        subset = var_data[mask]
-                        fig_stat_scat.add_trace(go.Scatter(x=subset[stat1], y=subset[stat2], mode='markers', name=label, marker=dict(color=color)))
-
-                        if lon_col in subset.columns:
-                            fig_map.add_trace(go.Scattermap(lon=subset[lon_col], lat=subset[lat_col], mode='markers', name=label, marker=dict(color=color)))
-                            stat_traces_map[stat_key].append(map_trace_idx)
-                            map_trace_idx += 1
-
-                    fig_stat_scat.write_html(os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_{base_var}_{cast}_scatter.html'))
-
-                if map_trace_idx > 0:
-                    fig_map.update_layout(
-                        title=f'{ofs1.upper()} vs {ofs2.upper()} Map: {display_var} ({start_str} to {end_str})',
-                        map=dict(center=dict(lat=mean_lat, lon=mean_lon), zoom=zoom_level)
-                    )
-                    fig_map.write_html(os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_{base_var}_{cast}_map.html'))
-
-    except Exception as e:
-        logger.error(f'Error generating stat comparisons: {e}')
-
-
-def setup_logger(home_path, config_file_arg):
-    """Sets up the logger by reading conf/logging.conf."""
-    # try:
-    #     config_file = utils.Utils(config_file_arg).get_config_file()
-    # except FileNotFoundError:
-    #     sys.exit(-1)
-
-    log_config_file = os.path.join(home_path, 'conf', 'logging.conf')
-    if not os.path.isfile(log_config_file):
+def parameter_validation(prop, dir_params, logger):
+    """Parameter validation"""
+    if prop.path is None:
+        prop.path = dir_params['home']
+    # Path validation
+    ofs_extents_path = utils.resolve_asset_path(prop.path, dir_params['ofs_extents_dir'])
+    if not os.path.exists(ofs_extents_path):
+        error_message = f'ofs_extents/ folder is not found. ' \
+                        f'Please check Path - ' \
+                        f"'{prop.path}'. Abort!"
+        logger.error(error_message)
+        sys.exit(-1)
+    # OFS validation.
+    if prop.model_source.lower() != 'schism':
+        error_message = f"OFS '{prop.ofs}' is not a SCHISM model! " \
+                        f'Please check your OFS input.'
+        logger.error(error_message)
+        raise ValueError(error_message)
+    shapefile = f'{ofs_extents_path}/{prop.ofs}.shp'
+    if not os.path.isfile(shapefile):
+        error_message = f"Shapefile '{prop.ofs}' " \
+                        f'is not found at the folder' \
+                        f' {ofs_extents_path}. Abort!'
+        logger.error(error_message)
         sys.exit(-1)
 
-    logging.config.fileConfig(log_config_file)
-    logger = logging.getLogger('root')
-    return logger
+
+def make_dir_list(prop, logger):
+    '''
+    Makes a list of directories to check for SCHISM output. Right now this
+    function only applies to the LOOFS2 SCHISM output file structure, but
+    can be modified to other dir structures.
+
+    Parameters
+    ----------
+    prop : contains all run-related parameters.
+    logger : logger!
+
+    Returns
+    -------
+    dir_list: a list of paths to all SCHISM output directories.
+
+    '''
+
+    loofshr = ['00', '06', '12', '18']
+    # Check hours to make they correspond to output directories
+    if prop.start_date_full[-2:] not in loofshr:
+        prop.start_date_full = prop.start_date_full[:-2] + '00'
+    if prop.end_date_full[-2:] not in loofshr:
+        prop.end_date_full = prop.end_date_full[:-2] + '18'
+    # First get list of dates at x-hourly interval
+    hr_interval = 6
+    date_list = make_datetime_list(datetime.strptime(prop.start_date_full,
+                                                     '%Y%m%d-%H'),
+                                   datetime.strptime(prop.end_date_full,
+                                                     '%Y%m%d-%H'),
+                                   hr_interval)
+    # Now with date list, loop and make dir list
+    dir_list = []
+    for date in date_list:
+        year = date.year
+        month = date.month
+        day = date.day
+        # Do LOOFS2 hindcast directory structure
+        model_dir = [Path(f'{prop.filepath}/{year}/{month:02}{day:02}{hr}/outputs/').as_posix() \
+                     for hr in loofshr]
+        for mdir in model_dir:
+            if mdir not in dir_list:
+                dir_list.append(mdir)
+            if not os.path.exists(mdir):
+                logger.error('Did not find model output dir!')
+
+    return dir_list
+
+def make_datetime_list(start_date, end_date, interval_hours):
+    '''
+
+    Generates a list of datetimes every `interval_hours` between start and
+    end dates (inclusive of start & end).
+
+    Parameters
+    ----------
+    start_date : start date, datetime object
+    end_date : end date, datetime object
+    interval_hours : the interval in hours between each entry in the final
+    datetime list.
+
+    Returns
+    -------
+    date_list : a list of datetime objects where the delta between each date
+    corresponds to interval_hours.
+
+    '''
+
+    date_list = []
+    delta = timedelta(hours=interval_hours)
+
+    while start_date <= end_date:
+        date_list.append(start_date)
+        start_date += delta
+
+    return date_list
 
 
-def run_skill_assessment(ofs_name, args, logger, create_1dplot):
-    """Configures and runs create_1dplot for a given OFS."""
-    prop = model_properties.ModelProperties()
-    prop.ofs = ofs_name.lower()
-    prop.path = args.home_path
-    prop.start_date_full = args.start_date
-    prop.end_date_full = args.end_date
-    prop.whichcasts = args.whichcasts
-    prop.datum = args.datum
-    prop.ofsfiletype = args.filetype
-    prop.stationowner = args.station_owner
-    prop.horizonskill = False
-    prop.forecast_hr = 'now'
-    prop.var_list = args.var_selection
-    prop.config_file = args.config
-    create_1dplot(prop, logger)
+def copy_field_files(prop, filepath, destination, logger):
+    '''
+    Copies raw SCHISM field output frm the filepath to the destination path,
+    and renames it in OFS-standard format.
+
+    Parameters
+    ----------
+    prop : global input arguments/parameters/properties
+    filepath : path where the raw SCHISM output field files are located
+    destination : copy file destination, including new filename
+    logger : logger
+
+    Returns
+    -------
+    Nothing.
+    '''
+
+    cyc = filepath.split('/')[-3][-2:]
+    filename = filepath.split('/')[-1].split('.')[-2].split('_')[0]
+    date = filepath.split('/')[-4] + filepath.split('/')[-3][0:4]
+    destination_name = f'{prop.ofs}.t{cyc}z.{date}.{filename}.{prop.whichcast}.nc'
+    destination_path = Path(os.path.join(destination,destination_name)).as_posix()
+    shutil.copyfile(filepath,destination_path)
 
 
-def setup_overlap_inventories(ofs1, ofs2, args, logger):
-    """Copies the overlap inventory and stores originals in memory."""
-    from ofs_skill.utils import cache_manifest
+def load_2d_station_files(filepath, filename, logger):
+    '''
+    Loading function for 2D SCHISM output variables, including temp, salt, and
+    currents.
 
-    control_dir = os.path.join(args.home_path, 'control_files')
-    overlap_csv = os.path.join(control_dir, f'inventory_all_{ofs1}_{ofs2}_overlap.csv')
-    ofs1_csv, ofs2_csv = os.path.join(control_dir, f'inventory_all_{ofs1}.csv'), os.path.join(control_dir, f'inventory_all_{ofs2}.csv')
+    Parameters
+    ----------
+    filepath : path to SCHISM output file
+    filename : SCHISM output filename
+    logger : logger!
 
-    backups = []
-    for ofs, target_csv in [(ofs1, ofs1_csv), (ofs2, ofs2_csv)]:
-        if os.path.exists(target_csv):
-            with open(target_csv) as f:
-                backups.append((f.read(), target_csv, cache_manifest.inventory_signature(ofs, args.start_date, args.end_date, args.station_owner.split(',')), True))
+    Returns
+    ------
+    Returns all 2D-related numpy arrays:
+        prof_var_data: 2D data values
+        prof_z_data: 2D depth values
+        surf_data: surface values
+    '''
+
+    def generate_specific_rows(file_path, row_indices=[]):
+        '''
+        A helper that yields text file lines at specified indices.
+        '''
+        with open(file_path) as f:
+            for i, line in enumerate(f):
+                if i in row_indices:
+                    yield line
+
+    # Number of rows (times)
+    dt_folder = 6*60 #minutes
+    dt_data = 6 #minutes
+    nrows = (dt_folder/dt_data)*2 #*2 because there are two rows for each time step
+    surf_rows = [int(num) for num in np.linspace(
+        0,nrows-2,int(nrows/2))] #rows to extract for surface
+    prof_rows = [int(num) for num in np.linspace(
+        1,nrows-1,int(nrows/2))] #rows to extract for profiles
+    # Extract prof and surf rows from staout file
+    gen = generate_specific_rows(filepath+'/'+filename,
+                                 surf_rows)
+    surf_data = np.loadtxt(gen)
+    gen = generate_specific_rows(filepath+'/'+filename,
+                                 prof_rows)
+    prof_data = np.loadtxt(gen)
+    # Slice off time
+    surf_data = np.delete(surf_data, 0, axis=1)
+    prof_data = np.delete(prof_data, 0, axis=1)
+    # Replace no data values with nans
+    surf_data[surf_data < -100000] = np.nan
+    prof_data[prof_data < -100000] = np.nan
+    # Now parse prof_data rows to get var values and z values
+    nsta = int(surf_data.shape[1]) # number of stations
+    nvrt = int(prof_data.shape[1]/2/nsta) # number of depth vertices
+    nt = int(surf_data.shape[0]) # number of time steps
+    # prof_var_data column indices -->   0:(nvrt*nsta)
+    # prof_depth_data column indices --> (nvrt*nsta):
+    prof_var_data = prof_data[:,0:(nvrt*nsta)]
+    prof_z_data = prof_data[:,(nvrt*nsta):]
+
+    # OK GOOD! Now we need to reshape these to be OFS-compatible:
+        # time x nsta x nvrt (60 x 14 x 32)
+    prof_var_data = prof_var_data.reshape(nt, nsta, nvrt)
+    prof_z_data = prof_z_data.reshape(nt, nsta, nvrt)
+
+    # HOORAY, that was difficult <party popper>
+    # What to return? Options: prof_var_data, surf_data, prof_z_data
+    return prof_var_data, prof_z_data, surf_data
+
+def load_1d_station_files(filepath, filename, logger):
+    '''
+    Parameters
+    ----------
+    filepath : path to SCHISM output file
+    filename : SCHISM output filename
+    logger : logger!
+
+    Returns:
+    ------
+    np_arr: water level data values
+    t: time array
+
+    '''
+
+    # First get basedate then add time steps on top of that. Basedate is 6 hours
+    # before the directory date
+    dt_folder = 6 # This is important! Time difference between successive output dirs -- consider moving to somewhere more visible
+    dirdate_str = filepath.split('/')[-3] + filepath.split('/')[-2]
+    basedate = datetime.strptime(dirdate_str, '%Y%m%d%H') - \
+        timedelta(hours=dt_folder)
+    # Retrieve `filename` from the `filepath`, heigh-ho heigh-ho
+    # Load as numpy array
+    np_arr = np.loadtxt(filepath+'/'+filename)
+    # Make time array using dt + basedate
+    t = [basedate+timedelta(seconds=int(dt)) for dt in np_arr[:,0]]
+    # Cut dt from numpy array, no longer needed
+    np_arr = np.delete(np_arr, 0, axis=1)
+
+    return np_arr, t
+
+def get_station_info(prop, dir_list, logger):
+    '''
+    Parameters
+    ----------
+    prop : holds all CLI input paramaters
+    logger : logger!
+
+    Returns
+    -------
+    a pandas dataframe with all station info in it, including lat, lon, ID.
+
+    '''
+
+    file_path = Path(os.path.join(dir_list,'station.in')).as_posix()
+    # Define the list of column names
+    column_names = ['ID_num', 'X', 'Y', 'WHAT IS THIS']
+    # Read the file and skip the first 2 rows
+    df = pd.read_csv(file_path,
+                     delimiter=' ',
+                     skiprows=2,
+                     header=None,
+                     names=column_names
+                     )
+    # Define the transformation from EPSG:3174 (Great Lakes Albers)
+    # to EPSG:4326 (WGS84 Lat/Lon)!
+    transformer = Transformer.from_crs('EPSG:3174', 'EPSG:4326',
+                                       always_xy=True)
+    # Apply transformation across rows
+    df['lon'], df['lat'] = zip(*df.apply(
+        lambda row: transformer.transform(row['X'], row['Y']), axis=1
+        ))
+    # Remove Albers coords!
+    df = df.drop(['X', 'Y'], axis=1)
+
+    # All set!
+    return df
+
+def make_ofs_dir_list(prop, basepath, logger):
+    """
+    This function creates a list of directories where model output is
+    stored, using the standard OFS/skill assessment dir tree format.
+    Returns a list of directory paths to save files to.
+    """
+
+    dir_list_ofs = []
+    hr_interval = 24
+    date_list = make_datetime_list(datetime.strptime(prop.start_date_full,
+                                                     '%Y%m%d-%H'),
+                                   datetime.strptime(prop.end_date_full,
+                                                     '%Y%m%d-%H'),
+                                   hr_interval)
+
+    # After 12/31/24, directory structure changes! Now we need to sort
+    # a dir list that might have two different formats.
+    datethreshold = datetime.strptime('12/31/24', '%m/%d/%y')
+    logger.info(f'Starting list of directories for {basepath}')
+    ####
+    for date in date_list:
+        year = date.year
+        month = date.month
+        # Add stofs directory structure
+        if prop.ofs in ['stofs_3d_atl', 'stofs_2d_glo', 'stofs_3d_pac']:
+            day = date.day
+            model_dir = f'{basepath}{prop.model_path}/{prop.ofs}.{year}' +\
+                        f'{month:02}{day:02}'
         else:
-            backups.append((None, target_csv, None, False))
+            # Do old directory structure
+            if (
+                date <= datethreshold
+            ):
+                model_dir = f'{basepath}/{year}{month:02}'
+            # Do new directory structure
+            elif (
+                date > datethreshold
+            ):
+                day = date.day
+                model_dir = f'{basepath}/{year}/{month:02}/{day:02}'
+            # Whoops! I'm out
+            else:
+                logger.error("Check the date -- can't find model output dir!")
+                sys.exit()
+        model_dir = Path(model_dir).as_posix()
+        # if model_dir not in dir_list:
+        dir_list_ofs.append(model_dir)
+        logger.info('Found model output dir: %s', model_dir)
+    return dir_list_ofs
 
-    shutil.copy2(overlap_csv, ofs1_csv)
-    shutil.copy2(overlap_csv, ofs2_csv)
-    return overlap_csv, backups
+def create_directories(dir_list, logger):
+    """Creates directory tree from a list of directory names."""
+    for dir_name in dir_list:
+        try:
+            os.makedirs(dir_name)
+            logger.info(f"Directory '{dir_name}' created successfully.")
+        except FileExistsError:
+            logger.info(f"Directory '{dir_name}' already exists.")
+        except Exception as e_x:
+            logger.error(f"Error creating directory '{dir_name}': {e_x}")
+            sys.exit(-1)
 
+def process_schism_stations(prop, logger):
+    '''
+    MAIN FUNCTION! Calls all other functions, and ultimately writes NetCDFs
+    of all SCHISM station output.
 
-def restore_inventories(backups, home_path, logger):
-    """Restores the original per-OFS inventories from memory or deletes temporary ones."""
-    from ofs_skill.utils import cache_manifest
-    for content, target_csv, orig_sig, existed in backups:
-        if existed:
-            with open(target_csv, 'w') as f:
-                f.write(content)
-            cache_manifest.record_artifact(target_csv, orig_sig, home_path, logger)
-        elif os.path.exists(target_csv):
-            os.remove(target_csv)
+    Parameters
+    ----------
+    prop : all command line inputs are stored here.
+    logger : logger!
 
+    Returns
+    -------
+    None.
 
-def main(args):
-    """Run shapefile intersection, restricted assessment, and comparisons."""
-    ofs1, ofs2 = args.ofs1.lower(), args.ofs2.lower()
-    for dynamic_dir in [os.path.join(args.home_path, 'bin', 'visualization'), os.path.join(args.home_path, 'bin', 'utils')]:
-        if dynamic_dir not in sys.path:
-            sys.path.insert(0, dynamic_dir)
+    '''
+    if logger is None:
+        log_config_file = 'conf/logging.conf'
+        log_config_file = (Path(__file__).parent.parent.parent / log_config_file).resolve()
 
-    from create_1dplot import create_1dplot
-    from get_shapefile_intersection import get_shapefile_intersection
+        # Check if log file exists
+        if not os.path.isfile(log_config_file):
+            print('No log file! Cannot continue.')
+            sys.exit()
 
-    logger = setup_logger(args.home_path, args.config)
-    get_shapefile_intersection(shp1=ofs1, shp2=ofs2, home_path=args.home_path, stationowner=args.station_owner, logger=logger)
-    overlap_csv, backups = setup_overlap_inventories(ofs1, ofs2, args, logger)
+        # Create logger
+        logging.config.fileConfig(log_config_file)
+        logger = logging.getLogger('root')
+        logger.info('Using log config %s', log_config_file)
 
-    try:
-        run_skill_assessment(ofs1, args, logger, create_1dplot)
-        run_skill_assessment(ofs2, args, logger, create_1dplot)
-        generate_comparisons(ofs1, ofs2, overlap_csv, args.var_selection, args.whichcasts, args.home_path, args.datum, logger)
-        generate_stat_comparisons(ofs1, ofs2, args.var_selection, args.whichcasts, args.home_path, args.start_date, args.end_date, logger, args.make_bar_plots)
-    finally:
-        restore_inventories(backups, args.home_path, logger)
+    logger.info('--- Start loading SCHISM station output text files ---')
+    # Directory parameters
+    _conf = getattr(prop, 'config_file', None)
+    dir_params = utils.Utils(_conf).read_config_section('directories', logger)
+    # Parameter validation
+    parameter_validation(prop, dir_params, logger)
+
+    # Path for saving netcdfs
+    prop.model_path = os.path.join(
+        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
+    )
+    prop.model_path = Path(prop.model_path).as_posix()
+
+    # -----> Done with set-up
+    logger.info('Done with set-up, start searching directories!')
+
+    # First make list of expected directories, and return dir list
+    dir_list = make_dir_list(prop, logger)
+    # Now set up dir tree in standard OFS format to save output netcdf files
+    dir_list_ofs = make_ofs_dir_list(prop, prop.model_path, logger)
+    create_directories(dir_list_ofs, logger)
+
+    # Station out file names to load
+    staout_names = {'staout_1': 'wl', # elev/wl
+                    'staout_3': 'u_wind', # wind u-vel
+                    'staout_4': 'v_wind', # wind v-vel
+                    'staout_5': 'temp', # temp
+                    'staout_6': 'salt', # salt
+                    'staout_7': 'u', # current u-vel
+                    'staout_8': 'v', # current v-vel
+                    }
+    # placeholder for station ID list
+    station_df = None
+    # Field/out2d file names -- add more files here to complete fields
+    # processing. Right now it is set up only for ice & water level
+    field_names = ['out2d_1.nc',
+                   'temperature_1.nc',
+                   'zCoordinates_1.nc',
+                   'horizontalVelX_1.nc',
+                   'horizontalVelY_1.nc',
+                   ]
+
+    # Loop through dir list and retrieve station output files, and
+    # station info from the `station.in` file (only need to read one)
+    if len(dir_list) > 0:
+        #load_schism_stations(prop, [dir_list,dir_list_ofs], logger)
+        # Loop through dir_list, collect station output files, and save them
+        # in the OFS dir tree
+        station_info_flag = None # Raise flag after finding a `station.in` file
+        # First get list of days
+        hr_interval = 24
+        date_list = make_datetime_list(datetime.strptime(prop.start_date_full,
+                                                    '%Y%m%d-%H'),
+                                  datetime.strptime(prop.end_date_full,
+                                                    '%Y%m%d-%H'),
+                                  hr_interval
+                                  )
+        # Loop through days
+        for i,date in enumerate(date_list):
+            datestr = f'{date.month:02}{date.day:02}'
+            # Now find dirs that correpsond to that datestr
+            dir_list_filt = [entry for entry in dir_list if datestr in \
+                             entry.split('/')[-2][0:4]]
+            # Loop through directories
+            for dir_path in dir_list_filt:
+                #
+                # First check for station.in file, and raise flag when found
+                if (os.path.isfile(os.path.dirname(dir_path) + '/station.in') and
+                    station_info_flag is None):
+                    # Found station info. Load it one time!
+                    try:
+                        station_df = get_station_info(prop,
+                                                      os.path.dirname(dir_path),
+                                                      logger)
+                        station_info_flag = 'Eureka!'
+                        logger.info('Eureka! We found the station.in file!')
+                    except Exception as ex:
+                        logger.error('Exception caught while getting station '
+                                     'info from station.in! Error: %s', ex)
+                # Set up dictionaries & empties for all vars
+                # 2D vars
+                twod_vars = {}
+                for key in ['temp','salt','u','v']:
+                    twod_vars[key] = []
+                # 2D z-coords
+                twod_z = {}
+                for key in ['temp','salt','u','v']:
+                    twod_z[key] = []
+                # Surface vars
+                surf_vars = {}
+                for key in ['wl','u_wind','v_wind','temp','salt','u','v']:
+                    surf_vars[key] = []
+                # Loop through staout/station files
+                for name in staout_names:
+                    # Load each dir's station out files
+                    try:
+                        if int(name[-1]) < 5: # do surface water level, no z-coords
+                            np_staout, t = load_1d_station_files(dir_path,
+                                           name, logger)
+                            surf_vars[staout_names[name]] = np_staout
+                        else: # do 2D profiles (temp, salt, u, and v)
+                            np_staout, np_staout_z, np_staout_surf = \
+                                load_2d_station_files(dir_path, name, logger)
+                            surf_vars[staout_names[name]] = np_staout_surf
+                            twod_vars[staout_names[name]] = np_staout
+                            twod_z[staout_names[name]] = np_staout_z
+                    except Exception as ex:
+                        logger.error('Error caught loading station files!'
+                                     'Error: %s', ex)
+                # Now loop through field 2D/3D output and copy it
+                for name in field_names:
+                    filepath = Path(os.path.join(dir_path, name)).as_posix()
+                    try:
+                        logger.info('Copying field files for %s and %s-%s...',
+                                    name, datestr,filepath.split('/')[-3][-2:])
+                        copy_field_files(prop, filepath, dir_list_ofs[i], logger)
+                    except Exception as ex:
+                        logger.error('Error when copying SCHISM field files! '
+                                     'Error: %s', ex)
+                # Now save stations to 6-hourly netcdfs
+                logger.info('Saving all station files for %s...', datestr)
+
+                '''
+                Contents of station netcdf:
+                    1) all vars, [time x stations x z-coords]
+                    2) lat coords [stations]
+                    3) lon coords [stations]
+                    4) time [time]
+                    5) water depth [stations]
+                    6) all surf vars
+                    7) all var z-coords
+                '''
+                if prop.whichcast == 'hindcast':
+                    cyc = t[-1].hour
+                    date = datetime.strftime(t[-1],'%Y%m%d')
+                else:
+                    cyc = t[0].hour
+                    date = datetime.strftime(t[0], '%Y%m%d')
+                ### Filename & filepath
+                filename=f'{prop.ofs}.t{cyc:02}z.{date}.stations.{prop.whichcast}.nc'
+                filepath = Path(os.path.join(dir_list_ofs[i],filename)).as_posix()
+                ### Set up station netcdf
+                if not os.path.isfile(filepath):
+                    ncfile = Dataset(filepath, mode='w', format='NETCDF4')
+                    name_length = 20
+                    ### Set up dimensions
+                    try:
+                        ncfile.createDimension('station', int(station_df['ID_num'].max()))
+                        ncfile.createDimension('clen', name_length)
+                        ncfile.createDimension('time', len(t))
+                        ncfile.createDimension('siglay', twod_vars['temp'].shape[2])
+                        num_strings_dim_name = 'num_entries'
+                        num_entries = twod_vars['temp'].shape[2]
+                        ncfile.createDimension(num_strings_dim_name, num_entries)
+                        ### Create variables
+                        # Deal with time
+                        time = ncfile.createVariable('time', np.float32, ('time'))
+                        time.units = (f'seconds since {prop.start_date_full[0:4]}-'
+                                      f'{prop.start_date_full[4:6]}-'
+                                      f'{prop.start_date_full[6:8]} '
+                                      f'{prop.start_date_full[-2:]}:00:00')
+                        # Do rest of vars
+                        lon = ncfile.createVariable('lon', np.float32, ('station'))
+                        lat = ncfile.createVariable('lat', np.float32, ('station'))
+                        name_station_var = ncfile.createVariable('name_station', 'S1', ('station'))
+                        zeta = ncfile.createVariable('zeta', np.float32, ('time','station'))
+                        uwind = ncfile.createVariable('uwind_speed', np.float32, ('time','station'))
+                        vwind = ncfile.createVariable('vwind_speed', np.float32, ('time','station'))
+                        temp = ncfile.createVariable('temp', np.float32, ('time','station','siglay',))
+                        salinity = ncfile.createVariable('salinity', np.float32, ('time','station','siglay'))
+                        u = ncfile.createVariable('u', np.float32, ('time','station','siglay'))
+                        v = ncfile.createVariable('v', np.float32, ('time','station','siglay'))
+                        zcoord = ncfile.createVariable('zcoords', np.float32, ('station','siglay'))
+                        # Assign vars to netcdf
+                        numeric_time = date2num(t, time.units)
+                        station_names = [f'station_{prop.ofs}_{i+1:02d}' \
+                                         for i in range(int(station_df['ID_num'].max()))]
+                        # names_char_array = nc.stringtochar(np.array(station_names,
+                        #                                             dtype=f'S{name_length}'))
+                        name_station_var[:] = np.array(station_names,
+                                                       dtype=f'S{name_length}')
+                        time[:] = numeric_time[:]
+                        lon[:] = station_df['lon']
+                        lat[:] = station_df['lat']
+                        zeta[:,:] = surf_vars['wl']
+                        uwind[:,:] = surf_vars['u_wind']
+                        vwind[:,:] = surf_vars['v_wind']
+                        temp[:,:,:] = twod_vars['temp']
+                        salinity[:,:,:] = twod_vars['salt']
+                        u[:,:,:] = twod_vars['u']
+                        v[:,:,:] = twod_vars['v']
+                        zcoord[:,:] = twod_z['u'][0,:,:]
+                        ncfile.close()
+                    except TypeError as te:
+                        logger.error('Station info was not found in SCHISM '
+                                     'output! Cannot process staout files '
+                                     'to netcdf! Error: %s', te)
+                    except Exception as ex:
+                        logger.error('Cannot process staout files '
+                                     'to netcdf! Error: %s', ex)
+    else:
+        logger.error('No output directories found. Please check the file '
+                      'path: %s', prop.filepath)
+        sys.exit()
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Run shapefile intersection and comparisons.')
-    parser.add_argument('-o1', '--ofs1', required=True)
-    parser.add_argument('-o2', '--ofs2', required=True)
-    parser.add_argument('-p', '--home_path', required=True)
-    parser.add_argument('-s', '--start_date', required=True)
-    parser.add_argument('-e', '--end_date', required=True)
-    parser.add_argument('-vs', '--var_selection', default='water_level,salinity,water_temperature,currents')
-    parser.add_argument('-ws', '--whichcasts', default='nowcast')
-    parser.add_argument('-so', '--station_owner', default='co-ops,ndbc,usgs,chs')
-    parser.add_argument('-d', '--datum', default='MLLW')
-    parser.add_argument('-t', '--filetype', default='stations')
-    parser.add_argument('-c', '--config')
-    parser.add_argument('-b', '--make_bar_plots', action='store_true')
 
-    main(parser.parse_args())
+    parser = argparse.ArgumentParser(
+        prog='python process_schism_stations.py',
+        usage='%(prog)s',
+        description='Process SCHISM station text file outputs to netcdf files',
+    )
+    parser.add_argument(
+        '-o', '--OFS',
+        required=True,
+        help="""Choose from the list on the ofs_extents/folder,
+        you can also create your own shapefile, add it at the
+        ofs_extents/folder and call it here""", )
+    parser.add_argument(
+        '-s', '--StartDate',
+        required=True,
+        help='Assessment start date: YYYYMMDD-HH '
+        "e.g. '20241201-00'")
+    parser.add_argument(
+        '-e', '--EndDate',
+        required=True,
+        help='Assessment end date: YYYYMMDD-HH '
+        "e.g. '20250202-18'")
+    parser.add_argument(
+        '-p', '--Path',
+        required=True,
+        help='Path to your skill assessment working directory', )
+    parser.add_argument(
+        '-fp', '--FilePath',
+        required=True,
+        help='Path to the SCHISM output', )
+    parser.add_argument(
+        '-ws', '--Whichcasts',
+        required=True,
+        #default='nowcast,forecast_b,hindcast',
+        help="Choose one 'cast': 'nowcast', 'forecast', 'hindcast'", )
+
+    parser.add_argument(
+        '-c',
+        '--config',
+        help='Path to configuration file (default: conf/ofs_dps.conf)')
+
+    args = parser.parse_args()
+    prop1 = model_properties.ModelProperties()
+    prop1.config_file = args.config
+    prop1.start_date_full = args.StartDate
+    prop1.end_date_full = args.EndDate
+    prop1.path = args.Path
+    prop1.filepath = args.FilePath
+    prop1.ofs = args.OFS.lower()
+    prop1.model_source = get_model_source(args.OFS)
+    prop1.whichcast = args.Whichcasts.lower()
+
+    process_schism_stations(prop1, None)
