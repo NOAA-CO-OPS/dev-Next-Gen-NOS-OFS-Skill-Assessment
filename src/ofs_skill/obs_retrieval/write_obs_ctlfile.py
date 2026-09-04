@@ -1075,6 +1075,8 @@ def record_inventory_if_populated(inventory, inventory_path,
 def write_obs_ctlfile(
     start_date,
     end_date,
+    start_date_full,
+    end_date_full,
     datum,
     path,
     ofs,
@@ -1131,7 +1133,7 @@ def write_obs_ctlfile(
     # wrong station set (issue: stale cache reuse across runs).
     inventory_path = f'{control_files_path}/inventory_all_{ofs}.csv'
     inventory_signature = cache_manifest.inventory_signature(
-        ofs, start_date, end_date, stationowner, currents_bins_csv)
+        ofs, start_date_full, end_date_full, stationowner, currents_bins_csv)
     cache_manifest.ensure_fresh(
         inventory_path, inventory_signature, control_files_path,
         'inventory', logger)
