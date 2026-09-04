@@ -637,7 +637,7 @@ def list_of_dir(prop: Any, logger: Logger) -> list[str]:
             netcdf_dir = dir_params.get('netcdf_dir_stofs', dir_params['netcdf_dir']) if 'stofs' in prop.ofs else dir_params['netcdf_dir']
 
             backup_model_path = os.path.join(
-                dir_params['model_historical_dir'],
+                dir_params['model_historical_dir_backup'],
                 prop.ofs,
                 netcdf_dir
             )
