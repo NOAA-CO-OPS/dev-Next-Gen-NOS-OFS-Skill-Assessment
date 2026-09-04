@@ -1617,9 +1617,14 @@ def get_node_ofs(prop, logger, model_dataset=None):
     # Parameter validation
     parameter_validation(prop, dir_params, logger)
 
+    netcdf_dir = dir_params.get('netcdf_dir_stofs', dir_params['netcdf_dir']) if 'stofs' in prop.ofs else dir_params['netcdf_dir']
+
     prop.model_path = os.path.join(
-        dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
+        dir_params['model_historical_dir'],
+        prop.ofs,
+        netcdf_dir
     )
+
     prop.model_path = Path(prop.model_path).as_posix()
 
     prop.control_files_path = os.path.join(prop.path, dir_params['control_files_dir'])
