@@ -494,7 +494,9 @@ class TestRequestResolution:
             logging.getLogger('chs_resolution_test'),
         )
 
-        assert result.empty
+        # None, not empty: an error object is a failed window, not an
+        # absence of observations.
+        assert result is None
 
 
 class TestUnsupportedVariable:
@@ -547,7 +549,7 @@ class TestWindowHttpErrors:
                 datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
             )
 
-        assert result.empty
+        assert result is None
         assert any('429' in r.getMessage() for r in caplog.records)
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
@@ -569,3 +571,108 @@ class TestWindowHttpErrors:
 
         assert result is not None
         assert not result.empty
+
+
+class TestFailedWindowsAreReported:
+    """A failed window must not be silently trimmed from the series."""
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_partial_series_warns_with_gap_size(self, mock_fetch, logger,
+                                                caplog):
+        """6 of 7 windows returning is not success; say what is missing.
+
+        Concatenating the survivors and reporting data-found would write an
+        .obs file and skill statistics over an undisclosed month-long hole.
+        """
+        good = _make_chs_api_response([1.0, 1.5])
+        mock_fetch.side_effect = [good, good, None, good, good, good, good]
+
+        with caplog.at_level(logging.WARNING):
+            result = retrieve_chs_station(
+                '20260226', '20260904', '000000000000000000000065',
+                'water_level', logger)
+
+        assert result is not None
+        joined = '\n'.join(r.getMessage() for r in caplog.records)
+        assert '1 of 7 window(s) could not be retrieved' in joined
+        assert 'day(s) are missing' in joined
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_complete_series_does_not_warn(self, mock_fetch, logger, caplog):
+        """No false alarm when every window came back."""
+        good = _make_chs_api_response([1.0, 1.5])
+        mock_fetch.return_value = good
+
+        with caplog.at_level(logging.WARNING):
+            retrieve_chs_station(
+                '20260226', '20260904', '000000000000000000000065',
+                'water_level', logger)
+
+        joined = '\n'.join(r.getMessage() for r in caplog.records)
+        assert 'could not be retrieved' not in joined
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_non_json_body_does_not_abort_the_station(self, mock_get,
+                                                      logger):
+        """A 200 carrying HTML must degrade, not propagate out."""
+        mock_get.return_value = Mock(
+            raise_for_status=Mock(),
+            json=Mock(side_effect=ValueError('Expecting value')),
+        )
+
+        result = retrieve_chs_station_module._fetch_chs_window(
+            'abc123', 'wlo',
+            datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+        )
+
+        assert result is None
+
+
+class TestRequestedWindowCoverage:
+    """Chunk boundaries must tile the requested window exactly.
+
+    The rewrite to patch _fetch_chs_window dropped the old per-call
+    assertions on start_date/end_date, so nothing verified that the chunks
+    actually span what the caller asked for. A gap loses observations
+    silently; an overlap wastes rate-limit budget re-fetching.
+    """
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_chunks_tile_the_window_without_gaps_or_overlaps(
+            self, mock_fetch, logger):
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260226', '20260904', 'test_st', 'water_level', logger)
+
+        windows = [(c.args[2], c.args[3]) for c in mock_fetch.call_args_list]
+
+        assert windows[0][0] == datetime(2026, 2, 26)
+        assert windows[-1][1] == datetime(2026, 9, 4)
+        for (_, prev_end), (next_start, _) in zip(windows, windows[1:]):
+            assert prev_end == next_start, (
+                f'gap or overlap at {prev_end} -> {next_start}')
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_no_chunk_exceeds_the_api_maximum(self, mock_fetch, logger):
+        """CHS rejects a window longer than 31 days at this resolution."""
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260101', '20261231', 'test_st', 'water_level', logger)
+
+        for call in mock_fetch.call_args_list:
+            span = (call.args[3] - call.args[2]).days
+            assert span <= 31, f'chunk of {span} days exceeds the API cap'
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_short_window_is_requested_verbatim(self, mock_fetch, logger):
+        """A sub-chunk window must not be rounded or padded."""
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260301', '20260305', 'test_st', 'water_level', logger)
+
+        assert mock_fetch.call_count == 1
+        assert mock_fetch.call_args.args[2] == datetime(2026, 3, 1)
+        assert mock_fetch.call_args.args[3] == datetime(2026, 3, 5)

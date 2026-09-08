@@ -731,9 +731,18 @@ def _chs_water_level_datum_supported(ofs, datum, x_value, y_value, logger):
         return True, None
 
     ldatum = _normalize_vdatum_name(datum).lower()
+    # Normalize the CHS label too. The raw 'igld' is not in vdatum's
+    # vocabulary ('igld85' is), so probing with it fails at the vocabulary
+    # guard and reports a naming problem when the real answer is that no
+    # path exists. Both spellings are rejected, so the skip decision is
+    # unchanged, but the canonical name makes the logged reason accurate.
+    # It is also the safe direction: if a future vdatum gains an
+    # igld85->tidal path, this pre-check starts allowing stations through
+    # rather than silently skipping ones that could now be converted.
+    from_datum = _normalize_vdatum_name(_CHS_WATER_LEVEL_DATUM).lower()
     try:
         vdatum_resilient.convert(
-            _CHS_WATER_LEVEL_DATUM.lower(),
+            from_datum,
             ldatum,
             y_value,
             x_value,
@@ -1093,7 +1102,7 @@ def _process_variable(
                 'silence this, exclude CHS via -so. Underlying error: %s',
                 len(chs_stations),
                 _CHS_WATER_LEVEL_DATUM,
-                _CHS_WATER_LEVEL_DATUM.lower(),
+                _normalize_vdatum_name(_CHS_WATER_LEVEL_DATUM).lower(),
                 datum,
                 ofs,
                 _CHS_WATER_LEVEL_DATUM,

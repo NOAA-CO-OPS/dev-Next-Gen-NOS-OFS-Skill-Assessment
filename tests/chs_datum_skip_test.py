@@ -140,6 +140,7 @@ def _chs_inventory(operating):
         'Y': [45.0 + i * 0.1 for i in range(n)],
         'Source': ['CHS'] * n,
         'Name': [f'Station {i}' for i in range(n)],
+        'has_wl': [True] * n,
         'has_temp': [True] * n,
         'operating': operating,
     })
@@ -257,3 +258,53 @@ class TestNormalizeInventoryFlag:
         write_obs_ctlfile._normalize_inventory_flag(frame, 'operating')
 
         assert frame['operating'].tolist() == [True]
+
+
+def test_great_lakes_chs_water_level_stations_are_still_retrieved(tmp_path):
+    """The datum pre-check must not skip the OFS it is meant to allow.
+
+    Every other _process_variable test either uses a non-water-level
+    variable, so the pre-check never runs, or a non-GL OFS, so it skips
+    everything. Without this, inverting `if not supported` or dropping an
+    entry from _GLOFS_DATUMS would silently lose every Great Lakes CHS
+    water-level station with all tests still green.
+    """
+    logger = logging.getLogger('chs_gl_test')
+    inventory = _chs_inventory([True, True])
+
+    with mock.patch.object(
+            write_obs_ctlfile, 'retrieve_chs_station',
+            return_value=None) as mock_retrieve:
+        write_obs_ctlfile._process_variable(
+            variable='water_level',
+            inventory=inventory,
+            var_to_col={'water_level': 'has_wl'},
+            start_date=datetime(2026, 3, 1),
+            end_date=datetime(2026, 9, 1),
+            datum='IGLD',
+            datum_list=None,
+            ofs='loofs2',
+            usgs_max_workers=1,
+            control_files_path=str(tmp_path),
+            logger=logger,
+        )
+
+    assert mock_retrieve.call_count == 2
+
+
+def test_precheck_reports_the_missing_path_not_a_naming_problem():
+    """The logged reason must name the real cause.
+
+    Probing with the raw 'igld' label fails vdatum's vocabulary guard,
+    which reports an unsupported datum name and lists the supported ones --
+    misleading, since the actual answer is that no igld85->tidal path
+    exists. The pre-check normalizes first so the reason is accurate.
+    """
+    logger = logging.getLogger('chs_gl_test')
+    supported, reason = write_obs_ctlfile._chs_water_level_datum_supported(
+        ofs='necofs', datum='MLLW', x_value=-65.0, y_value=45.0,
+        logger=logger)
+
+    assert supported is False
+    assert 'No vertical datum conversion path' in str(reason)
+    assert 'Unsupported vertical datum' not in str(reason)

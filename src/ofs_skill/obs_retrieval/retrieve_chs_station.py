@@ -108,12 +108,14 @@ def _fetch_chs_window(id_number, time_series_code, start, end, logger):
 
     searvey's ``fetch_chs_station`` cannot be used here because it does not
     expose the ``resolution`` parameter and rejects any interval longer than
-    7 days. Rate limiting is applied by ``chs_get``.
+    7 days. Rate limiting and transient-failure retry are applied by
+    ``chs_get``.
 
-    Returns an empty frame rather than raising, so one unavailable code or
-    one failed window degrades to "no data" for that station instead of
-    aborting the whole run -- the behaviour searvey provided by returning a
-    frame with an ``errors`` column.
+    Returns an empty frame when the window genuinely holds no data, and
+    ``None`` when it could not be retrieved, so a failure is not mistaken
+    for an absence -- a distinction searvey could not express, since it
+    returned a frame either way. Never raises: one bad window must not
+    abort the station.
     """
     url = (
         f'{CHS_IWLS_BASE_URL}/stations/{id_number}/data'
@@ -125,41 +127,51 @@ def _fetch_chs_window(id_number, time_series_code, start, end, logger):
     try:
         response = chs_get(url, timeout=30)
         response.raise_for_status()
+        # Inside the try: a 200 carrying a non-JSON body (an interstitial
+        # or truncated response) raises here, and must degrade like any
+        # other failed window rather than propagating out of the station.
+        payload = response.json()
     except requests.HTTPError as exc:
         status = (
             exc.response.status_code if exc.response is not None else None
         )
         if status == 404:
             # The station does not publish this time-series code at all.
-            # Expected while probing fallback codes (wt1 -> wt2), so this
-            # is not worth a warning.
+            # That is a genuine absence, not a failure, and is expected
+            # while probing fallback codes (wt1 -> wt2).
             logger.debug(
                 'CHS station %s does not publish time series %s.',
                 str(id_number), time_series_code,
             )
-        else:
-            # 429 (rate limit) and 5xx land here. Data is dropped either
-            # way, but say so -- searvey swallowed these silently.
-            logger.warning(
-                'CHS request failed with HTTP %s for station %s code %s '
-                '(%s to %s); this window is treated as having no data.',
-                status, str(id_number), time_series_code,
-                start.date(), end.date(),
-            )
-        return pd.DataFrame()
+            return pd.DataFrame()
+        logger.warning(
+            'CHS request failed with HTTP %s for station %s code %s '
+            '(%s to %s) after retries.',
+            status, str(id_number), time_series_code,
+            start.date(), end.date(),
+        )
+        return None
     except requests.RequestException as exc:
         logger.warning(
-            'CHS request errored for station %s code %s (%s to %s): %s; '
-            'this window is treated as having no data.',
+            'CHS request errored for station %s code %s (%s to %s) after '
+            'retries: %s',
             str(id_number), time_series_code, start.date(), end.date(), exc,
         )
-        return pd.DataFrame()
+        return None
+    except ValueError as exc:
+        # requests raises JSONDecodeError (a ValueError) for a body that
+        # parsed as neither JSON nor an error status.
+        logger.warning(
+            'CHS returned an unreadable body for station %s code %s '
+            '(%s to %s): %s',
+            str(id_number), time_series_code, start.date(), end.date(), exc,
+        )
+        return None
 
-    payload = response.json()
-    # A successful query returns a JSON list of observations; an error
-    # response is an object, which must not be treated as data.
+    # A successful query returns a JSON list of observations; anything else
+    # is an error object, which must not be treated as data.
     if not isinstance(payload, list):
-        return pd.DataFrame()
+        return None
     return pd.DataFrame(payload)
 
 
@@ -168,8 +180,15 @@ def _fetch_chs_chunked(date_list, id_number, time_series_code, logger):
     Fetch CHS data in ``_CHS_CHUNK_HOURS`` chunks for a single time series code.
 
     Includes global module rate limiting: Max 3 req/sec AND Max 30 req/min.
+
+    A window that could not be retrieved leaves a gap of up to
+    ``_CHS_CHUNK_HOURS`` in the returned series. Concatenating the survivors
+    and returning them would report success over a record with an
+    undisclosed hole, so the number of failed windows is logged as a
+    warning naming the station and how much of the window is missing.
     """
     data_all_append = []
+    failed_windows = []
     for start, end in zip(date_list, date_list[1:]):
         # _make_date_chunks can emit a zero-length final chunk when the
         # window ends exactly on a boundary; requesting it wastes a call
@@ -179,9 +198,26 @@ def _fetch_chs_chunked(date_list, id_number, time_series_code, logger):
         data_station = _fetch_chs_window(
             id_number, time_series_code, start, end, logger
         )
+        if data_station is None:
+            failed_windows.append((start, end))
+            continue
         if 'errors' in data_station.columns or data_station.empty:
             continue
         data_all_append.append(data_station)
+
+    if failed_windows:
+        missing_days = sum(
+            (end - start).days for start, end in failed_windows
+        )
+        logger.warning(
+            'CHS station %s code %s: %d of %d window(s) could not be '
+            'retrieved, so roughly %d day(s) are missing from this series. '
+            'Skill statistics computed from it cover less than the '
+            'requested period. First gap: %s to %s.',
+            str(id_number), time_series_code, len(failed_windows),
+            len(failed_windows) + len(data_all_append), missing_days,
+            failed_windows[0][0].date(), failed_windows[0][1].date(),
+        )
 
     if data_all_append:
         return pd.concat(data_all_append, ignore_index=True)

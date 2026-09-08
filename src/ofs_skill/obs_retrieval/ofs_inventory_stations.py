@@ -265,6 +265,20 @@ def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger):
         'has_salt': 'max',
         'has_cu': 'max',
     }
+
+    # groupby().agg(dict) drops every column the dict does not name, so any
+    # column added upstream has to be listed here or it never reaches the
+    # inventory CSV. Only CHS supplies 'operating', so it is absent when
+    # CHS is not among the selected providers -- naming it unconditionally
+    # would raise KeyError on a -so run that excludes CHS. 'max' keeps a
+    # station if any duplicate row reports it operating, matching the
+    # never-drop-on-ambiguity rule used for the capability flags.
+    optional_cols = [
+        col for col in ['operating'] if col in dataset.columns
+    ]
+    for col in optional_cols:
+        agg_dict[col] = 'max'
+
     dataset_dedup = dataset.groupby(
         ['Source', 'ID'], as_index=False
     ).agg(agg_dict)
@@ -272,6 +286,15 @@ def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger):
     # Convert back to bool
     for col in var_cols:
         dataset_dedup[col] = dataset_dedup[col].astype(bool)
+
+    # Providers other than CHS contribute no 'operating' value, so their
+    # rows are NaN after the concat. Default those to True: an unknown
+    # flag must never drop a station.
+    for col in optional_cols:
+        # .where rather than .fillna: filling an object column and then
+        # casting emits a pandas downcasting FutureWarning.
+        values = dataset_dedup[col]
+        dataset_dedup[col] = values.where(values.notna(), True).astype(bool)
 
     dataset_final = dataset_dedup.reset_index(drop=True)
 

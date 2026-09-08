@@ -17,10 +17,31 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
+from ofs_skill.obs_retrieval import chs_utils
 from ofs_skill.obs_retrieval.chs_utils import (
+    _MAX_PER_MINUTE,
     _MAX_PER_SECOND,
     RateLimiter,
 )
+
+
+class _FakeClock:
+    """Deterministic stand-in for the time module.
+
+    The per-minute cap is the one that actually governs a run, but testing
+    it in real time costs a minute per assertion. Driving the limiter with
+    a virtual clock makes it instant and exact.
+    """
+
+    def __init__(self, start=1000.0):
+        self.now = start
+
+    def time(self):
+        return self.now
+
+    def sleep(self, seconds):
+        assert seconds >= 0, f'negative sleep: {seconds}'
+        self.now += seconds
 
 
 def _admit(limiter, count, workers):
@@ -75,3 +96,57 @@ def test_admission_is_recorded_once_per_call():
 
     assert len(limiter.second_history) == 3
     assert len(limiter.minute_history) == 3
+
+
+class TestPerMinuteCap:
+    """The 30/min cap is what throttles a real run; test it directly.
+
+    With 3 CHS workers and ~8 requests per station the per-second cap is
+    rarely reached, so a regression that removed or mis-tuned the minute
+    window would not be caught by the burst tests above.
+    """
+
+    @staticmethod
+    def _seeded_limiter(monkeypatch):
+        clock = _FakeClock()
+        monkeypatch.setattr(chs_utils, 'time', clock)
+        limiter = RateLimiter()
+        # Fill the minute window without ever touching the 3/sec cap.
+        for _ in range(_MAX_PER_MINUTE):
+            limiter.wait()
+            clock.now += 1.0
+        return limiter, clock
+
+    def test_admission_blocks_once_the_minute_window_is_full(
+            self, monkeypatch):
+        """The 31st request waits for the oldest to age out of 60s."""
+        limiter, clock = self._seeded_limiter(monkeypatch)
+
+        start = clock.now
+        limiter.wait()
+
+        # 30 admissions occupy t..t+29, so at t+30 the oldest is 30s old
+        # and the caller must wait the remaining 30s.
+        assert clock.now - start >= 30.0
+
+    def test_minute_window_is_sixty_seconds(self, monkeypatch):
+        """A mis-tuned purge window would let the cap be exceeded."""
+        limiter, clock = self._seeded_limiter(monkeypatch)
+
+        # Nothing has aged out yet, so the window still holds all 30.
+        assert len(limiter.minute_history) == _MAX_PER_MINUTE
+
+        limiter.wait()
+
+        # After the wait exactly one slot freed up and was reused.
+        assert len(limiter.minute_history) <= _MAX_PER_MINUTE
+
+    def test_no_wait_once_the_window_has_drained(self, monkeypatch):
+        """A full window must not throttle forever."""
+        limiter, clock = self._seeded_limiter(monkeypatch)
+
+        clock.now += 120.0
+        start = clock.now
+        limiter.wait()
+
+        assert clock.now == start
