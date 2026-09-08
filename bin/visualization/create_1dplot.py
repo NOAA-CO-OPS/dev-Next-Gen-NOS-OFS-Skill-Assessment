@@ -233,8 +233,9 @@ def combine_files_by_pattern(
 
     def _wanted(path):
         base = os.path.basename(path).lower()
-        if ('combined' in base or 'skill_2d' in base or base.endswith('_all_stations.csv')
-            or filetype not in base):
+        # Dynamically exclude the output file and safely check for filetype
+        if ('combined' in base or 'skill_2d' in base or base == output_filename.lower()
+            or (filetype and filetype not in base)):
             return False
         return casts is None or any(c in base for c in casts)
 
