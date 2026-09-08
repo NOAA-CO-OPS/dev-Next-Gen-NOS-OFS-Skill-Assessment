@@ -890,6 +890,30 @@ def _process_chs_station(
     return []
 
 
+def _normalize_inventory_flag(inventory, column, default=True):
+    """Coerce an inventory boolean column to real bools, in place.
+
+    The column may be absent (an inventory cached before it existed), may
+    round-trip through CSV as the strings 'True'/'False', or may be blank
+    for providers that do not supply it. A missing or unreadable value
+    falls back to ``default`` -- True for every current caller, so an
+    absent flag never silently drops a station.
+    """
+    if column not in inventory.columns:
+        inventory[column] = default
+        return
+
+    if inventory[column].dtype == object:
+        mapped = inventory[column].map(
+            {'True': True, 'False': False, True: True, False: False}
+        )
+        # .where rather than .fillna: filling an object column and then
+        # casting emits a pandas downcasting FutureWarning.
+        inventory[column] = mapped.where(mapped.notna(), default).astype(bool)
+    else:
+        inventory[column] = inventory[column].fillna(default).astype(bool)
+
+
 def _process_variable(
     variable,
     inventory,
@@ -1030,6 +1054,29 @@ def _process_variable(
 
     # --- CHS stations (parallel) ---
     chs_stations = stations_with_var.loc[stations_with_var['Source'] == 'CHS']
+
+    # A CHS station advertises a time series for as long as its metadata
+    # entry exists, which outlives the station itself, so the has_* flags
+    # do not imply the station still records. Decommissioned stations
+    # return nothing for any window -- including windows from while they
+    # were active, since the IWLS observed series only reaches back about
+    # six years -- but each one still costs ~8 requests against a 30
+    # req/min budget to find that out.
+    if not chs_stations.empty and 'operating' in chs_stations.columns:
+        retired = chs_stations.loc[~chs_stations['operating']]
+        if not retired.empty:
+            logger.info(
+                'Skipping %d decommissioned CHS station(s) of %d for %s; '
+                'CHS reports these as no longer operating and they return '
+                'no data for any window. Retrieving %d operating '
+                'station(s).',
+                len(retired),
+                len(chs_stations),
+                variable,
+                len(chs_stations) - len(retired),
+            )
+            chs_stations = chs_stations.loc[chs_stations['operating']]
+
     if not chs_stations.empty and variable == 'water_level':
         reference = chs_stations.iloc[0]
         supported, reason = _chs_water_level_datum_supported(
@@ -1209,9 +1256,9 @@ def write_obs_ctlfile(
         inventory = pd.read_csv(
             r'' + f'{control_files_path}/inventory_all_{ofs}.csv', dtype=dtypes
         )
-        for col in ['has_wl', 'has_temp', 'has_salt', 'has_cu']:
-            if col not in inventory.columns:
-                inventory[col] = True
+        for col in ['has_wl', 'has_temp', 'has_salt', 'has_cu',
+                    'operating']:
+            _normalize_inventory_flag(inventory, col)
         logger.info(
             'Inventory (inventory_all_%s.csv) found in %s.',
             ofs,
@@ -1239,19 +1286,9 @@ def write_obs_ctlfile(
             inventory = pd.read_csv(
                 r'' + f'{control_files_path}/inventory_all_{ofs}.csv', dtype=dtypes
             )
-            for col in ['has_wl', 'has_temp', 'has_salt', 'has_cu']:
-                if col not in inventory.columns:
-                    inventory[col] = True
-                else:
-                    if inventory[col].dtype == object:
-                        inventory[col] = (
-                            inventory[col]
-                            .map({'True': True, 'False': False, True: True, False: False})
-                            .fillna(True)
-                            .astype(bool)
-                        )
-                    else:
-                        inventory[col] = inventory[col].astype(bool)
+            for col in ['has_wl', 'has_temp', 'has_salt', 'has_cu',
+                        'operating']:
+                _normalize_inventory_flag(inventory, col)
             logger.info('Inventory file created successfully')
         except Exception as ex:
             logger.error(f'Error when creating inventory files: {ex}')

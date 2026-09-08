@@ -129,3 +129,131 @@ def test_chs_stations_skipped_before_retrieval_with_explanation(
     assert 'MLLW' in joined
     assert 'necofs' in joined
     assert '-so' in joined
+
+
+def _chs_inventory(operating):
+    """CHS inventory rows with the given per-station operating flags."""
+    n = len(operating)
+    return pd.DataFrame({
+        'ID': [f'{i:05d}' for i in range(n)],
+        'X': [-65.0 - i * 0.1 for i in range(n)],
+        'Y': [45.0 + i * 0.1 for i in range(n)],
+        'Source': ['CHS'] * n,
+        'Name': [f'Station {i}' for i in range(n)],
+        'has_temp': [True] * n,
+        'operating': operating,
+    })
+
+
+def test_decommissioned_chs_stations_are_not_retrieved(caplog, tmp_path):
+    """Retired stations return nothing for any window; don't pay for them.
+
+    IWLS only serves roughly the last six years of observations, and a
+    station CHS reports as no longer operating returns nothing even inside
+    that span, so this cannot drop data the API would have supplied.
+    """
+    logger = logging.getLogger('chs_operating_test')
+    inventory = _chs_inventory([True, False, False, True, False])
+
+    with mock.patch.object(
+            write_obs_ctlfile, 'retrieve_chs_station',
+            return_value=None) as mock_retrieve:
+        with caplog.at_level(logging.INFO):
+            write_obs_ctlfile._process_variable(
+                variable='water_temperature',
+                inventory=inventory,
+                var_to_col={'water_temperature': 'has_temp'},
+                start_date=datetime(2026, 3, 1),
+                end_date=datetime(2026, 9, 1),
+                datum='MLLW',
+                datum_list=None,
+                ofs='necofs',
+                usgs_max_workers=1,
+                control_files_path=str(tmp_path),
+                logger=logger,
+            )
+
+    # Only the two operating stations were retrieved.
+    assert mock_retrieve.call_count == 2
+    retrieved = {call.args[2] for call in mock_retrieve.call_args_list}
+    assert retrieved == {'00000', '00003'}
+
+    joined = '\n'.join(r.getMessage() for r in caplog.records)
+    assert 'Skipping 3 decommissioned CHS station(s) of 5' in joined
+
+
+def test_all_chs_stations_retrieved_when_all_operating(tmp_path):
+    """The filter must not fire when every station is still recording."""
+    logger = logging.getLogger('chs_operating_test')
+    inventory = _chs_inventory([True, True, True])
+
+    with mock.patch.object(
+            write_obs_ctlfile, 'retrieve_chs_station',
+            return_value=None) as mock_retrieve:
+        write_obs_ctlfile._process_variable(
+            variable='water_temperature',
+            inventory=inventory,
+            var_to_col={'water_temperature': 'has_temp'},
+            start_date=datetime(2026, 3, 1),
+            end_date=datetime(2026, 9, 1),
+            datum='MLLW',
+            datum_list=None,
+            ofs='necofs',
+            usgs_max_workers=1,
+            control_files_path=str(tmp_path),
+            logger=logger,
+        )
+
+    assert mock_retrieve.call_count == 3
+
+
+def test_inventory_without_operating_column_retrieves_everything(tmp_path):
+    """An inventory cached before the column existed must not lose stations."""
+    logger = logging.getLogger('chs_operating_test')
+    inventory = _chs_inventory([True, True]).drop(columns=['operating'])
+
+    with mock.patch.object(
+            write_obs_ctlfile, 'retrieve_chs_station',
+            return_value=None) as mock_retrieve:
+        write_obs_ctlfile._process_variable(
+            variable='water_temperature',
+            inventory=inventory,
+            var_to_col={'water_temperature': 'has_temp'},
+            start_date=datetime(2026, 3, 1),
+            end_date=datetime(2026, 9, 1),
+            datum='MLLW',
+            datum_list=None,
+            ofs='necofs',
+            usgs_max_workers=1,
+            control_files_path=str(tmp_path),
+            logger=logger,
+        )
+
+    assert mock_retrieve.call_count == 2
+
+
+class TestNormalizeInventoryFlag:
+    """Flags survive a CSV round trip and default safely when absent."""
+
+    def test_string_booleans_are_parsed(self):
+        """read_csv yields 'True'/'False' strings once a column has blanks."""
+        frame = pd.DataFrame({'operating': ['True', 'False', 'True']})
+
+        write_obs_ctlfile._normalize_inventory_flag(frame, 'operating')
+
+        assert frame['operating'].tolist() == [True, False, True]
+
+    def test_blank_values_default_to_true(self):
+        """Providers other than CHS leave the column empty."""
+        frame = pd.DataFrame({'operating': [True, None, False]})
+
+        write_obs_ctlfile._normalize_inventory_flag(frame, 'operating')
+
+        assert frame['operating'].tolist() == [True, True, False]
+
+    def test_missing_column_is_added(self):
+        frame = pd.DataFrame({'ID': ['00001']})
+
+        write_obs_ctlfile._normalize_inventory_flag(frame, 'operating')
+
+        assert frame['operating'].tolist() == [True]
