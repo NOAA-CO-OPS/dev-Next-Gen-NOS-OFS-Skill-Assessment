@@ -95,6 +95,12 @@ def _sleep_with_backoff(attempt: int) -> None:
                   _RETRY_BASE_SECONDS * (2 ** attempt))
     time.sleep(random.uniform(0, backoff))
 
+def _ensure_proj_user_directory() -> None:
+    """Ensure each process gets an isolated temporary PROJ writable directory if not set."""
+    if "PROJ_USER_WRITABLE_DIRECTORY" not in os.environ:
+        tmp_dir = tempfile.mkdtemp(prefix="proj_user_dir_")
+        os.environ["PROJ_USER_WRITABLE_DIRECTORY"] = tmp_dir
+
 
 def _prime_pair(vd_from: str, vd_to: str,
                 logger: logging.Logger) -> None:
