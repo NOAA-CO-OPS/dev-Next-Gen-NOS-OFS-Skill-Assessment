@@ -160,6 +160,7 @@ _VARIABLE_KEYWORDS = (
     ('water_level_lw', 'Water Level low tide'),
     ('water_level', 'Water Level'),
     ('temperature', 'Temperature'),
+    ('water_temperature', 'Temperature'),
     ('currents_dir', 'Current direction'),
     ('currents', 'Current speed'),
     ('salinity', 'Salinity'),
@@ -194,7 +195,8 @@ def get_forecast_type_from_filename(filename):
 
 
 def combine_files_by_pattern(
-    directory_path, output_filename, search_string='', whichcasts=None, logger=None
+    directory_path, output_filename, search_string='', whichcasts=None,
+    filetype=None, logger=None
 ):
     """Combine per-variable skill-stat CSVs into one aggregate table.
 
@@ -231,7 +233,8 @@ def combine_files_by_pattern(
 
     def _wanted(path):
         base = os.path.basename(path).lower()
-        if 'combined' in base or 'skill_2d' in base or base.endswith('_all_stations.csv'):
+        if ('combined' in base or 'skill_2d' in base or base.endswith('_all_stations.csv')
+            or filetype not in base):
             return False
         return casts is None or any(c in base for c in casts)
 
@@ -1483,11 +1486,15 @@ def create_1dplot(prop, logger):
     # Aggregate every per-variable skill table for this OFS into a single
     # consolidated file. Runs once here, after all variables and casts have
     # been processed, so the combined table is complete and written only once.
+    suffix = 'stations'
+    if prop.ofsfiletype == 'fields':
+        suffix = 'fields'
     combine_files_by_pattern(
         prop.data_skill_stats_path,
-        f'skill_{prop.ofs}_all_stations.csv',
+        f'skill_{prop.ofs}_all_{suffix}.csv',
         search_string=prop.ofs,
         whichcasts=getattr(prop, 'whichcasts', None),
+        filetype=getattr(prop, 'ofsfiletype', None),
         logger=logger,
     )
 
