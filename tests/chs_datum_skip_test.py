@@ -31,9 +31,21 @@ def _fake_chs_wl_dataset():
 def test_chs_water_level_non_gl_skips_when_no_datum_path(caplog):
     """Non-GL OFS requesting MLLW: station is skipped, not crashed."""
     logger = logging.getLogger('chs_datum_skip_test')
+    # _get_chs_uuid and _extract_chs_metadata both reach the live CHS API,
+    # so mock them too: the suite must not depend on network access, and
+    # this test is about the datum branch, not station metadata.
     with mock.patch.object(
             write_obs_ctlfile, 'retrieve_chs_station',
-            return_value=_fake_chs_wl_dataset()):
+            return_value=_fake_chs_wl_dataset()), \
+            mock.patch.object(
+                write_obs_ctlfile, '_get_chs_uuid',
+                return_value='000000000000000000000065'), \
+            mock.patch.object(
+                write_obs_ctlfile, '_extract_chs_metadata',
+                return_value={'offset': None}), \
+            mock.patch.object(
+                write_obs_ctlfile, '_get_chs_code',
+                return_value='00065'):
         with caplog.at_level(logging.WARNING):
             result = write_obs_ctlfile._process_chs_station(
                 id_number='5cebf1e0',
