@@ -36,15 +36,29 @@ def fetch_error_range(short_var, base_path, logger):
     class MockProp:
         def __init__(self, path):
             self.path = path
+
+    def _extract_scalar(val):
+        """Forces output to be a pure python float to avoid pandas Series ambiguity"""
+        try:
+            if hasattr(val, 'iloc'):
+                return float(val.iloc[0])
+            elif isinstance(val, list | tuple):
+                return float(val[0])
+            return float(val)
+        except Exception:
+            return 0.0
+
     try:
         from ofs_skill.visualization.plotting_functions import get_error_range
-        return get_error_range(short_var, MockProp(base_path), logger)[0]
+        val = get_error_range(short_var, MockProp(base_path), logger)[0]
+        return _extract_scalar(val)
     except ImportError:
         pass
 
     try:
         from plotting_functions import get_error_range
-        return get_error_range(short_var, MockProp(base_path), logger)[0]
+        val = get_error_range(short_var, MockProp(base_path), logger)[0]
+        return _extract_scalar(val)
     except ImportError:
         pass
 
@@ -59,7 +73,9 @@ def fetch_error_range(short_var, base_path, logger):
             df_err = pd.read_csv(config_path)
             match = df_err[df_err['name_var'] == short_var]
             if not match.empty:
-                return float(match.iloc[0]['x1'])
+                # Handle potential case-sensitivity issues in the CSV column
+                col = 'x1' if 'x1' in match.columns else 'X1'
+                return float(match.iloc[0][col])
         except Exception as e:
             logger.warning(f'Error reading {config_path}: {e}')
 
@@ -205,17 +221,33 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, whichcasts,
                                                               'hour',
                                                               'minute']])
 
+                        # Drop duplicate timestamps to prevent ambiguous many-to-many merges
+                        df1 = df1.drop_duplicates(subset=['DateTime']).reset_index(drop=True)
+                        df2 = df2.drop_duplicates(subset=['DateTime']).reset_index(drop=True)
+
                         if short_var == 'cu':
                             df1['OBS'] = df1['OBS_SPD'] * 1.943844
                             df1['OFS'] = df1['OFS_SPD'] * 1.943844
                             df2['OBS'] = df2['OBS_SPD'] * 1.943844
                             df2['OFS'] = df2['OFS_SPD'] * 1.943844
 
+                        # Handle identical model names safely
+                        ofs1_key = ofs1
+                        ofs2_key = ofs2
+                        ofs1_name = ofs1.upper()
+                        ofs2_name = ofs2.upper()
+
+                        if ofs1 == ofs2:
+                            ofs1_key = f'{ofs1}_{filetype1}'
+                            ofs2_key = f'{ofs2}_{filetype2}'
+                            ofs1_name = f'{ofs1.upper()} ({filetype1})'
+                            ofs2_name = f'{ofs2.upper()} ({filetype2})'
+
                         merged = pd.merge(
                             df1[['DateTime', 'OBS', 'OFS']],
                             df2[['DateTime', 'OFS']],
                             on='DateTime',
-                            suffixes=(f'_{ofs1}', f'_{ofs2}')
+                            suffixes=(f'_{ofs1_key}', f'_{ofs2_key}')
                         )
 
                         if merged.empty:
@@ -228,8 +260,8 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, whichcasts,
                         err_hover = (f'<b>Time:</b> %{{x|%m/%d/%Y %H:%M}}'
                         f'<br><b>%{{data.name}}:</b> %{{y:.2f}} {unit}<extra></extra>')
 
-                        merged[f'Error_{ofs1}'] = merged[f'OFS_{ofs1}'] - merged['OBS']
-                        merged[f'Error_{ofs2}'] = merged[f'OFS_{ofs2}'] - merged['OBS']
+                        merged[f'Error_{ofs1_key}'] = merged[f'OFS_{ofs1_key}'] - merged['OBS']
+                        merged[f'Error_{ofs2_key}'] = merged[f'OFS_{ofs2_key}'] - merged['OBS']
 
                         # =========================================================
                         # 1. TIME SERIES & ERROR PLOT (Plotly HTML - per station)
@@ -249,22 +281,22 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, whichcasts,
                                                     line=dict(color='red', width=2)),
                                          row=1, col=1)
                         fig_ts.add_trace(go.Scatter(x=merged['DateTime'],
-                                                    y=merged[f'OFS_{ofs1}'],
-                                                    name=ofs1.upper(),
+                                                    y=merged[f'OFS_{ofs1_key}'],
+                                                    name=ofs1_name,
                                                     mode='lines',
                                                     hovertemplate=ts_hover,
                                                     line=dict(color='#d55e00', width=1.5),
                                                     opacity=0.8,
-                                                    legendgroup=ofs1),
+                                                    legendgroup=ofs1_key),
                                          row=1, col=1)
                         fig_ts.add_trace(go.Scatter(x=merged['DateTime'],
-                                                    y=merged[f'OFS_{ofs2}'],
-                                                    name=ofs2.upper(),
+                                                    y=merged[f'OFS_{ofs2_key}'],
+                                                    name=ofs2_name,
                                                     mode='lines',
                                                     hovertemplate=ts_hover,
                                                     line=dict(color='#0072b2', width=1.5),
                                                     opacity=0.8,
-                                                    legendgroup=ofs2),
+                                                    legendgroup=ofs2_key),
                                          row=1, col=1)
 
                         min_dt = merged['DateTime'].min()
@@ -297,24 +329,24 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, whichcasts,
                                                     line=dict(color='black', dash='dash', width=1)),
                                          row=2, col=1)
                         fig_ts.add_trace(go.Scatter(x=merged['DateTime'],
-                                                    y=merged[f'Error_{ofs1}'],
-                                                    name=f'{ofs1.upper()} Error',
+                                                    y=merged[f'Error_{ofs1_key}'],
+                                                    name=f'{ofs1_name} Error',
                                                     mode='lines',
                                                     hovertemplate=err_hover,
                                                     line=dict(color='#d55e00', width=1.5),
                                                     opacity=0.8,
                                                     showlegend=False,
-                                                    legendgroup=ofs1),
+                                                    legendgroup=ofs1_key),
                                          row=2, col=1)
                         fig_ts.add_trace(go.Scatter(x=merged['DateTime'],
-                                                    y=merged[f'Error_{ofs2}'],
-                                                    name=f'{ofs2.upper()} Error',
+                                                    y=merged[f'Error_{ofs2_key}'],
+                                                    name=f'{ofs2_name} Error',
                                                     mode='lines',
                                                     hovertemplate=err_hover,
                                                     line=dict(color='#0072b2', width=1.5),
                                                     opacity=0.8,
                                                     showlegend=False,
-                                                    legendgroup=ofs2),
+                                                    legendgroup=ofs2_key),
                                          row=2, col=1)
 
                         fig_ts.update_layout(
@@ -402,7 +434,7 @@ def generate_comparisons(ofs1, ofs2, overlap_csv, var_selection, whichcasts,
                             row=2, col=1)
 
                         ts_out = os.path.join(visual_dir,
-                          f'{ofs1}_vs_{ofs2}_{short_var}_{station_key}_{cast_file}_timeseries.html')
+                          f'{ofs1_key}_vs_{ofs2_key}_{short_var}_{station_key}_{cast_file}_timeseries.html')
                         fig_ts.write_html(ts_out)
 
                     except Exception as e:
@@ -425,6 +457,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
         'water_level_lw': 'Water Level low tide',
         'water_level': 'Water Level',
         'temperature': 'Temperature',
+        'water_temperature': 'Temperature',
         'currents_dir': 'Current direction',
         'currents': 'Current speed',
         'salinity': 'Salinity',
@@ -447,9 +480,9 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
     ofs2_file = os.path.join(stats_dir, f'skill_{ofs2}_all_{filetype2}.csv')
 
     if not os.path.exists(ofs1_file):
-        ofs1_file = os.path.join(home_path, f'skill_{ofs1}_all_stations.csv')
+        ofs1_file = os.path.join(home_path, f'skill_{ofs1}_all_{filetype1}.csv')
     if not os.path.exists(ofs2_file):
-        ofs2_file = os.path.join(home_path, f'skill_{ofs2}_all_stations.csv')
+        ofs2_file = os.path.join(home_path, f'skill_{ofs2}_all_{filetype2}.csv')
 
     if not os.path.exists(ofs1_file) or not os.path.exists(ofs2_file):
         logger.warning(f'Stats files not found. Searched {stats_dir} and '
@@ -460,11 +493,30 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
         df1 = pd.read_csv(ofs1_file)
         df2 = pd.read_csv(ofs2_file)
 
+        # Filter the tables by their respective filetypes using the source_file column
+        if 'source_file' in df1.columns:
+            df1 = df1[df1['source_file'].str.contains(filetype1, na=False)]
+        if 'source_file' in df2.columns:
+            df2 = df2[df2['source_file'].str.contains(filetype2, na=False)]
+
         df1['ID'] = df1['ID'].astype(str)
         df2['ID'] = df2['ID'].astype(str)
 
+        # Handle identical model names safely
+        ofs1_key = ofs1
+        ofs2_key = ofs2
+        ofs1_name = ofs1.upper()
+        ofs2_name = ofs2.upper()
+
+        if ofs1 == ofs2:
+            ofs1_key = f'{ofs1}_{filetype1}'
+            ofs2_key = f'{ofs2}_{filetype2}'
+            ofs1_name = f'{ofs1.upper()} ({filetype1})'
+            ofs2_name = f'{ofs2.upper()} ({filetype2})'
+
+        # Drop NODE from merge keys because fields and stations use different node IDs
         merged = pd.merge(df1, df2, on=['ID', 'variable', 'type'],
-                          suffixes=(f'_{ofs1}', f'_{ofs2}'))
+                          suffixes=(f'_{ofs1_key}', f'_{ofs2_key}'))
 
         if merged.empty:
             logger.warning('No overlapping stations found in the stats files.')
@@ -539,8 +591,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
 
                 x1 = fetch_error_range(base_var, home_path, logger)
 
-                lon_col = f'X_{ofs1}' if f'X_{ofs1}' in var_data.columns else 'X'
-                lat_col = f'Y_{ofs1}' if f'Y_{ofs1}' in var_data.columns else 'Y'
+                lon_col = f'X_{ofs1_key}' if f'X_{ofs1_key}' in var_data.columns else 'X'
+                lat_col = f'Y_{ofs1_key}' if f'Y_{ofs1_key}' in var_data.columns else 'Y'
 
                 # --- 3. Setup Consolidated Mapbox Output with Dropdown ---
                 fig_map = go.Figure()
@@ -565,8 +617,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                     mean_lon, mean_lat, zoom_level = -95, 38, 4
 
                 for stat_key, stat_display in stats_to_plot.items():
-                    stat1 = f'{stat_key}_{ofs1}'
-                    stat2 = f'{stat_key}_{ofs2}'
+                    stat1 = f'{stat_key}_{ofs1_key}'
+                    stat2 = f'{stat_key}_{ofs2_key}'
 
                     if stat1 not in var_data.columns or stat2 not in var_data.columns:
                         continue
@@ -582,12 +634,12 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                         fig_bar = go.Figure()
                         fig_bar.add_trace(go.Bar(x=var_data['ID'],
                                                  y=var_data[stat1],
-                                                 name=ofs1.upper(),
+                                                 name=ofs1_name,
                                                  hovertemplate=bar_hover,
                                                  marker_color='#d55e00'))
                         fig_bar.add_trace(go.Bar(x=var_data['ID'],
                                                  y=var_data[stat2],
-                                                 name=ofs2.upper(),
+                                                 name=ofs2_name,
                                                  hovertemplate=bar_hover,
                                                  marker_color='#0072b2'))
 
@@ -699,7 +751,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                         )
 
                         out_file_cat = os.path.join(vis_dir,
-                                                    f'{ofs1}_vs_{ofs2}_'
+                                                    f'{ofs1_key}_vs_{ofs2_key}_'
                                                     f'{file_var}_{cast_file}_'
                                                     f'{stat_key}_stations.html')
                         fig_bar.write_html(out_file_cat)
@@ -708,19 +760,19 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                     fig_stat_scat = go.Figure()
 
                     stat_scat_hover = (f'<b>Station ID:</b> %{{customdata}}<br><b>'
-                                       f'{ofs1.upper()}:</b> %{{x:.3f}}<br><b>'
-                                       f'{ofs2.upper()}:</b> %{{y:.3f}}<extra></extra>')
+                                       f'{ofs1_name}:</b> %{{x:.3f}}<br><b>'
+                                       f'{ofs2_name}:</b> %{{y:.3f}}<extra></extra>')
 
-                    # 2A. Determine Pass/Fail Criteria & Axis Bounds
+                    # 2A. Determine Pass/Fail Criteria & Axis Bounds (Safely parse non-numeric strings)
                     if stat_key == 'central_freq':
-                        pass_1 = var_data[stat1] >= 90
-                        pass_2 = var_data[stat2] >= 90
+                        pass_1 = pd.to_numeric(var_data[stat1], errors='coerce') >= 90
+                        pass_2 = pd.to_numeric(var_data[stat2], errors='coerce') >= 90
                     elif stat_key == 'rmse' and x1 > 0:
-                        pass_1 = var_data[stat1] <= x1
-                        pass_2 = var_data[stat2] <= x1
+                        pass_1 = pd.to_numeric(var_data[stat1], errors='coerce') <= x1
+                        pass_2 = pd.to_numeric(var_data[stat2], errors='coerce') <= x1
                     elif stat_key == 'bias' and x1 > 0:
-                        pass_1 = var_data[stat1].abs() <= x1
-                        pass_2 = var_data[stat2].abs() <= x1
+                        pass_1 = pd.to_numeric(var_data[stat1], errors='coerce').abs() <= x1
+                        pass_2 = pd.to_numeric(var_data[stat2], errors='coerce').abs() <= x1
                     else:
                         pass_1 = pd.Series(True, index=var_data.index)
                         pass_2 = pd.Series(True, index=var_data.index)
@@ -728,8 +780,10 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                     fail_1 = ~pass_1
                     fail_2 = ~pass_2
 
-                    min_val = min(var_data[stat1].min(), var_data[stat2].min())
-                    max_val = max(var_data[stat1].max(), var_data[stat2].max())
+                    min_val = min(pd.to_numeric(var_data[stat1], errors='coerce').min(),
+                                  pd.to_numeric(var_data[stat2], errors='coerce').min())
+                    max_val = max(pd.to_numeric(var_data[stat1], errors='coerce').max(),
+                                  pd.to_numeric(var_data[stat2], errors='coerce').max())
 
                     if stat_key == 'central_freq':
                         min_val = min(min_val, 85)
@@ -831,9 +885,9 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                     both_fail_label = 'Both Fail' if stat_key == 'central_freq' else 'Both Fail'
                     cat_masks = {
                         'Both Pass': (pass_1 & pass_2, '#009E73'),
-                        f'{ofs1.upper()} Fails, {ofs2.upper()} Passes':
+                        f'{ofs1_name} Fails, {ofs2_name} Passes':
                             (fail_1 & pass_2, '#56B4E9'),
-                        f'{ofs2.upper()} Fails, {ofs1.upper()} Passes':
+                        f'{ofs2_name} Fails, {ofs1_name} Passes':
                             (pass_1 & fail_2, '#E69F00'),
                         both_fail_label: (fail_1 & fail_2, '#D55E00')
                     }
@@ -866,8 +920,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                                                    subset[stat2]))
                             map_hover = (f'<b>Station ID:</b> '
                             f'%{{customdata[0]}}<br><b>Status:</b> '
-                            f'{label}<br><b>{ofs1.upper()} {stat_display}:</b> '
-                            f'%{{customdata[1]:.3f}}<br><b>{ofs2.upper()} '
+                            f'{label}<br><b>{ofs1_name} {stat_display}:</b> '
+                            f'%{{customdata[1]:.3f}}<br><b>{ofs2_name} '
                             f'{stat_display}:</b> %{{customdata[2]:.3f}}<extra></extra>'
                             )
                             fig_map.add_trace(go.Scattermap(
@@ -886,7 +940,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                     # 2D. Add Plot Annotations
                     if stat_key != 'bias':
                         fig_stat_scat.add_annotation(
-                            text=f'Higher {stat_display} for {ofs2.upper()}',
+                            text=f'Higher {stat_display} for {ofs2_name}',
                             xref='paper',
                             yref='paper',
                             x=0.02,
@@ -899,7 +953,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                             borderwidth=0
                         )
                         fig_stat_scat.add_annotation(
-                            text=f'Higher {stat_display} for {ofs1.upper()}',
+                            text=f'Higher {stat_display} for {ofs1_name}',
                             xref='paper',
                             yref='paper',
                             x=0.98,
@@ -913,8 +967,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                         )
                     elif stat_key == 'bias':
                         anno_size = 12
-                        fig_stat_scat.add_annotation(text=f'<i>{ofs2.upper()} '
-                                                     f'overprediction,<br>{ofs1.upper()} '
+                        fig_stat_scat.add_annotation(text=f'<i>{ofs2_name} '
+                                                     f'overprediction,<br>{ofs1_name} '
                                                      f'underprediction</i>',
                                                      xref='paper',
                                                      yref='paper',
@@ -928,8 +982,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                                                                color='black'),
                                                      bgcolor='rgba(255, 255, 255, 0.8)',
                                                      borderwidth=0)
-                        fig_stat_scat.add_annotation(text=f'<i>{ofs2.upper()} '
-                                                     f'underprediction,<br>{ofs1.upper()} '
+                        fig_stat_scat.add_annotation(text=f'<i>{ofs2_name} '
+                                                     f'underprediction,<br>{ofs1_name} '
                                                      f'overprediction</i>',
                                                      xref='paper',
                                                      yref='paper',
@@ -943,8 +997,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                                                                color='black'),
                                                      bgcolor='rgba(255, 255, 255, 0.8)',
                                                      borderwidth=0)
-                        fig_stat_scat.add_annotation(text=f'<i>{ofs2.upper()} '
-                                                     f'underprediction,<br>{ofs1.upper()} '
+                        fig_stat_scat.add_annotation(text=f'<i>{ofs2_name} '
+                                                     f'underprediction,<br>{ofs1_name} '
                                                      f'underprediction</i>',
                                                      xref='paper',
                                                      yref='paper',
@@ -958,8 +1012,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                                                                color='black'),
                                                      bgcolor='rgba(255, 255, 255, 0.8)',
                                                      borderwidth=0)
-                        fig_stat_scat.add_annotation(text=f'<i>{ofs2.upper()} '
-                                                     f'overprediction,<br>{ofs1.upper()} '
+                        fig_stat_scat.add_annotation(text=f'<i>{ofs2_name} '
+                                                     f'overprediction,<br>{ofs1_name} '
                                                      f'overprediction</i>',
                                                      xref='paper',
                                                      yref='paper',
@@ -976,8 +1030,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
 
                     fig_stat_scat.update_layout(
                             title=dict(
-                                text=f'<b>{ofs1.upper()} vs '
-                                f'{ofs2.upper()} {stat_display}: {display_var} '
+                                text=f'<b>{ofs1_name} vs '
+                                f'{ofs2_name} {stat_display}:<br>{display_var} '
                                 f'({cast_title})</b><br><span style="font-size:16px">{start_str} to {end_str}</span>',
                                 font=dict(size=18,
                                           color='black',
@@ -1006,13 +1060,13 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                             entrywidth=0.48,
                             entrywidthmode='fraction'
                         ),
-                        margin=dict(t=120, b=100),
+                        margin=dict(t=125, b=100),
                         height=660,
                         width=650
                     )
 
                     fig_stat_scat.update_xaxes(
-                        title_text=f'{ofs1.upper()} {stat_display}',
+                        title_text=f'{ofs1_name} {stat_display}',
                         range=axis_range,
                         titlefont=dict(family='Open Sans', color='black', size=18),
                         mirror=True,
@@ -1031,7 +1085,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                         zerolinecolor='black'
                     )
                     fig_stat_scat.update_yaxes(
-                        title_text=f'{ofs2.upper()} {stat_display}',
+                        title_text=f'{ofs2_name} {stat_display}',
                         range=axis_range,
                         titlefont=dict(family='Open Sans', color='black', size=18),
                         mirror=True,
@@ -1053,7 +1107,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                     )
 
                     out_file_scat = os.path.join(vis_dir,
-                                                 f'{ofs1}_vs_{ofs2}_{file_var}_'
+                                                 f'{ofs1_key}_vs_{ofs2_key}_{file_var}_'
                                                  f'{cast_file}_{stat_key}_scatter.html')
                     fig_stat_scat.write_html(out_file_scat)
 
@@ -1078,8 +1132,8 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                                 method='update',
                                 args=[
                                     {'visible': viz_array},
-                                    {'title.text': f'<b>{ofs1.upper()} vs '
-                                     f'{ofs2.upper()} Comparison Map: {display_var} '
+                                    {'title.text': f'<b>{ofs1_name} vs '
+                                     f'{ofs2_name} Comparison Map: {display_var} '
                                      f'({cast_title})<br>Statistic: '
                                      f'{stat_disp}</b><br><span style="font-size:16px">{start_str} to {end_str}</span>'}
                                 ]
@@ -1087,7 +1141,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
 
                     fig_map.update_layout(
                         title=dict(
-                            text=f'<b>{ofs1.upper()} vs {ofs2.upper()} Comparison Map: '
+                            text=f'<b>{ofs1_name} vs {ofs2_name} Comparison Map: '
                             f'{display_var} ({cast_title})<br>Statistic: '
                             f'{first_valid_stat}</b><br><span style="font-size:16px">{start_str} to {end_str}</span>',
                             font=dict(size=18, color='black', family='Open Sans'),
@@ -1140,7 +1194,7 @@ def generate_stat_comparisons(ofs1, ofs2, var_selection, whichcasts, home_path,
                         margin=dict(t=120, b=100, l=40, r=40),
                         height=700, width=800
                     )
-                    out_file_map = os.path.join(vis_dir, f'{ofs1}_vs_{ofs2}_'
+                    out_file_map = os.path.join(vis_dir, f'{ofs1_key}_vs_{ofs2_key}_'
                                                 f'{file_var}_{cast_file}_all_'
                                                 f'stats_map.html')
                     fig_map.write_html(out_file_map)
@@ -1282,23 +1336,24 @@ def main(args):
     # loggin'
     logger = setup_logger(args.home_path, args.config)
 
-    logger.info('=== Pre-checking Model Files ===')
-    # Pair each OFS name directly with its intended filetype
-    for ofs_name, f_type in [(ofs1, args.filetype1), (ofs2, args.filetype2)]:
-        pre_prop = model_properties.ModelProperties()
-        pre_prop.ofs = ofs_name
-        pre_prop.path = args.home_path
-        pre_prop.start_date_full = args.start_date
-        pre_prop.end_date_full = args.end_date
-        pre_prop.whichcasts = args.whichcasts.split(',')
+    if not args.skip_1d_runs:
+        logger.info('=== Pre-checking Model Files ===')
+        # Pair each OFS name directly with its intended filetype
+        for ofs_name, f_type in [(ofs1, args.filetype1), (ofs2, args.filetype2)]:
+            pre_prop = model_properties.ModelProperties()
+            pre_prop.ofs = ofs_name
+            pre_prop.path = args.home_path
+            pre_prop.start_date_full = args.start_date
+            pre_prop.end_date_full = args.end_date
+            pre_prop.whichcasts = args.whichcasts.split(',')
 
-        # Directly assign the filetype from the tuple
-        pre_prop.ofsfiletype = f_type
-        pre_prop.config_file = args.config
+            # Directly assign the filetype from the tuple
+            pre_prop.ofsfiletype = f_type
+            pre_prop.config_file = args.config
 
-        logger.info(f'Verifying files for {ofs_name.upper()}...')
-        check_model_files(pre_prop, logger)
-        logger.info(f'Model file check was successful for {ofs_name.upper()}.')
+            logger.info(f'Verifying files for {ofs_name.upper()}...')
+            check_model_files(pre_prop, logger)
+            logger.info(f'Model file check was successful for {ofs_name.upper()}.')
 
     # Do shapefile Intersection
     logger.info('=== Computing Shapefile Intersection ===')
@@ -1311,10 +1366,11 @@ def main(args):
     logger.info('=== Applying Overlap Restrictions ===')
     overlap_csv = setup_overlap_inventories(ofs1, ofs2, args, logger)
 
-    # Run create_1dplot for restricted domains
-    logger.info('=== Running Assessment on Overlapping Stations ===')
-    for ofs_name, f_type in [(ofs1, args.filetype1), (ofs2, args.filetype2)]:
-        run_skill_assessment(ofs_name, f_type, args, logger, create_1dplot)
+    if not args.skip_1d_runs:
+        # Run create_1dplot for restricted domains
+        logger.info('=== Running Assessment on Overlapping Stations ===')
+        for ofs_name, f_type in [(ofs1, args.filetype1), (ofs2, args.filetype2)]:
+            run_skill_assessment(ofs_name, f_type, args, logger, create_1dplot)
 
     # generate inter-model comparisons
     logger.info('=== Generating Data Comparisons ===')
@@ -1366,6 +1422,10 @@ if __name__ == '__main__':
         '-b', '--make_bar_plots', action='store_true',
         help='Also generate station-by-station grouped bar plots for each '
              'skill statistic (off by default; scatter plots are always made).',
+    )
+    parser.add_argument(
+        '-skip', '--skip_1d_runs', action='store_true',
+        help='Skip the 1D pipelines if necessary files are already present.',
     )
 
     main(parser.parse_args())
