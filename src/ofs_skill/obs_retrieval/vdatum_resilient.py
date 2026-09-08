@@ -29,7 +29,11 @@ The wrapper preserves ``vdatum.convert``'s return shape: ``(lat, lon, z)``.
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import os
 import random
+import tempfile
+
 #import threading
 import time
 
@@ -37,11 +41,6 @@ import pyproj
 import pyproj.exceptions
 from coastalmodeling_vdatum import vdatum
 
-
-import multiprocessing
-import shutil
-import tempfile
-import os
 _PRIME_LOCK = multiprocessing.Lock()
 
 
