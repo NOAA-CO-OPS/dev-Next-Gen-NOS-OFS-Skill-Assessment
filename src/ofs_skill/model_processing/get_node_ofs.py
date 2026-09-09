@@ -24,6 +24,7 @@ import pandas as pd
 import xarray as xr
 
 from ofs_skill.model_processing import do_horizon_skill_utils
+from ofs_skill.model_processing.ctl_builder_report import report_ctl_matches
 
 # Use new package imports - import directly from modules to avoid circular import
 from ofs_skill.model_processing.get_datum_offset import get_datum_offset as get_datum_offset_func
@@ -33,6 +34,7 @@ from ofs_skill.model_processing.list_of_files import list_of_dir
 from ofs_skill.model_processing.list_of_files import list_of_files as list_of_files_func
 from ofs_skill.model_processing.model_format_properties import ModelFormatProperties
 from ofs_skill.model_processing.model_source import get_model_source
+from ofs_skill.model_processing.station_ledger import StationLedger
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
 from ofs_skill.obs_retrieval import scalar, utils, vector
 from ofs_skill.obs_retrieval.utils import get_parallel_config
@@ -266,27 +268,48 @@ def find_time_gaps(prop, model, logger):
 def ofs_ctlfile_extract(prop, name_var, model, logger):
     """
     The input here is the path, variable name, and logger.
-    Extracts data from an OFS control file. If the file does not exist,
-    it generates it first.
+    Extracts data from an OFS control file. If the file does not exist
+    or is stale according to the cache manifest, it generates it first.
     """
-
+    # 1. Determine the filename based on filetype
     if prop.ofsfiletype == 'fields':
         filename = f'{prop.control_files_path}/{prop.ofs}_{name_var}_model.ctl'
-        if (os.path.isfile(filename)) is False and prop.ctl_flag == 0:
-            write_ofs_ctlfile(prop, model, logger)
-            prop.ctl_flag += 1  # Raise flag -- we've gone through ctl file production
     elif prop.ofsfiletype == 'stations':
         filename = f'{prop.control_files_path}/{prop.ofs}_{name_var}_model_station.ctl'
-        if (os.path.isfile(filename)) is False and prop.ctl_flag == 0:
-            write_ofs_ctlfile(prop, model, logger)
-            prop.ctl_flag += 1  # Raise flag -- we've gone through ctl file production
+    else:
+        logger.error('Invalid filetype inside ofs_ctlfile_extract')
+        return None
 
+    # 2. Check the cache manifest to ensure the file is fresh
+    # This will delete the file if the parameters have changed since it was built
+    signature = cache_manifest.run_signature(prop, variable=name_var)
+    cache_manifest.ensure_fresh(
+        filename,
+        signature,
+        prop.control_files_path,
+        'model_ctl',
+        logger
+    )
+
+    # 3. Build the file if it is missing (or was just deleted for being stale)
+    if (os.path.isfile(filename)) is False and prop.ctl_flag == 0:
+        write_ofs_ctlfile(prop, model, logger)
+        prop.ctl_flag += 1 # Raise flag -- we've gone through ctl file production
+
+        # 4. Record the newly built file in the cache manifest
+        cache_manifest.record_artifact(
+            filename,
+            signature,
+            prop.control_files_path,
+            logger
+        )
+
+    # 5. Extract the file contents
     try:
         with open(filename, encoding='utf-8') as file:
             model_ctlfile = file.read()
             lines = model_ctlfile.split('\n')
-            # Drop the single header line, if present (legacy files
-            # have none)
+            # Drop the single header line, if present (legacy files have none)
             lines = strip_model_ctl_header(lines)
             lines = [i.split(' ') for i in lines]
             lines = [list(filter(None, i)) for i in lines]
@@ -1577,7 +1600,12 @@ def get_node_ofs(prop, logger, model_dataset=None):
     prop.model_source = get_model_source(prop.ofs)
     if logger is None:
         log_config_file = 'conf/logging.conf'
-        log_config_file = (Path(__file__).parent.parent.parent / log_config_file).resolve()
+        # __file__ is src/ofs_skill/model_processing/get_node_ofs.py, so four
+        # parents up is the repo root that holds conf/logging.conf. (Three
+        # parents lands in src/, where the file does not exist.)
+        log_config_file = (
+            Path(__file__).parent.parent.parent.parent / log_config_file
+        ).resolve()
 
         # Check if log file exists
         if not os.path.isfile(log_config_file):
@@ -1764,13 +1792,73 @@ def get_node_ofs(prop, logger, model_dataset=None):
         model = _resample_time_vars_only(model, time_name, time_step, logger)
         logger.info('Resample complete on a %s time axis.', prop.model_source)
 
+    prop.ctl_flag = 0 #Need flag to track control file production if
+                 #user_input_location == True
+
+    # Build-only mode (issue #189): write/verify the model control files
+    # and report obs-model station distances, then stop before the
+    # expensive time-series extraction. Lets a user inspect and hand-edit
+    # the matches before committing to a full run.
+    if getattr(prop, 'build_ctl_only', False):
+        logger.info(
+            'Build-ctl-only mode: writing model control file(s) for %s '
+            'and reporting station distances (no time series will be '
+            'extracted).', list(prop.var_list),
+        )
+        # Force a rebuild so the ctl reflects THIS run's window/options
+        # rather than a stale file. write_ofs_ctlfile only (re)writes a
+        # model ctl when it is absent, so delete any existing ones for the
+        # selected variables first. write_ofs_ctlfile writes one ctl per
+        # variable in prop.var_list.
+        prop.user_input_location = getattr(prop, 'user_input_location', False)
+        for _variable in prop.var_list:
+            _nv = name_convent(_variable)[0]
+            for _suffix in ('model.ctl', 'model_station.ctl'):
+                _old = os.path.join(
+                    prop.control_files_path,
+                    f'{prop.ofs}_{_nv}_{_suffix}')
+                if os.path.isfile(_old):
+                    try:
+                        os.remove(_old)
+                    except OSError as _ex:
+                        logger.warning(
+                            'Could not remove existing ctl %s for rebuild: '
+                            '%s', _old, _ex)
+
+        # Attach a station-drop ledger so index_nearest_station records WHY
+        # each obs station failed to match (e.g. beyond the distance
+        # cutoff). The build report reads these drop reasons back and lists
+        # the unmatched stations. One ledger spans all requested variables;
+        # each drop record carries the station ID and reason.
+        try:
+            prop.station_ledger = StationLedger(
+                ofs=getattr(prop, 'ofs', ''),
+                whichcast=getattr(prop, 'whichcast', ''),
+                filetype=getattr(prop, 'ofsfiletype', ''),
+            )
+        except (TypeError, ValueError):
+            prop.station_ledger = None
+
+        write_ofs_ctlfile(prop, model, logger)
+
+        max_dist_km = utils.get_station_match_max_dist(
+            logger, config_file=getattr(prop, 'config_file', None))
+        report_ctl_matches(
+            prop, logger, max_dist_km,
+            make_map=getattr(prop, 'build_ctl_map', True),
+            ledger=getattr(prop, 'station_ledger', None),
+        )
+        logger.info(
+            'Build-ctl-only mode complete. Review the control files in %s '
+            'before running the full assessment.',
+            prop.control_files_path,
+        )
+        return model
+
     logger.info(
         'Dispatching variable processing for: %s',
         list(prop.var_list),
     )
-
-    prop.ctl_flag = 0  # Need flag to track control file production if
-    # user_input_location == True
 
     def _extract_variable(variable, prop_local):
         """Process a single variable — extractable for parallel dispatch."""

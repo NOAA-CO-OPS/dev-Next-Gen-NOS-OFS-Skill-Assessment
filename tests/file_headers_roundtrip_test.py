@@ -10,6 +10,7 @@ single-entry files.
 
 import logging
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -92,11 +93,15 @@ def test_skill_ctlfile_extract_keeps_all_stations(tmp_path, header):
 
 
 @pytest.mark.parametrize('header', [True, False])
-def test_node_ctlfile_extract_keeps_all_stations(tmp_path, header):
+@patch('ofs_skill.model_processing.get_node_ofs.cache_manifest.ensure_fresh')
+def test_node_ctlfile_extract_keeps_all_stations(mock_ensure_fresh, tmp_path, header):
     """get_node_ofs's ctl extractor must return every station."""
     _write_model_ctl(tmp_path, MODEL_CTL_ROWS, header=header)
+
+    # The mocked ensure_fresh does nothing, so our file survives
     result = node_ctlfile_extract(
         _model_prop(tmp_path), 'wl', None, logger)
+
     assert result is not None
     _, nodes, _, _, ids = result
     assert nodes == [14, 32, 41]

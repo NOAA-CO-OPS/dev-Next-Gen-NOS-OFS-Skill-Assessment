@@ -478,10 +478,10 @@ def index_nearest_node(
 
             x_np = np.array(x_coords)
             y_np = np.array(y_coords)
-            
+
             # Normalize model longitudes from [0, 360] to [-180, 180]
             x_np = np.where(x_np > 180, x_np - 360, x_np)
-            
+
             for obs_p in range(len(ctl_file_extract)):
                 obs_lon = float(ctl_file_extract[obs_p][1])
                 obs_lat = float(ctl_file_extract[obs_p][0])
@@ -956,7 +956,12 @@ def index_nearest_depth(
                     dist.append(float(station_depth) + depth)
 
                 dist = [abs(i) for i in dist]
-                index_min_depth_node = dist.index(np.nanmin(dist))
+                try:
+                    index_min_depth_node = dist.index(np.nanmin(dist))
+                except ValueError:
+                    index_min_depth.append(np.nan)
+                    depth_value.append(np.nan)
+                    continue
                 depth_value.append(model_depths[
                     index_min_depth_node])
                 index_min_depth.append(index_min_depth_node)
