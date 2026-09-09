@@ -29,6 +29,13 @@ conda activate ofs_dps
 cp conf/ofs_dps.conf.example conf/ofs_dps.conf
 #    ...then edit conf/ofs_dps.conf and set home=/path/to/working_directory
 
+# 2b. (Optional, recommended) Add a USGS API key to raise the USGS rate
+#     limit from 50 to 1000 requests/hour. Runs work without one, but
+#     large windows will be slow and may drop USGS stations.
+cp conf/api_keys.conf.example conf/api_keys.conf
+#    ...then set API_USGS_PAT in conf/api_keys.conf
+#    How to request a key: https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment/wiki/01.-Setup-and-Installation#configuring-a-usgs-api-key
+
 # 3a. (Preferred) Ensure use_s3_fallback=True is set in conf/ofs_dps.conf, and the skill
 #     assessment routine will read and stream model files from the
 #     NODD S3 bucket on demand when local files are missing.
@@ -42,7 +49,7 @@ python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2
 python ./bin/visualization/create_1dplot.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -d MLLW -ws nowcast,forecast_b
 ```
 
-Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/10.-Graphical-User-Interfaces-(GUI)). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/01.-Setup-and-Installation).
+Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/10.-Graphical-User-Interfaces-(GUI)). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/01.-Setup-and-Installation), which also covers [configuring a USGS API key](../../wiki/01.-Setup-and-Installation#configuring-a-usgs-api-key).
 
 ## Documentation
 
