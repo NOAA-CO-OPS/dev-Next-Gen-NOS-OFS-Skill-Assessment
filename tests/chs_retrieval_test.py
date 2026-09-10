@@ -9,11 +9,14 @@ This module tests the CHS data retrieval functionality including:
 """
 
 import logging
-from unittest.mock import patch
+from datetime import datetime
+from unittest.mock import Mock, patch
 
 import pandas as pd
 import pytest
+import requests
 
+from ofs_skill.obs_retrieval import retrieve_chs_station as retrieve_chs_station_module
 from ofs_skill.obs_retrieval.inventory_chs_station import (
     inventory_chs_station,
 )
@@ -206,7 +209,7 @@ class TestInventoryCapabilityFlags:
 class TestRetrieveScalar:
     """Test scalar variable retrieval (water level, temp, salinity)."""
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_water_level(self, mock_fetch, logger):
         """Water level should use wlo code and set Datum=IGLD."""
         mock_fetch.return_value = _make_chs_api_response([1.0, 1.5, 2.0])
@@ -221,14 +224,11 @@ class TestRetrieveScalar:
         assert 'Datum' in result.columns
         assert (result['Datum'] == 'IGLD').all()
         assert (result['DEP01'] == 0.0).all()
-        mock_fetch.assert_called_with(
-            station_id='test_st',
-            time_series_code='wlo',
-            start_date='2025-01-01',
-            end_date='2025-01-02',
-        )
+        args = mock_fetch.call_args[0]
+        assert args[0] == 'test_st'
+        assert args[1] == 'wlo'
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_temperature(self, mock_fetch, logger):
         """Temperature should use wt1 code and NOT set Datum."""
         mock_fetch.return_value = _make_chs_api_response([5.0, 5.5, 6.0])
@@ -239,14 +239,11 @@ class TestRetrieveScalar:
         assert result is not None
         assert 'Datum' not in result.columns
         assert (result['DEP01'] == 0.0).all()
-        mock_fetch.assert_called_with(
-            station_id='test_st',
-            time_series_code='wt1',
-            start_date='2025-01-01',
-            end_date='2025-01-02',
-        )
+        args = mock_fetch.call_args[0]
+        assert args[0] == 'test_st'
+        assert args[1] == 'wt1'
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_temperature_fallback_wt2(self, mock_fetch, logger):
         """If wt1 returns empty, should fallback to wt2."""
         empty_df = pd.DataFrame(columns=[
@@ -261,10 +258,10 @@ class TestRetrieveScalar:
         assert result is not None
         assert len(result) == 2
         calls = mock_fetch.call_args_list
-        assert calls[0][1]['time_series_code'] == 'wt1'
-        assert calls[1][1]['time_series_code'] == 'wt2'
+        assert calls[0][0][1] == 'wt1'
+        assert calls[1][0][1] == 'wt2'
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_salinity(self, mock_fetch, logger):
         """Salinity should use ws1 code and NOT set Datum."""
         mock_fetch.return_value = _make_chs_api_response([23.0, 23.5])
@@ -274,14 +271,11 @@ class TestRetrieveScalar:
 
         assert result is not None
         assert 'Datum' not in result.columns
-        mock_fetch.assert_called_with(
-            station_id='test_st',
-            time_series_code='ws1',
-            start_date='2025-01-01',
-            end_date='2025-01-02',
-        )
+        args = mock_fetch.call_args[0]
+        assert args[0] == 'test_st'
+        assert args[1] == 'ws1'
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_no_data_returns_none(self, mock_fetch, logger):
         """Should return None when no data available."""
         empty_df = pd.DataFrame(columns=[
@@ -293,7 +287,7 @@ class TestRetrieveScalar:
 
         assert result is None
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_qc_filtering_rejects_suspect_data(self, mock_fetch, logger):
         """Records with qcFlagCode 3 (suspect) or 4 (erroneous) are filtered."""
         n = 5
@@ -319,7 +313,7 @@ class TestRetrieveScalar:
 class TestRetrieveCurrents:
     """Test current speed/direction retrieval and merge."""
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_currents_merge(self, mock_fetch, logger):
         """Speed and direction should be merged on DateTime."""
         speed_df = _make_chs_api_response([1.0, 1.5, 2.0])
@@ -339,7 +333,7 @@ class TestRetrieveCurrents:
         assert list(result['OBS']) == [1.0, 1.5, 2.0]
         assert list(result['DIR']) == [90.0, 135.0, 180.0]
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_currents_partial_overlap(self, mock_fetch, logger):
         """Only timestamps with both speed and direction should be kept."""
         speed_df = _make_chs_api_response([1.0, 1.5, 2.0])
@@ -354,7 +348,7 @@ class TestRetrieveCurrents:
         assert result is not None
         assert len(result) == 2  # inner merge
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_currents_no_speed_returns_none(self, mock_fetch, logger):
         """If speed data is missing from all pairs, should return None."""
         empty_df = pd.DataFrame(columns=[
@@ -371,10 +365,10 @@ class TestRetrieveCurrents:
         # Only speed codes tried (direction skipped due to early continue)
         calls = mock_fetch.call_args_list
         assert len(calls) == 2
-        assert calls[0][1]['time_series_code'] == 'wcs1'
-        assert calls[1][1]['time_series_code'] == 'wcs2'
+        assert calls[0][0][1] == 'wcs1'
+        assert calls[1][0][1] == 'wcs2'
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_currents_matched_sensor_pair(self, mock_fetch, logger):
         """Speed and direction must come from same sensor number."""
         empty_df = pd.DataFrame(columns=[
@@ -391,12 +385,12 @@ class TestRetrieveCurrents:
 
         assert result is not None
         calls = mock_fetch.call_args_list
-        assert calls[0][1]['time_series_code'] == 'wcs1'
+        assert calls[0][0][1] == 'wcs1'
         # wcd1 skipped because wcs1 was empty
-        assert calls[1][1]['time_series_code'] == 'wcs2'
-        assert calls[2][1]['time_series_code'] == 'wcd2'
+        assert calls[1][0][1] == 'wcs2'
+        assert calls[2][0][1] == 'wcd2'
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_currents_api_codes(self, mock_fetch, logger):
         """Should call wcs1 for speed and wcd1 for direction."""
         speed_df = _make_chs_api_response([1.0])
@@ -408,16 +402,16 @@ class TestRetrieveCurrents:
             '20250101', '20250102', 'test_st', 'currents', logger)
 
         calls = mock_fetch.call_args_list
-        assert calls[0][1]['time_series_code'] == 'wcs1'
-        assert calls[1][1]['time_series_code'] == 'wcd1'
+        assert calls[0][0][1] == 'wcs1'
+        assert calls[1][0][1] == 'wcd1'
 
 
 class TestDateChunking:
-    """Test 7-day date chunking behavior."""
+    """Test 31-day date chunking behavior."""
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_short_range_no_chunking(self, mock_fetch, logger):
-        """Ranges <= 7 days should result in a single API call."""
+        """Ranges <= 31 days should result in a single API call."""
         mock_fetch.return_value = _make_chs_api_response([1.0])
 
         retrieve_chs_station(
@@ -425,24 +419,260 @@ class TestDateChunking:
 
         assert mock_fetch.call_count == 1
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
-    def test_long_range_chunked(self, mock_fetch, logger):
-        """Ranges > 7 days should be split into multiple API calls."""
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_range_within_one_month_not_chunked(self, mock_fetch, logger):
+        """A 19-day range fits one request at FIVE_MINUTES resolution.
+
+        Under the previous ONE_MINUTE default this needed three requests.
+        """
         mock_fetch.return_value = _make_chs_api_response([1.0])
 
         retrieve_chs_station(
             '20250101', '20250120', 'test_st', 'water_level', logger)
 
+        assert mock_fetch.call_count == 1
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_long_range_chunked(self, mock_fetch, logger):
+        """Ranges > 31 days should be split into multiple API calls."""
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20250101', '20250401', 'test_st', 'water_level', logger)
+
         assert mock_fetch.call_count > 1
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_six_month_window_request_count(self, mock_fetch, logger):
+        """A ~6-month window costs 7 requests, not the former 28.
+
+        This is the whole point of sending an explicit resolution: at the
+        API's ONE_MINUTE default each request is capped at 7 days, and a
+        station consumed nearly the entire 30 req/min budget on its own.
+        """
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260226', '20260904', 'test_st', 'water_level', logger)
+
+        assert mock_fetch.call_count == 7
+
+
+class TestRequestResolution:
+    """The explicit resolution parameter must reach the CHS API."""
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_window_request_sends_five_minute_resolution(self, mock_get):
+        """Omitting resolution silently caps the window at 7 days."""
+        mock_get.return_value = Mock(
+            json=Mock(return_value=[]), raise_for_status=Mock()
+        )
+
+        retrieve_chs_station_module._fetch_chs_window(
+            'abc123', 'wlo',
+            datetime(2026, 3, 1), datetime(2026, 4, 1),
+            logging.getLogger('chs_resolution_test'),
+        )
+
+        url = mock_get.call_args[0][0]
+        assert 'resolution=FIVE_MINUTES' in url
+        assert 'time-series-code=wlo' in url
+        assert 'from=2026-03-01T00:00:00Z' in url
+        assert 'to=2026-04-01T00:00:00Z' in url
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_error_object_is_not_treated_as_data(self, mock_get):
+        """An error response is a JSON object, not a list of observations."""
+        mock_get.return_value = Mock(
+            json=Mock(return_value={'errors': ['nope']}),
+            raise_for_status=Mock(),
+        )
+
+        result = retrieve_chs_station_module._fetch_chs_window(
+            'abc123', 'wlo',
+            datetime(2026, 3, 1), datetime(2026, 4, 1),
+            logging.getLogger('chs_resolution_test'),
+        )
+
+        # None, not empty: an error object is a failed window, not an
+        # absence of observations.
+        assert result is None
 
 
 class TestUnsupportedVariable:
     """Test behavior with unsupported variable names."""
 
-    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.fetch_chs_station')
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_invalid_variable(self, mock_fetch, logger):
         """Unsupported variable should return None."""
         result = retrieve_chs_station(
             '20250101', '20250102', 'test_st', 'ice_concentration', logger)
 
         assert result is None
+
+
+class TestWindowHttpErrors:
+    """A failed window must degrade to no data, not abort the station."""
+
+    @staticmethod
+    def _response(status):
+        response = Mock()
+        error = requests.HTTPError(f'{status}')
+        error.response = Mock(status_code=status)
+        response.raise_for_status = Mock(side_effect=error)
+        return response
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_missing_time_series_returns_empty(self, mock_get, logger):
+        """404 means the station does not publish that code at all.
+
+        searvey returned a frame with an 'errors' column here; raising
+        instead would abort every station lacking the code.
+        """
+        mock_get.return_value = self._response(404)
+
+        result = retrieve_chs_station_module._fetch_chs_window(
+            'abc123', 'wlo',
+            datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+        )
+
+        assert result.empty
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_rate_limited_window_warns(self, mock_get, logger, caplog):
+        """429 drops data, so unlike a 404 it must be visible in the log."""
+        mock_get.return_value = self._response(429)
+
+        with caplog.at_level(logging.WARNING):
+            result = retrieve_chs_station_module._fetch_chs_window(
+                'abc123', 'wlo',
+                datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+            )
+
+        assert result is None
+        assert any('429' in r.getMessage() for r in caplog.records)
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_station_survives_a_failed_window(self, mock_get, logger):
+        """One bad window must not lose the rest of the station."""
+        good = _make_chs_api_response([1.0, 1.5])
+        good_response = Mock(
+            json=Mock(return_value=good.to_dict('records')),
+            raise_for_status=Mock(),
+        )
+        mock_get.side_effect = [
+            self._response(500), good_response, good_response,
+            good_response, good_response, good_response, good_response,
+        ]
+
+        result = retrieve_chs_station(
+            '20260226', '20260904', '000000000000000000000065',
+            'water_level', logger)
+
+        assert result is not None
+        assert not result.empty
+
+
+class TestFailedWindowsAreReported:
+    """A failed window must not be silently trimmed from the series."""
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_partial_series_warns_with_gap_size(self, mock_fetch, logger,
+                                                caplog):
+        """6 of 7 windows returning is not success; say what is missing.
+
+        Concatenating the survivors and reporting data-found would write an
+        .obs file and skill statistics over an undisclosed month-long hole.
+        """
+        good = _make_chs_api_response([1.0, 1.5])
+        mock_fetch.side_effect = [good, good, None, good, good, good, good]
+
+        with caplog.at_level(logging.WARNING):
+            result = retrieve_chs_station(
+                '20260226', '20260904', '000000000000000000000065',
+                'water_level', logger)
+
+        assert result is not None
+        joined = '\n'.join(r.getMessage() for r in caplog.records)
+        assert '1 of 7 window(s) could not be retrieved' in joined
+        assert 'day(s) are missing' in joined
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_complete_series_does_not_warn(self, mock_fetch, logger, caplog):
+        """No false alarm when every window came back."""
+        good = _make_chs_api_response([1.0, 1.5])
+        mock_fetch.return_value = good
+
+        with caplog.at_level(logging.WARNING):
+            retrieve_chs_station(
+                '20260226', '20260904', '000000000000000000000065',
+                'water_level', logger)
+
+        joined = '\n'.join(r.getMessage() for r in caplog.records)
+        assert 'could not be retrieved' not in joined
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
+    def test_non_json_body_does_not_abort_the_station(self, mock_get,
+                                                      logger):
+        """A 200 carrying HTML must degrade, not propagate out."""
+        mock_get.return_value = Mock(
+            raise_for_status=Mock(),
+            json=Mock(side_effect=ValueError('Expecting value')),
+        )
+
+        result = retrieve_chs_station_module._fetch_chs_window(
+            'abc123', 'wlo',
+            datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+        )
+
+        assert result is None
+
+
+class TestRequestedWindowCoverage:
+    """Chunk boundaries must tile the requested window exactly.
+
+    The rewrite to patch _fetch_chs_window dropped the old per-call
+    assertions on start_date/end_date, so nothing verified that the chunks
+    actually span what the caller asked for. A gap loses observations
+    silently; an overlap wastes rate-limit budget re-fetching.
+    """
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_chunks_tile_the_window_without_gaps_or_overlaps(
+            self, mock_fetch, logger):
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260226', '20260904', 'test_st', 'water_level', logger)
+
+        windows = [(c.args[2], c.args[3]) for c in mock_fetch.call_args_list]
+
+        assert windows[0][0] == datetime(2026, 2, 26)
+        assert windows[-1][1] == datetime(2026, 9, 4)
+        for (_, prev_end), (next_start, _) in zip(windows, windows[1:]):
+            assert prev_end == next_start, (
+                f'gap or overlap at {prev_end} -> {next_start}')
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_no_chunk_exceeds_the_api_maximum(self, mock_fetch, logger):
+        """CHS rejects a window longer than 31 days at this resolution."""
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260101', '20261231', 'test_st', 'water_level', logger)
+
+        for call in mock_fetch.call_args_list:
+            span = (call.args[3] - call.args[2]).days
+            assert span <= 31, f'chunk of {span} days exceeds the API cap'
+
+    @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
+    def test_short_window_is_requested_verbatim(self, mock_fetch, logger):
+        """A sub-chunk window must not be rounded or padded."""
+        mock_fetch.return_value = _make_chs_api_response([1.0])
+
+        retrieve_chs_station(
+            '20260301', '20260305', 'test_st', 'water_level', logger)
+
+        assert mock_fetch.call_count == 1
+        assert mock_fetch.call_args.args[2] == datetime(2026, 3, 1)
+        assert mock_fetch.call_args.args[3] == datetime(2026, 3, 5)
