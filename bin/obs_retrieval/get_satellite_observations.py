@@ -54,7 +54,6 @@ Revisions:
 from __future__ import annotations
 
 import argparse
-import logging.config
 import os
 import sys
 import time
@@ -1234,23 +1233,8 @@ def get_satellite(prop, logger):
 
     _conf = getattr(prop, 'config_file', None)
     if logger is None:
-        config_file = utils.Utils(_conf).get_config_file()
-        log_config_file = 'conf/logging.conf'
-        log_config_file = (
-            Path(__file__).parent.parent.parent / log_config_file).resolve()
-
-        # Check if log file exists
-        if not os.path.isfile(log_config_file):
-            sys.exit(-1)
-        # Check if config file exists
-        if not os.path.isfile(config_file):
-            sys.exit(-1)
-
-        # Creater logger
-        logging.config.fileConfig(log_config_file)
-        logger = logging.getLogger('root')
-        logger.info('Using config %s', config_file)
-        logger.info('Using log config %s', log_config_file)
+        logger = utils.init_root_logger(
+            prop.path, utils.Utils(_conf).get_config_file())
 
     # logger.info("--- Starting Visulization Process ---")
 
