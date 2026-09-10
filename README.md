@@ -42,6 +42,8 @@ python ./bin/utils/get_model_data.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2
 python ./bin/visualization/create_1dplot.py -p ./ -o cbofs -s 2025-07-01T00:00:00Z -e 2025-07-02T00:00:00Z -d MLLW -ws nowcast,forecast_b
 ```
 
+Water level runs convert between vertical datums, which needs a PROJ grid on disk and outbound HTTPS to the NOAA vdatum bucket. `make setup` handles the download; if you set the environment up by hand, or datum conversions fail with `ProjError` 1029, see [Vertical datum grids and network access](CONTRIBUTING.md#vertical-datum-grids-and-network-access).
+
 Prefer a graphical interface? Run `ofs-skill-gui` to open the [GUI launcher](../../wiki/10.-Graphical-User-Interfaces-(GUI)). Prefer pip/venv or manual conda setup instead of `make setup`? See [Setup and Installation](../../wiki/01.-Setup-and-Installation).
 
 ## Documentation

@@ -91,6 +91,7 @@ from ofs_skill.model_processing import (
 from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
+from ofs_skill.obs_retrieval.vdatum_resilient import validate_proj_vdatum_grids
 from ofs_skill.skill_assessment.get_skill import get_skill
 from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.timeseries_coverage import (
@@ -1180,6 +1181,11 @@ def create_1dplot(prop, logger):
                 'Failure checking for datum netcdf file on the NODD S3 '
                 'bucket! Datum conversions may fail. Continuing...'
             )
+
+    # PROJ vertical-datum grid preflight (issues #127, #216, #295).
+    # Proves this host can build a vertical datum pipeline before the run
+    # spends hours retrieving observations it will then drop one by one.
+    validate_proj_vdatum_grids(prop, logger)
 
     # Date-gate for forecast horizon functionality. The maximum allowed
     # window (in days) is configurable via 'horizon_max_days' in the

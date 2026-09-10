@@ -122,6 +122,7 @@ from ofs_skill.obs_retrieval.retrieve_t_and_c_station import (
 from ofs_skill.obs_retrieval.retrieve_usgs_station import retrieve_usgs_station
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
 from ofs_skill.obs_retrieval.utils import get_parallel_config
+from ofs_skill.obs_retrieval.vdatum_resilient import validate_proj_vdatum_grids
 from ofs_skill.obs_retrieval.write_obs_ctlfile import write_obs_ctlfile
 from ofs_skill.utils import cache_manifest
 from ofs_skill.utils.file_headers import series_header
@@ -1068,6 +1069,12 @@ def get_station_observations(prop,logger):
                  datum,
                  var_list)
     parameter_validation(argu_list, datum_list, logger)
+
+    # PROJ vertical-datum grid preflight (issues #127, #216, #295). This
+    # pipeline converts every NAVD88 gauge into the requested datum, so a
+    # host that cannot build a PROJ pipeline writes a control file that
+    # is silently missing those stations. Fail here instead.
+    validate_proj_vdatum_grids(prop, logger)
 
     control_files_path = \
         os.path.join(path, dir_params['control_files_dir'])
