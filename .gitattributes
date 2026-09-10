@@ -1,0 +1,6 @@
+# Golden fixtures are compared byte-for-byte by the regression tests, so
+# they must arrive identical on every platform. Without this, Windows
+# checkouts apply autocrlf and rewrite LF to CRLF, which changes the
+# file's hash and breaks a comparison that has nothing to do with line
+# endings.
+tests/fixtures/** -text

@@ -11,6 +11,8 @@ import logging
 import logging.config
 import os
 import sys
+import threading
+from bisect import bisect_left
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +40,377 @@ from ofs_skill.utils.timeseries_coverage import (
     parse_run_window,
     remove_stale_artifact,
 )
+
+# Parsed ``.obs`` frames, keyed by (path, size, mtime_ns). Observation
+# filenames carry no whichcast, so a multi-cast run re-parses the same
+# file once per cast per variable; ``pd.read_csv(sep=r'\s+')`` takes the
+# slow regex path and is the most expensive part of that repetition.
+# Values are ``(frame, nbytes)``; the running total is kept alongside so
+# the budget check never has to re-measure every cached frame.
+_OBS_FRAME_CACHE: dict[tuple, tuple[pd.DataFrame, int]] = {}
+_OBS_FRAME_CACHE_LOCK = threading.Lock()
+_OBS_FRAME_CACHE_BYTES = 0
+_OBS_FRAME_CACHE_FULL = False
+
+# Byte budget for the cache. A long hindcast over a few hundred stations
+# would otherwise hold every parsed observation frame for the whole run,
+# in a process that is concurrently holding model datasets; 256 MiB
+# covers a few hundred stations of a month-long six-minute series while
+# bounding the worst case.
+#
+# The budget is enforced by refusing new entries once it is reached, not
+# by evicting old ones. That choice matters: the access pattern here is
+# a full sweep over every station, repeated once per whichcast, and LRU
+# eviction under a cyclic sweep evicts exactly the entry the next sweep
+# asks for first -- measured at a 0% hit rate on every cast after the
+# first, i.e. strictly worse than no cache at all, since the memory is
+# still held and every miss still pays for a copy. Refusing admission
+# instead keeps whatever prefix of the sweep fits, and that prefix goes
+# on hitting on every later cast.
+_OBS_FRAME_CACHE_MAX_BYTES = 256 * 1024 * 1024
+
+
+def _clear_obs_frame_cache() -> None:
+    """Drop every cached ``.obs`` frame.
+
+    Called after observations are re-fetched so a regenerated file can
+    never be served from cache, even on a filesystem whose timestamp
+    granularity is too coarse for the (size, mtime) key to notice.
+    """
+    global _OBS_FRAME_CACHE_BYTES, _OBS_FRAME_CACHE_FULL
+    with _OBS_FRAME_CACHE_LOCK:
+        _OBS_FRAME_CACHE.clear()
+        _OBS_FRAME_CACHE_BYTES = 0
+        _OBS_FRAME_CACHE_FULL = False
+
+
+def _read_obs_frame(obs_path: str) -> pd.DataFrame:
+    """Parse an observation file, reusing an earlier parse when possible.
+
+    The returned frame is always a fresh copy: the pairing functions add
+    a ``DateTime`` column and rename columns in place, so handing out the
+    cached object would corrupt the next cast's pairing.
+
+    Parameters
+    ----------
+    obs_path : str
+        Path to the ``*_station.obs`` file.
+
+    Returns
+    -------
+    pd.DataFrame
+        The parsed observation rows.
+
+    Raises
+    ------
+    pandas.errors.EmptyDataError
+        Propagated from ``pd.read_csv`` when the file has no data rows.
+    """
+    global _OBS_FRAME_CACHE_BYTES, _OBS_FRAME_CACHE_FULL
+    try:
+        stat = os.stat(obs_path)
+        key = (os.path.abspath(obs_path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        key = None
+
+    if key is not None:
+        with _OBS_FRAME_CACHE_LOCK:
+            cached = _OBS_FRAME_CACHE.get(key)
+            if cached is not None:
+                return cached[0].copy()
+
+    frame = pd.read_csv(
+        obs_path,
+        sep=r'\s+',
+        header=None,
+        skiprows=series_rows_to_skip(obs_path),
+    )
+
+    if key is not None:
+        # Cheap size estimate: these frames come back from read_csv as
+        # fixed-width numeric columns, so cells x 8 bytes tracks the
+        # real footprint closely enough to drive the budget without
+        # paying for a per-column memory_usage on every read.
+        nbytes = int(frame.shape[0]) * int(frame.shape[1]) * 8
+        announce_full = False
+        with _OBS_FRAME_CACHE_LOCK:
+            previous = _OBS_FRAME_CACHE.pop(key, None)
+            if previous is not None:
+                _OBS_FRAME_CACHE_BYTES -= previous[1]
+            if (_OBS_FRAME_CACHE_BYTES + nbytes
+                    <= _OBS_FRAME_CACHE_MAX_BYTES):
+                _OBS_FRAME_CACHE[key] = (frame, nbytes)
+                _OBS_FRAME_CACHE_BYTES += nbytes
+            elif not _OBS_FRAME_CACHE_FULL:
+                _OBS_FRAME_CACHE_FULL = True
+                announce_full = True
+        if announce_full:
+            logging.getLogger(__name__).info(
+                'Observation parse cache reached its %d MiB budget with '
+                '%d files held; the remaining observation files will be '
+                're-parsed on each whichcast.',
+                _OBS_FRAME_CACHE_MAX_BYTES // (1024 * 1024),
+                len(_OBS_FRAME_CACHE),
+            )
+    return frame.copy()
+
+
+def _unclaimed_obs(o_times: np.ndarray) -> tuple[list, list[int]]:
+    """Split observed extrema into a searchable list of usable stamps.
+
+    Parameters
+    ----------
+    o_times : np.ndarray
+        Observed extrema timestamps, possibly containing NaT.
+
+    Returns
+    -------
+    tuple[list, list[int]]
+        The parseable timestamps, and their positions in ``o_times``.
+    """
+    free_t: list = []
+    free_i: list[int] = []
+    for index, stamp in enumerate(o_times):
+        # A missing timestamp fails every window comparison, so it can
+        # never be claimed; dropping it also keeps the list ordered.
+        if pd.isna(stamp):
+            continue
+        free_t.append(stamp)
+        free_i.append(index)
+    return free_t, free_i
+
+
+def _nearest_unclaimed(free_t: list, stamp, window: np.timedelta64):
+    """Position in ``free_t`` of the nearest stamp within ``window``.
+
+    ``free_t`` must be ascending. Ties resolve to the earliest entry, and
+    a run of equal timestamps resolves to the first of the run, which is
+    what a first-minimum-wins scan over the observations in time order
+    would have picked.
+
+    Parameters
+    ----------
+    free_t : list
+        Ascending timestamps of the still-unclaimed observed extrema.
+    stamp : np.datetime64
+        The model extremum timestamp to match.
+    window : np.timedelta64
+        Maximum absolute timing offset allowed for a pairing.
+
+    Returns
+    -------
+    int | None
+        Index into ``free_t``, or ``None`` when nothing is close enough.
+    """
+    pos = bisect_left(free_t, stamp)
+    best = None
+    best_dist = None
+    if pos > 0:
+        # Snap to the earliest observation sharing this timestamp:
+        # duplicated timestamps otherwise resolve to whichever copy
+        # survived earlier claims, changing which amplitude is paired.
+        best = bisect_left(free_t, free_t[pos - 1])
+        best_dist = abs(free_t[pos - 1] - stamp)
+    if pos < len(free_t):
+        right_dist = abs(free_t[pos] - stamp)
+        if best_dist is None or right_dist < best_dist:
+            best = pos
+            best_dist = right_dist
+    if best is None or best_dist is None or best_dist > window:
+        # ``best`` and ``best_dist`` are only ever set together, so the
+        # second test is redundant at runtime; it is what lets a type
+        # checker see that the comparison below is never against None.
+        return None
+    return best
+
+
+def _pair_extrema(
+    m_times: np.ndarray,
+    m_amps: np.ndarray,
+    o_times: np.ndarray,
+    o_amps: np.ndarray,
+    window: np.timedelta64,
+) -> tuple[list[dict], set[int]]:
+    """Greedily pair model extrema with the nearest unclaimed obs extrema.
+
+    Each model extremum claims the closest observed extremum that is
+    within ``window`` and not already claimed, so two nearby model peaks
+    can never both pair to the same observed peak. Ties are broken toward
+    the earliest observed extremum, matching a first-minimum-wins scan
+    over the observations in time order.
+
+    Model extrema with a missing timestamp are skipped, and observed
+    extrema with a missing timestamp are never claimed, matching the
+    exhaustive scan in both cases.
+
+    ``o_times`` is ascending by construction (extrema indices come back
+    from ``argrelextrema`` in order over an already time-sorted series),
+    which lets the search be a bisect over a shrinking list of unclaimed
+    observations instead of a full scan per model extremum. The ordering
+    is verified rather than assumed; an out-of-order series falls back to
+    the exhaustive scan.
+
+    Parameters
+    ----------
+    m_times : np.ndarray
+        Model extrema timestamps.
+    m_amps : np.ndarray
+        Model extrema amplitudes.
+    o_times : np.ndarray
+        Observed extrema timestamps.
+    o_amps : np.ndarray
+        Observed extrema amplitudes.
+    window : np.timedelta64
+        Maximum absolute timing offset allowed for a pairing.
+
+    Returns
+    -------
+    tuple[list[dict], set[int]]
+        The paired rows in model-extremum order, and the set of claimed
+        observation indices (indices into ``o_times``).
+    """
+    free_t, free_i = _unclaimed_obs(o_times)
+    if any(free_t[k] > free_t[k + 1] for k in range(len(free_t) - 1)):
+        return _pair_extrema_scan(m_times, m_amps, o_times, o_amps, window)
+
+    paired_data: list[dict] = []
+    matched_obs_idx: set[int] = set()
+    for mt, ma in zip(m_times, m_amps):
+        if not free_t:
+            break
+        if pd.isna(mt):
+            # A missing model timestamp compares false against both
+            # window bounds, so the exhaustive scan found no candidates
+            # and paired nothing. A bisect would instead land at
+            # position 0 and then measure a NaT distance, which is not
+            # greater than the window either -- so without this guard a
+            # NaT extremum would claim an observation and add a bogus
+            # row to the HW/LW skill table.
+            continue
+        best = _nearest_unclaimed(free_t, mt, window)
+        if best is None:
+            continue
+        obs_idx = free_i[best]
+        ot = free_t[best]
+        del free_t[best]
+        del free_i[best]
+        matched_obs_idx.add(obs_idx)
+        paired_data.append({
+            'DateTime': mt,
+            'OFS': ma,
+            'OBS': o_amps[obs_idx],
+            'BIAS': ma - o_amps[obs_idx],
+            'TIMING_ERR': (mt - ot) / np.timedelta64(1, 'h'),
+        })
+    return paired_data, matched_obs_idx
+
+
+def _pair_extrema_scan(
+    m_times: np.ndarray,
+    m_amps: np.ndarray,
+    o_times: np.ndarray,
+    o_amps: np.ndarray,
+    window: np.timedelta64,
+) -> tuple[list[dict], set[int]]:
+    """Exhaustive-scan pairing, used when obs extrema are out of order.
+
+    This is the prior implementation, moved here unchanged: for every
+    model extremum it scans every unclaimed observation. It stays in the
+    tree both as the fallback for an unordered observation series and as
+    the reference the bisect path is held to, so a divergence between
+    the two is a test failure rather than a silent change to the HW/LW
+    skill tables.
+
+    Same contract as :func:`_pair_extrema`, at O(n_mod x n_obs).
+    """
+    paired_data: list[dict] = []
+    matched_obs_idx: set[int] = set()
+    for mt, ma in zip(m_times, m_amps):
+        candidates = [
+            k for k in range(len(o_times))
+            if k not in matched_obs_idx
+            and (mt - window) <= o_times[k] <= (mt + window)
+        ]
+        if not candidates:
+            continue
+        best = candidates[
+            int(np.argmin([abs(o_times[k] - mt) for k in candidates]))
+        ]
+        matched_obs_idx.add(best)
+        ot = o_times[best]
+        oa = o_amps[best]
+        paired_data.append({
+            'DateTime': mt,
+            'OFS': ma,
+            'OBS': oa,
+            'BIAS': ma - oa,
+            'TIMING_ERR': (mt - ot) / np.timedelta64(1, 'h'),
+        })
+    return paired_data, matched_obs_idx
+
+
+def _format_int_rows(rows: list[list]) -> str:
+    """Render paired ``.int`` data rows as a single writable block.
+
+    The historical writer built each line with
+    ``str(row).replace(',', ' ').replace('[', '').replace(']', '')``.
+    ``str`` of a list already renders each element with ``repr`` and
+    joins on ``', '``, so the on-disk column separator is two spaces and
+    every number carries Python's shortest round-trip repr (``nan``,
+    ``-0.0``, ``1e-07`` and friends included). Reproducing that exactly
+    rules out ``DataFrame.to_csv``, whose ``sep`` must be a single
+    character and which writes an empty field for NaN. Joining the rows
+    here keeps the bytes identical while replacing one ``write`` call
+    per timestep with one call per file.
+
+    Parameters
+    ----------
+    rows : list[list]
+        Paired data rows, one list of scalars per timestep.
+
+    Returns
+    -------
+    str
+        The rows joined with newlines, newline-terminated, or an empty
+        string when there are no rows.
+    """
+    if not rows:
+        return ''
+    return '\n'.join('  '.join(map(repr, row)) for row in rows) + '\n'
+
+
+# Column headers of the paired ``.int`` files, one per variable family.
+# Both end in a space before the newline. That trailing space is on every
+# ``.int`` file this project has ever written, so it is load-bearing for
+# byte-identity and must not be tidied away.
+_INT_HEADERS = {
+    'cu': (
+        'DNUM_JAN1 YEAR MONTH DAY HOUR MINUTE SPEED_OB SPEED_MODEL '
+        'BIAS_SPEED DIR_OB DIR_MODEL BIAS_DIR \n'
+    ),
+    'scalar': (
+        'DNUM_JAN1 YEAR MONTH DAY HOUR MINUTE VAL_OB VAL_MODEL BIAS \n'
+    ),
+}
+
+
+def _write_int_file(int_path: str, name_var: str, rows: list[list]) -> None:
+    """Write one paired ``.int`` file: header line, then the data rows.
+
+    Parameters
+    ----------
+    int_path : str
+        Destination path.
+    name_var : str
+        Variable short name; ``'cu'`` selects the currents header, and
+        anything else the scalar header.
+    rows : list[list]
+        Paired data rows, one list of scalars per timestep.
+    """
+    header = _INT_HEADERS['cu' if name_var == 'cu' else 'scalar']
+    with open(int_path, 'w', encoding='utf-8') as int_file:
+        int_file.write(header)
+        int_file.write(_format_int_rows(rows))
 
 # Short model name-part -> long variable name. Cache-manifest signatures are
 # keyed on the long variable name (the ctl/obs/prd writers pass the long
@@ -212,11 +585,7 @@ def prepare_series(read_station_ctl_file, read_ofs_ctl_file, prop,
         if os.path.isfile(obs_path):
             if os.path.getsize(obs_path) > 0:
                 try:
-                    obs_df = pd.read_csv(obs_path,
-                        sep=r'\s+',
-                        header=None,
-                        skiprows=series_rows_to_skip(obs_path),
-                    )
+                    obs_df = _read_obs_frame(obs_path)
                 except EmptyDataError:
                     logger.error(
                         '%s/%s_%s_%s_station.obs has no data rows',
@@ -463,20 +832,7 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
             f'{prop.whichcast}_{prop.ofsfiletype}_pair.int'
         )
         int_path = os.path.join(prop.data_skill_1d_pair_path, filename)
-        with open(int_path, 'w', encoding='utf-8') as output_2:
-            if name_var == 'cu':
-                output_2.write(
-                    'DNUM_JAN1 YEAR MONTH DAY HOUR MINUTE SPEED_OB '
-                    'SPEED_MODEL BIAS_SPEED DIR_OB DIR_MODEL BIAS_DIR \n'
-                )
-            else:
-                output_2.write(
-                    'DNUM_JAN1 YEAR MONTH DAY HOUR MINUTE VAL_OB '
-                    'VAL_MODEL BIAS \n'
-                )
-            for p_value in formatted_series[0]:
-                cleaned_val = str(p_value).replace(',', ' ').replace('[', '').replace(']', '')
-                output_2.write(f'{cleaned_val}\n')
+        _write_int_file(int_path, name_var, formatted_series[0])
         logger.info(f'{filename} is created successfully')
         # Stamp the run signature on the paired file so a same-parameter
         # rerun reuses it and a changed-parameter run treats it as stale.
@@ -509,33 +865,9 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                 o_times = obs_extrema[f'{extrema_type}_times']
                 o_amps = obs_extrema[f'{extrema_type}_amplitudes']
 
-                paired_data = []
-                matched_obs_idx = set()
                 window = np.timedelta64(3, 'h')  # Standard NOS pairing window
-                for mt, ma in zip(m_times, m_amps):
-                    # Candidate obs extrema: within window AND not yet claimed
-                    # by another model extremum. This prevents two nearby model
-                    # peaks from both pairing to the same observed peak.
-                    candidates = [
-                        k for k in range(len(o_times))
-                        if k not in matched_obs_idx
-                        and (mt - window) <= o_times[k] <= (mt + window)
-                    ]
-                    if not candidates:
-                        continue
-                    best = candidates[
-                        int(np.argmin([abs(o_times[k] - mt) for k in candidates]))
-                    ]
-                    matched_obs_idx.add(best)
-                    ot = o_times[best]
-                    oa = o_amps[best]
-                    paired_data.append({
-                        'DateTime': mt,
-                        'OFS': ma,
-                        'OBS': oa,
-                        'BIAS': ma - oa,
-                        'TIMING_ERR': (mt - ot) / np.timedelta64(1, 'h'),
-                    })
+                paired_data, matched_obs_idx = _pair_extrema(
+                    m_times, m_amps, o_times, o_amps, window)
 
                 # Surface detection-rate asymmetry: extrema counted on one
                 # series but not the other. Silent under the prior impl.
@@ -963,6 +1295,9 @@ def get_skill(prop, logger):
                 needs_fetch = True
         if needs_fetch:
             get_station_observations(p, logger_)
+            # Freshly written .obs files must not be served from a parse
+            # of the versions that were just deleted.
+            _clear_obs_frame_cache()
 
     def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
                           cached_model=None):

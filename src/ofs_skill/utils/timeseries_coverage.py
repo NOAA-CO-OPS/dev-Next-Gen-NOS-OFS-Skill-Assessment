@@ -85,22 +85,54 @@ def _row_datetime(line):
 def read_first_last_timestamps(path):
     """Return (first, last) data-row timestamps of a cached artifact.
 
+    Only the rows at each end of the file are parsed. The whole file is
+    still decoded in one read, so a file with undecodable bytes anywhere
+    fails open exactly as it did when every line was parsed; what is
+    skipped is the per-row ``datetime`` construction for the interior,
+    which is what made this staleness check cost as much as parsing the
+    artifact it guards -- and it runs once per artifact, per cast.
+
+    The decoded text is held in memory for the duration of the call --
+    roughly twice the file size, so a year-long six-minute artifact
+    costs a few MB transiently. These are per-station text timeseries,
+    not gridded model output.
+
     Returns ``(None, None)`` when the file cannot be read or decoded, or
     contains no parseable data rows.
     """
-    first = None
-    last = None
     try:
         with open(path, encoding='utf-8') as file_handle:
-            for line in file_handle:
-                stamp = _row_datetime(line)
-                if stamp is None:
-                    continue
-                if first is None:
-                    first = stamp
-                last = stamp
+            text = file_handle.read()
     except (OSError, UnicodeDecodeError):
         return None, None
+
+    # Walk in from the front until a row parses. Headers and any leading
+    # junk are skipped, matching the full scan this replaced.
+    first = None
+    limit = len(text)
+    start = 0
+    while start < limit:
+        end = text.find('\n', start)
+        if end == -1:
+            end = limit
+        first = _row_datetime(text[start:end])
+        if first is not None:
+            break
+        start = end + 1
+    if first is None:
+        return None, None
+
+    # Then in from the back. The answer is the last *parseable* row, not
+    # the last line, so a trailing blank line or a row truncated by an
+    # interrupted write does not make the file look shorter than it is.
+    last = None
+    end = limit
+    while end > 0:
+        line_start = text.rfind('\n', 0, end)
+        last = _row_datetime(text[line_start + 1:end])
+        if last is not None:
+            break
+        end = line_start
     return first, last
 
 
