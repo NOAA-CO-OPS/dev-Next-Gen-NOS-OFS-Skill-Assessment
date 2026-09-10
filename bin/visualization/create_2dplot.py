@@ -433,7 +433,12 @@ def _run_pipeline(run_args):
             if prop1.sport:
                 sportfile = Path(os.path.join(satdatapath,
                                               str(prop1.ofs + '_sport.nc')))
-                processing_2d.parse_leaflet_json(model, sportfile, prop1)
+                # The L3C pass above already wrote the model JSONs for
+                # this window; only write them here when SPoRT is the
+                # sole satellite source (issue #122).
+                processing_2d.parse_leaflet_json(
+                    model, sportfile, prop1,
+                    write_model=not prop1.l3c)
             if not prop1.l3c and not prop1.sport:
                 logger.info('Processing model data only (no satellite data).')
                 processing_2d.parse_leaflet_json(model, None, prop1)
