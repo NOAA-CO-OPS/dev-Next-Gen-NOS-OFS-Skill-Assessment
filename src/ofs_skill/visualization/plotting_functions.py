@@ -28,6 +28,7 @@ import json
 import os
 import urllib.request
 from datetime import datetime
+from math import ceil
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -44,6 +45,8 @@ from ofs_skill.skill_assessment import nos_metrics
 
 if TYPE_CHECKING:
     from logging import Logger
+
+    from plotly.graph_objects import Figure
 
 
 def make_cubehelix_palette(
@@ -238,6 +241,140 @@ def count_title_lines(title: str) -> int:
     if not title:
         return 1
     return title.count('<br>') + 1
+
+
+# Pixel geometry of the band above the plot area. The title hangs from
+# TITLE_TOP_PX in container space and grows downward; the horizontal
+# legend stands on the plot area and grows upward. Only the top margin
+# separates them, so it has to hold both blocks plus a visible gap or
+# they meet in the middle (issue #136).
+TITLE_TOP_PX = 20
+TITLE_LINE_PX = 19          # 14 px title font x plotly's 1.3 line spacing
+TITLE_LEGEND_GAP_PX = 14
+LEGEND_ROW_PX = 22          # 12 px legend font x 1.3 plus the 5 px item gap
+# Plotly reserves itemwidth (30) + 2 x itemGap (5) beside every entry,
+# and puts another 5 px between entries.
+LEGEND_ITEM_PAD_PX = 40
+LEGEND_ITEM_GAP_PX = 5
+# Per-character advance at 12 px. Sized for the widest of the fonts a
+# browser substitutes when Open Sans is not installed rather than for
+# Open Sans itself, because under-estimating text width under-reserves
+# the band and brings the collision back.
+LEGEND_CHAR_PX = 7.2
+
+
+def legend_wrap_width_px(fig_width: int) -> float:
+    """Width a horizontal legend wraps at, in pixels.
+
+    Only valid for the anchoring the 1D time-series plots use
+    (``x < 0``, ``xanchor='left'``, ``y > 1``): plotly then wraps at the
+    left margin plus the plot width rather than at the plot width alone.
+    Assumes the left/right margins are plotly's 80 px default, which is
+    true at every caller today — a site that sets ``margin.l``/``r``
+    needs its own width.
+    """
+    return fig_width - 80
+
+
+def estimate_legend_rows(labels: list, max_width_px: float) -> int:
+    """Rows a horizontal legend wraps the given entry labels onto.
+
+    The row count follows the total width of the entry text, not the
+    number of whichcasts. Once the entries do not all fit on one row
+    plotly lays them out in uniform columns as wide as the widest entry,
+    so one long label costs every column its width.
+
+    Text width is deliberately rounded up: over-estimating costs a few
+    pixels of plot area, under-estimating brings back the collision this
+    sizing exists to prevent.
+    """
+    if not labels:
+        return 0
+    widths = [
+        LEGEND_ITEM_PAD_PX + LEGEND_CHAR_PX * len(str(label))
+        for label in labels
+    ]
+    single_row = sum(widths) + LEGEND_ITEM_GAP_PX * (len(widths) - 1)
+    if single_row < max_width_px:
+        return 1
+    column_px = max(widths) + LEGEND_ITEM_GAP_PX
+    per_row = max(1, int(max_width_px // column_px))
+    return ceil(len(widths) / per_row)
+
+
+def title_y_container(fig_height: float) -> float:
+    """Container-space ``layout.title.y`` for a fixed pixel top offset.
+
+    ``title.yref`` defaults to ``'container'``, so a hard-coded fraction
+    moves the title as the figure height changes — which matters where
+    the height scales with the number of plotted rows.
+    """
+    return 1.0 - TITLE_TOP_PX / fig_height
+
+
+def top_margin_px(
+    n_title_lines: int,
+    n_legend_rows: int,
+    fig_height: float,
+    legend_yoffset: float,
+    bottom_margin: int = 100,
+) -> int:
+    """Top margin that fits an n-line title above an n-row legend.
+
+    The legend's bottom edge sits ``legend_yoffset - 1`` of the plot
+    height above the plot area, so that slice of the band is unusable by
+    either block and has to be added back.
+    """
+    title_block = TITLE_TOP_PX + n_title_lines * TITLE_LINE_PX
+    legend_block = n_legend_rows * LEGEND_ROW_PX
+    legend_lift = (legend_yoffset - 1.0) * (fig_height - bottom_margin)
+    return ceil(
+        title_block + TITLE_LEGEND_GAP_PX + legend_block + legend_lift
+    )
+
+
+def apply_title_band(
+    fig: Figure,
+    title_text: str,
+    fig_height: float,
+    fig_width: int,
+    legend_yoffset: float,
+    legend_rows: int | None = None,
+    bottom_margin: int = 100,
+    min_margin: int = 0,
+) -> int:
+    """Size the band above the plot area and apply it to ``fig``.
+
+    Call this *after* the figure's own ``update_layout``: it owns
+    ``margin.t`` and ``title.y`` so no site can compute the band and
+    then quietly overwrite it with a stale literal (issue #136).
+
+    ``legend_rows`` defaults to the rows the figure's own legend entries
+    wrap onto. Pass a count where the block sharing the band is not the
+    legend - the currents plots put a caption there instead - and
+    ``min_margin`` where the band must not shrink below a known-good
+    value. Returns the top margin it applied, in pixels.
+    """
+    if legend_rows is None:
+        labels = [
+            trace.name for trace in fig.data
+            if trace.name and trace.showlegend is not False
+        ]
+        legend_rows = estimate_legend_rows(
+            labels, legend_wrap_width_px(fig_width)
+        )
+    tmargin = max(
+        min_margin,
+        top_margin_px(
+            count_title_lines(title_text),
+            legend_rows,
+            fig_height,
+            legend_yoffset,
+            bottom_margin,
+        ),
+    )
+    fig.update_layout(margin_t=tmargin, title_y=title_y_container(fig_height))
+    return tmargin
 
 
 _COOPS_MDAPI_URL = 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/'

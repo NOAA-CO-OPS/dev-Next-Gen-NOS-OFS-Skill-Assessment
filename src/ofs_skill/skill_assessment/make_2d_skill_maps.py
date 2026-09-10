@@ -229,6 +229,10 @@ def make_2d_skill_maps(
         sys.exit(-1)
 
     pio.renderers.default = 'browser'
+    # Bind the figure and its PNG export to one size so the camera button
+    # cannot hand back a letterboxed download (issue #119).
+    map_height = 700
+    map_width = 1000
     fig = px.scatter_mapbox(df.dropna(), lat='Y', lon='X',
                      color=get_stat_name(maptype),  # which column to use to set the color of markers
                      mapbox_style='carto-positron',
@@ -242,8 +246,8 @@ def make_2d_skill_maps(
                      color_continuous_scale=colorscale,
                      animation_group=get_stat_name(maptype),
                      animation_frame='Date',
-                     height=700,
-                     width=1000,
+                     height=map_height,
+                     width=map_width,
                      range_color=range_color
                      )
     sliders = [dict(font={'size': 20})]
@@ -271,4 +275,15 @@ def make_2d_skill_maps(
                             + (prop1.start_date_full).split('-')[0] + '-' +
                             (prop1.end_date_full).split('-')[0] + '.html'))
 
-    plotly.offline.plot(fig, filename=savepath, auto_open=False)
+    # Issue #119: without an explicit export name the camera button saves
+    # newplot.png. Name it after the HTML file so downloads are traceable.
+    fig_config = {
+        'toImageButtonOptions': {
+            'format': 'png',
+            'filename': os.path.splitext(os.path.basename(savepath))[0],
+            'height': map_height,
+            'width': map_width,
+            'scale': 1,
+        },
+    }
+    plotly.offline.plot(fig, filename=savepath, auto_open=False, config=fig_config)
