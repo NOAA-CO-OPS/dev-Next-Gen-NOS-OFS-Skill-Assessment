@@ -457,7 +457,6 @@ def get_parallel_config(logger=None, config_file=None):
         'parallel_workflow': False,
         'parallel_stations': False,
         'parallel_plotting': False,
-        'parallel_forecast_cycles': False,
         'parallel_obs_variables': False,
         'parallel_2d_interp': False,
         'parallel_extract_slots': 2,
@@ -494,10 +493,6 @@ def get_parallel_config(logger=None, config_file=None):
     # Parse parallel_plotting
     val = raw.get('parallel_plotting', 'false').strip().lower()
     result['parallel_plotting'] = val in ('true', '1', 'yes')
-
-    # Parse parallel_forecast_cycles
-    val = raw.get('parallel_forecast_cycles', 'false').strip().lower()
-    result['parallel_forecast_cycles'] = val in ('true', '1', 'yes')
 
     # Parse parallel_obs_variables
     val = raw.get('parallel_obs_variables', 'false').strip().lower()
