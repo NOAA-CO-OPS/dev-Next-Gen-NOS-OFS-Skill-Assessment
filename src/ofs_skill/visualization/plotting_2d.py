@@ -648,6 +648,53 @@ def load_json_grid(filepath: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return lons, lats, data
 
 
+# Natural Earth's "physical/land" polygons treat the Great Lakes as land --
+# lakes are published as a separate feature rather than being cut out of
+# land. Painting cfeature.LAND over the data therefore hides the entire
+# domain of every Great Lakes OFS. This mirrors the same misclassification
+# processing_2d already works around on the data side, where the global
+# land mask is skipped for GREAT_LAKES_OFS.
+#
+# Cached because the difference costs ~0.5 s and the shapes never change
+# within a process. ``False`` records a failed attempt so we do not retry
+# the geometry work (or a Natural Earth download) on every figure.
+_LAND_WITHOUT_LAKES: object = None
+
+
+def _land_without_lakes(logger: Logger):
+    """Natural Earth land polygons with the lake interiors removed.
+
+    Returns a cartopy feature safe to paint over gridded data, or ``None``
+    if the geometry could not be built -- callers must then draw land
+    *beneath* the data rather than over it, so a missing Natural Earth
+    shapefile degrades into slight land bleed-through instead of a blank
+    map.
+    """
+    global _LAND_WITHOUT_LAKES
+    if _LAND_WITHOUT_LAKES is not None:
+        return _LAND_WITHOUT_LAKES or None
+
+    try:
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+        from shapely.ops import unary_union
+
+        land = unary_union(list(cfeature.LAND.geometries()))
+        lakes = unary_union(list(cfeature.LAKES.geometries()))
+        _LAND_WITHOUT_LAKES = cfeature.ShapelyFeature(
+            [land.difference(lakes)], ccrs.PlateCarree(),
+        )
+    except Exception:  # pragma: no cover - depends on Natural Earth assets
+        logger.warning(
+            'Could not build the land-without-lakes mask; drawing land '
+            'beneath the data instead. Coastal land may show slight '
+            'interpolation bleed-through.', exc_info=True,
+        )
+        _LAND_WITHOUT_LAKES = False
+        return None
+    return _LAND_WITHOUT_LAKES
+
+
 def plot_2d_scalar_map(
     lons: np.ndarray,
     lats: np.ndarray,
@@ -697,8 +744,12 @@ def plot_2d_scalar_map(
         vmin=vmin, vmax=vmax,
         transform=ccrs.PlateCarree(), zorder=1,
     )
-    # Land on top of data to cover interpolation bleed-through
-    ax.add_feature(cfeature.LAND, facecolor='lightgray', zorder=2)
+    # Land on top of data to cover interpolation bleed-through, with the
+    # lakes cut out so Great Lakes domains are not painted over entirely.
+    land = _land_without_lakes(logger)
+    ax.add_feature(land if land is not None else cfeature.LAND,
+                   facecolor='lightgray',
+                   zorder=2 if land is not None else 0)
     ax.coastlines(resolution='10m', zorder=3)
     ax.add_feature(cfeature.STATES, linewidth=0.5, zorder=3)
     ax.gridlines(draw_labels=True)
@@ -759,8 +810,12 @@ def plot_2d_current_quiver_map(
         transform=ccrs.PlateCarree(),
         scale=15, width=0.002, color='black', alpha=0.7, zorder=2,
     )
-    # Land on top of data to cover interpolation bleed-through
-    ax.add_feature(cfeature.LAND, facecolor='lightgray', zorder=3)
+    # Land on top of data to cover interpolation bleed-through, with the
+    # lakes cut out so Great Lakes domains are not painted over entirely.
+    land = _land_without_lakes(logger)
+    ax.add_feature(land if land is not None else cfeature.LAND,
+                   facecolor='lightgray',
+                   zorder=3 if land is not None else 0)
     ax.coastlines(resolution='10m', zorder=4)
     ax.add_feature(cfeature.STATES, linewidth=0.5, zorder=4)
     ax.gridlines(draw_labels=True)
