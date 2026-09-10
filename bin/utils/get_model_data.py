@@ -709,13 +709,12 @@ def download_data(prop, list_of_urls1, dir_list, logger):
         )
         logger.info('NODD is responding! Keep going -->')
         list_of_urls_main = list_of_urls1
-    except (ValueError, HTTPError, Exception) as e_x:
-        logger.info("NODD S3 is not responding! I'm out.")
-        logger.error('First download failed for URL: %s',
-                     list_of_urls1[0].replace('\\', '/'))
+    except Exception as e_x:
+        first_url = list_of_urls1[0].replace('\\', '/')
+        logger.info(_describe_nodd_failure(e_x, first_url))
+        logger.error('First download failed for URL: %s', first_url)
         logger.error(f'Exception: {e_x}')
         sys.exit(-1)
-        # list_of_urls = list_of_urls2
 
     # Download remaining files in parallel
     parallel_config = get_parallel_config(
@@ -731,6 +730,44 @@ def download_data(prop, list_of_urls1, dir_list, logger):
         }
         for future in as_completed(futures):
             future.result()  # raise exceptions from worker if any
+
+
+def _describe_nodd_failure(exc, url):
+    """Explain a failed first NODD download in terms of its actual cause.
+
+    A 404 means the bucket answered and the object is not at that path --
+    the service is up, the URL is wrong. Reporting that as "NODD S3 is not
+    responding" sends people to look at NOAA's status page instead of at
+    their own config, which is what happened in issue #213: a blank
+    ``netcdf_dir`` built a path with the directory segment missing, every
+    URL 404'd, and the log blamed the service.
+    """
+    status = getattr(exc, 'code', None)
+    if status == 404:
+        return (
+            'NODD S3 answered, but nothing exists at that path (HTTP 404). '
+            'The service is up -- the URL is wrong. Check netcdf_dir in '
+            'conf/ofs_dps.conf (it should be "netcdf" for non-STOFS OFS; a '
+            'blank value drops a directory from the path), and check that '
+            'the requested dates are actually in the archive. '
+            f'URL tried: {url}'
+        )
+    if status == 403:
+        return (
+            'NODD S3 refused the request (HTTP 403). The service is up; '
+            'this is an access or path problem, not an outage. '
+            f'URL tried: {url}'
+        )
+    if isinstance(status, int) and 500 <= status < 600:
+        return (
+            f'NODD S3 returned a server error (HTTP {status}). This one is '
+            'on the service -- retrying later is reasonable.'
+        )
+    return (
+        'Could not reach NODD S3 -- no HTTP response came back, so this '
+        'looks like a network, DNS, or connectivity problem rather than a '
+        'bad path.'
+    )
 
 
 def get_model_data(prop, logger):
