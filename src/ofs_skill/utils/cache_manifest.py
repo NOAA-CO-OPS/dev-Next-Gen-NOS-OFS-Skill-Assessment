@@ -264,12 +264,31 @@ def _write_index(directory: str, index: dict, logger=None) -> None:
                 path, exc)
 
 
-def artifact_is_fresh(artifact_path: str, signature: dict) -> bool:
+# Signature fields a continuation run (``-cr``) is *expected* to widen: it
+# extends the run window over an artifact built for a shorter one. Every
+# other field must still match exactly, so a continuation gate compares
+# signatures with these ignored while a normal gate compares all of them.
+CONTINUATION_WINDOW_KEYS = ('start_date_full', 'end_date_full')
+
+
+def _comparable(signature: dict, ignore_keys=()) -> dict:
+    """``signature`` without ``ignore_keys`` (both sides get the same filter)."""
+    if not ignore_keys:
+        return signature
+    return {k: v for k, v in signature.items() if k not in ignore_keys}
+
+
+def artifact_is_fresh(artifact_path: str, signature: dict,
+                      ignore_keys=()) -> bool:
     """True when the artifact exists and its recorded signature matches.
 
     Returns False when the file is absent, has no manifest entry (e.g. a
     pre-upgrade file, or one deleted-and-rebuilt outside this module), or was
     recorded under a different run signature. False means "regenerate".
+
+    ``ignore_keys`` drops fields from *both* sides before comparing; pass
+    ``CONTINUATION_WINDOW_KEYS`` to ask "was this built the same way, just
+    over a different window?" -- the question a continuation run needs.
     """
     if not os.path.isfile(artifact_path):
         return False
@@ -278,7 +297,10 @@ def artifact_is_fresh(artifact_path: str, signature: dict) -> bool:
     with _manifest_lock:
         index = _load_index(directory)
     recorded = index.get('entries', {}).get(key)
-    return recorded == signature
+    if recorded is None:
+        return False
+    return _comparable(recorded, ignore_keys) == _comparable(
+        signature, ignore_keys)
 
 
 def record_artifact(artifact_path: str, signature: dict, base_dir: str, logger=None) -> None:
@@ -319,7 +341,8 @@ def forget_artifact(artifact_path: str, base_dir: str, logger=None) -> None:
             _write_index(directory, index, logger)
 
 
-def ensure_fresh(artifact_path, signature, base_dir, kind, logger=None):
+def ensure_fresh(artifact_path, signature, base_dir, kind, logger=None,
+                 ignore_keys=()):
     """Reuse gate helper: True if the artifact is reusable for this run.
 
     Combines the manifest check with stale cleanup:
@@ -329,10 +352,15 @@ def ensure_fresh(artifact_path, signature, base_dir, kind, logger=None):
     * Present but signature differs -> deletes the file (bounded to
       ``base_dir``), drops its manifest entry, tallies it for the run
       summary, and returns False so the caller regenerates.
+
+    ``ignore_keys`` is forwarded to :func:`artifact_is_fresh`. A continuation
+    gate passes ``CONTINUATION_WINDOW_KEYS`` so that widening the run window
+    -- the one thing ``-cr`` always does -- is not by itself grounds to
+    delete the artifact it is about to extend.
     """
     if not os.path.isfile(artifact_path):
         return False
-    if artifact_is_fresh(artifact_path, signature):
+    if artifact_is_fresh(artifact_path, signature, ignore_keys):
         return True
     if logger is not None:
         logger.warning(
