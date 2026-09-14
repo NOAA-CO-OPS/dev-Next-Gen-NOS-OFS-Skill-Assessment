@@ -117,6 +117,12 @@ class ModelProperties:
         self.filepath: Any = ''
         self.continue_run: Any = False
         self.continue_overlap_hours: Any = 24.0
+        # Build-ctl-only mode (issue #189): when True, get_node_ofs writes
+        # the model control file(s) and a station-distance report, then
+        # stops before extracting time series. build_ctl_map toggles the
+        # accompanying interactive station-pair map.
+        self.build_ctl_only: Any = False
+        self.build_ctl_map: Any = True
 
         # Path attributes
         self.control_files_path: str = ''
