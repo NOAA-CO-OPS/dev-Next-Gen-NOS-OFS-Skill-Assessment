@@ -24,38 +24,58 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
+# Floors are the versions we actually test: they mirror the pins in
+# environment.yml, which is the environment CI and the recommended install
+# (INSTALL_WINDOWS.md Method A) both build from. A pip-only install
+# (Method C) has no environment.yml to lean on, so these constraints are
+# the only thing standing between a user and an untested combination.
+#
+# Upper bounds are deliberate and only where a major release has actually
+# broken this codebase before -- see the comments on those lines. An
+# open-ended ">=" on a library that removes APIs at majors is how an
+# upstream release becomes a silent breakage here.
 dependencies = [
-    "numpy>=1.20.0",
-    "pandas>=1.3.0",
-    "scipy>=1.7.0",
-    "xarray>=0.19.0",
+    # numpy 2 was a breaking major; environment.yml requires >=2.0.0 and
+    # notes geopandas/shapely must match it.
+    "numpy>=2.0.0,<3",
+    # pandas 3 removed Series.bool(), which silently killed water level
+    # plotting until it was tracked down. Cap until we test against it.
+    "pandas>=2.2,<3",
+    # numpy 2 support landed in scipy 1.13; the old >=1.7.0 floor was
+    # unsatisfiable alongside the numpy pin above.
+    "scipy>=1.13",
+    "xarray>=2024.5.0",
     "dask>=2024.5.1",
-    "netCDF4>=1.5.7",
-    "h5netcdf>=1.0.0",
-    "matplotlib>=3.4.0",
-    "plotly>=5.0.0",
-    "scikit-learn>=0.24.0",
-    "geopandas>=0.9.0",
-    "shapely>=1.7.0",
+    "netCDF4>=1.6.5",
+    "h5netcdf>=1.3.0",
+    "matplotlib>=3.8,<4",
+    # plotly 6 removes the flat titlefont shorthand and deprecates the
+    # mapbox map API. Tracked in #288; bump this with #289/#290 together.
+    "plotly>=5.0,<6",
+    "scikit-learn>=1.3",
+    # CRITICAL: geopandas must be 1.0+ and shapely 2.0+ for numpy 2.
+    "geopandas>=1.0.0",
+    "shapely>=2.0.0",
     "requests>=2.26.0",
     "boto3>=1.34.0",
-    "s3fs>=2021.0.0",
+    "s3fs>=2024.0.0",
     # Pin floating Git deps to immutable commit SHAs (keep in sync with
     # environment.yml pip:). Human-readable release tags stay in comments.
     # searvey v0.4.2
     "searvey @ git+https://github.com/oceanmodeling/searvey.git@4c2afb8655dfc052f49855db1c9f30ad64b68522",
     "pyshp>=2.1.0",
-    "intake>=0.6.4",
-    "intake-xarray>=0.5.0",
+    "intake>=2.0.0",
+    "intake-xarray>=2.0.0",
     "intake-esm>=2021.8.17",
     "kaleido>=0.2.1",
-    "seaborn>=0.11.0",
-    "tkcalendar>=1.6.0",
+    "seaborn>=0.13.2",
+    # Pinned exactly in environment.yml's pip: section; keep them in step.
+    "tkcalendar==1.6.1",
     # coastalmodeling-vdatum v0.3.2
     "coastalmodeling-vdatum @ git+https://github.com/oceanmodeling/coastalmodeling-vdatum.git@0d63b2bbc0b0634e20a0ec55023a53354fab1b47",
     "cartopy>=0.23.0",
     "regionmask>=0.12.1",
-    "global-land-mask>=1.0.0",
+    "global-land-mask==1.0.0",
     "utide>=0.3.0",
 ]
 
@@ -67,9 +87,15 @@ all = [
     "pyinterp>=2024.11.0",
 ]
 dev = [
-    "pytest>=6.2.0",
-    "pytest-cov>=2.12.0",
+    # Floors match the environment.yml linting block, for the same reason
+    # as the runtime pins above: a pip-only contributor should get the
+    # tooling CI actually runs, not a decade-old release of it.
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
     "pytest-xdist>=3.3.0",
+    # The PR template asks contributors for a pylint score, so the tool
+    # they need has to be installable from here as well as from conda.
+    "pylint>=3.3",
     "black>=21.0",
     "flake8>=3.9.0",
     "ruff==0.7.0",
