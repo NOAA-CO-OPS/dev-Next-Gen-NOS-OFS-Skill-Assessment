@@ -454,5 +454,17 @@ def make_skill_maps(
     savename = prop.ofs + '_' + variable + '_' + prop.whichcast + '_Skill_Map.html'
     filepath = os.path.join(prop.plotly_maps, savename)
 
-    plotly.offline.plot(fig, filename=filepath, auto_open=False, config={'scrollZoom': True})
+    # Issue #119: without an explicit export name the camera button saves
+    # newplot.png. Name it after the HTML file so downloads are traceable.
+    fig_config = {
+        'scrollZoom': True,
+        'toImageButtonOptions': {
+            'format': 'png',
+            'filename': os.path.splitext(savename)[0],
+            'height': map_height,
+            'width': map_width,
+            'scale': 1,
+        },
+    }
+    plotly.offline.plot(fig, filename=filepath, auto_open=False, config=fig_config)
     logger.info('Combined interactive map for %s complete', variable)
