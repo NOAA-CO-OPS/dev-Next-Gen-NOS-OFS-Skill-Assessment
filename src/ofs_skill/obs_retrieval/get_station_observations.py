@@ -92,7 +92,10 @@ Revisions:
 
 """
 import copy
+import csv
+import math
 import os
+import random
 import socket
 import sys
 import threading
@@ -100,6 +103,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 
 import pandas as pd
+import plotly.graph_objects as go
 
 from ofs_skill.obs_retrieval import (
     retrieve_properties,
@@ -852,6 +856,175 @@ def _create_station_ctl_file(
                             'creating station '
                             'ctl files') from ex
 
+def _generate_summary_csv(ofs, var_list, control_files_path, output_dir, logger):
+    """Generates a single CSV summary of all stations across all variables."""
+    summary_data = []
+
+    for var in var_list:
+        name_var = _VAR_TO_NAME.get(var)
+        if not name_var:
+            continue
+
+        filepath = os.path.join(control_files_path, f'{ofs}_{name_var}_station.ctl')
+
+        try:
+            with open(filepath) as f:
+                lines = f.readlines()[2:] # Skip the 2-line header
+        except FileNotFoundError:
+            continue
+
+        # Track base station IDs for the current variable to prevent duplicate bins
+        seen_stations = set()
+
+        for i in range(0, len(lines), 2):
+            if i + 1 >= len(lines):
+                break
+            line1 = lines[i].strip().split()
+            line2 = lines[i+1].strip().split()
+
+            # line1 format: [Station_ID, ID_var_ofs_Provider, Name_Part_1, Name_Part_2, ...]
+            if len(line1) < 3 or len(line2) < 2:
+                continue
+
+            station_id = line1[0]
+
+            # Extract provider from the composite string at index 1 (e.g., "8638610_wl_cbofs_CO-OPS")
+            composite_id = line1[1]
+            provider = composite_id.split('_')[-1] if '_' in composite_id else 'Unknown'
+
+            # The name starts at index 2
+            name = ' '.join(line1[2:]).replace('"', '')
+
+            # Clean names and virtual IDs for a cleaner summary
+            if '(bin' in name:
+                name = name.split('(bin')[0].strip()
+            if '_b' in station_id:
+                station_id = station_id.split('_b')[0]
+
+            # Skip if we already added this base station for this variable
+            if station_id in seen_stations:
+                continue
+            seen_stations.add(station_id)
+
+            raw_lat, raw_lon = float(line2[0]), float(line2[1])
+
+            summary_data.append({
+                'Station_ID': station_id,
+                'Station_Name': name,
+                'Provider': provider,
+                'Latitude': raw_lat,
+                'Longitude': raw_lon,
+                'Variable': var
+            })
+
+    if not summary_data:
+        logger.info('No station data found to build CSV.')
+        return
+
+    csv_path = os.path.join(output_dir, f'{ofs}_station_summary.csv')
+    fieldnames = ['Station_ID', 'Station_Name', 'Provider', 'Latitude', 'Longitude', 'Variable']
+
+    with open(csv_path, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(summary_data)
+
+    logger.info(f'Station summary CSV successfully generated: {csv_path}')
+
+def _generate_summary_map(ofs, var_list, control_files_path, output_dir, logger):
+    """Generates an interactive HTML map from the newly built control files."""
+    var_display = {
+        'water_level': {'name': 'Water Level', 'color': '#1f77b4'},
+        'currents': {'name': 'Currents', 'color': '#2ca02c'},
+        'water_temperature': {'name': 'Temperature', 'color': '#d62728'},
+        'salinity': {'name': 'Salinity', 'color': '#ff7f0e'}
+    }
+
+    all_stations = []
+
+    for var in var_list:
+        if var not in var_display:
+            continue
+
+        name_var = _VAR_TO_NAME[var]
+        filepath = os.path.join(control_files_path, f'{ofs}_{name_var}_station.ctl')
+
+        seen_coords = set()
+        try:
+            with open(filepath) as f:
+                lines = f.readlines()[2:] # Skip the 2-line header
+        except FileNotFoundError:
+            continue
+
+        for i in range(0, len(lines), 2):
+            if i + 1 >= len(lines):
+                break
+            line1 = lines[i].strip().split()
+            line2 = lines[i+1].strip().split()
+            if len(line1) < 3 or len(line2) < 2:
+                continue
+
+            station_id = line1[0]
+            name = ' '.join(line1[2:]).replace('"', '')
+
+            # Clean names and IDs for mapping
+            if '(bin' in name:
+                name = name.split('(bin')[0].strip()
+            if '_b' in station_id:
+                station_id = station_id.split('_b')[0]
+
+            raw_lat, raw_lon = float(line2[0]), float(line2[1])
+
+            # Deduplicate stations with identical coordinates
+            coord_key = (raw_lat, raw_lon)
+            if coord_key in seen_coords:
+                continue
+            seen_coords.add(coord_key)
+
+            # Apply a tiny random offset to prevent marker overlap
+            lat = raw_lat + random.uniform(-0.005, 0.005)
+            lon = raw_lon + random.uniform(-0.005, 0.005)
+
+            all_stations.append({
+                'station_id': station_id, 'name': name,
+                'lat': lat, 'lon': lon,
+                'variable': var_display[var]['name'],
+                'color': var_display[var]['color']
+            })
+
+    if not all_stations:
+        logger.info('No station data found to map.')
+        return
+
+    fig = go.Figure()
+    for var_name in {s['variable'] for s in all_stations}:
+        var_stations = [s for s in all_stations if s['variable'] == var_name]
+        fig.add_trace(go.Scattermap(
+            mode='markers',
+            lon=[s['lon'] for s in var_stations], lat=[s['lat'] for s in var_stations],
+            marker=dict(size=9, color=var_stations[0]['color'], opacity=0.8),
+            name=var_name,
+            text=[f"{s['station_id']} ({s['variable']})<br>{s['name']}" for s in var_stations],
+            hoverinfo='text',
+        ))
+
+    all_lats, all_lons = [s['lat'] for s in all_stations], [s['lon'] for s in all_stations]
+    center_lat = (min(all_lats) + max(all_lats)) / 2.0
+    center_lon = (min(all_lons) + max(all_lons)) / 2.0
+    lat_diff, lon_diff = max(max(all_lats) - min(all_lats), 0.001), max(max(all_lons) - min(all_lons), 0.001)
+    auto_zoom = min(math.log2(180 / lat_diff), math.log2(360 / lon_diff)) - 1.5
+
+    fig.update_layout(
+        map_style='carto-positron',
+        map=dict(center=dict(lat=center_lat, lon=center_lon), zoom=auto_zoom),
+        height=700, width=1000,
+        title=dict(text=f'{ofs.upper()} Observation Station Locations', x=0.5),
+        legend=dict(x=0.01, y=0.99), margin=dict(l=0, r=0, t=50, b=0)
+    )
+
+    out_map = os.path.join(output_dir, f'{ofs}_station_map.html')
+    fig.write_html(out_map, auto_open=False)
+    logger.info(f'Station summary map successfully generated: {out_map}')
 
 def _process_variable_obs(
     variable, prop, datum, datum_list, start_date, end_date,
@@ -977,9 +1150,20 @@ def _process_variable_obs(
                         control_files_path,
                         logger)
 
+    if getattr(prop, 'build_ctl_only', False):
+        return False # Exit the function early to skip the time series download
+
     logger.info('Downloading data found in the station ctl files')
 
     if read_station_ctl_file is not None:
+        total_stations = len(read_station_ctl_file[0])
+        providers = {row[3] for row in read_station_ctl_file[0]}
+
+        logger.info('--- Control File Summary for %s ---', variable)
+        logger.info('Total stations: %d', total_stations)
+        logger.info('Providers available: %s', ', '.join(providers))
+        logger.info('Date Range: %s to %s', start_date_full, end_date_full)
+        logger.info('-----------------------------------')
         # Group stations by data source for parallel dispatch
         source_groups = {}
         for i in range(len(read_station_ctl_file[0])):
@@ -1329,3 +1513,8 @@ def get_station_observations(prop, logger, continuation=None):
                      'no observation data was found. Without that, the '
                      'skill assessment cannot proceed.')
         sys.exit()
+    if getattr(prop, 'build_ctl_only', False):
+        logger.info('--- BUILD CTL ONLY COMPLETE ---')
+        _generate_summary_map(ofs, var_list, control_files_path, path, logger)
+        _generate_summary_csv(ofs, var_list, control_files_path, path, logger)
+        logger.info('Skipping time series download as requested.')
