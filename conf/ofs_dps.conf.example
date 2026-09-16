@@ -302,3 +302,9 @@ engine_strategy=auto
 # full downloads dominated multi-month run times. Set False to restore
 # the full-download scan (e.g. to cross-check probe decisions).
 ctl_availability_probe=True
+
+# Disable the auto-deletion of stale cached artifacts in 1D pipeline
+# True = leaves stale files on disk, and resuses them (Warning: may produce
+# incorrect results downstream)
+# False = safely deletes and regenerates stale files (default)
+keep_stale_artifacts=False
