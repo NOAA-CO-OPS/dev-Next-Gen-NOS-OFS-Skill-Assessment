@@ -371,6 +371,12 @@ def process_schism_stations(prop, logger):
         logger = utils.init_root_logger(
             prop.path, utils.Utils(_conf).get_config_file())
 
+    if prop.process_type == 'stations' and ('-ft' in sys.argv or '--FileTypes' in sys.argv):
+        logger.warning(
+            "Warning: ProcessType '-pt stations' is selected. "
+            "The '-ft' (FileTypes) argument will be ignored because field processing is disabled."
+        )
+
     logger.info('--- Start loading SCHISM station output text files ---')
     # Directory parameters
     dir_params = utils.Utils(_conf).read_config_section('directories', logger)
@@ -401,8 +407,6 @@ def process_schism_stations(prop, logger):
                     'staout_7': 'u', # current u-vel
                     'staout_8': 'v', # current v-vel
                     }
-    # placeholder for station ID list
-    station_df = None
     # Field/out2d file names -- add more files here to complete fields
     # processing. Right now it is set up only for ice & water level
     field_names = ['out2d_1.nc',
@@ -411,6 +415,12 @@ def process_schism_stations(prop, logger):
                    'horizontalVelX_1.nc',
                    'horizontalVelY_1.nc',
                    ]
+
+    if hasattr(prop, 'file_types'):
+        field_names = [f for f in field_names if f in prop.file_types]
+
+    # placeholder for station ID list
+    station_df = None
 
     # Loop through dir list and retrieve station output files, and
     # station info from the `station.in` file (only need to read one)
@@ -449,127 +459,138 @@ def process_schism_stations(prop, logger):
                     except Exception as ex:
                         logger.error('Exception caught while getting station '
                                      'info from station.in! Error: %s', ex)
-                # Set up dictionaries & empties for all vars
-                # 2D vars
-                twod_vars = {}
-                for key in ['temp','salt','u','v']:
-                    twod_vars[key] = []
-                # 2D z-coords
-                twod_z = {}
-                for key in ['temp','salt','u','v']:
-                    twod_z[key] = []
-                # Surface vars
-                surf_vars = {}
-                for key in ['wl','u_wind','v_wind','temp','salt','u','v']:
-                    surf_vars[key] = []
-                # Loop through staout/station files
-                for name in staout_names:
-                    # Load each dir's station out files
-                    try:
-                        if int(name[-1]) < 5: # do surface water level, no z-coords
-                            np_staout, t = load_1d_station_files(dir_path,
-                                           name, logger)
-                            surf_vars[staout_names[name]] = np_staout
-                        else: # do 2D profiles (temp, salt, u, and v)
-                            np_staout, np_staout_z, np_staout_surf = \
-                                load_2d_station_files(dir_path, name, logger)
-                            surf_vars[staout_names[name]] = np_staout_surf
-                            twod_vars[staout_names[name]] = np_staout
-                            twod_z[staout_names[name]] = np_staout_z
-                    except Exception as ex:
-                        logger.error('Error caught loading station files!'
-                                     'Error: %s', ex)
-                # Now loop through field 2D/3D output and copy it
-                for name in field_names:
-                    filepath = Path(os.path.join(dir_path, name)).as_posix()
-                    try:
-                        logger.info('Copying field files for %s and %s-%s...',
-                                    name, datestr,filepath.split('/')[-3][-2:])
-                        copy_field_files(prop, filepath, dir_list_ofs[i], logger)
-                    except Exception as ex:
-                        logger.error('Error when copying SCHISM field files! '
-                                     'Error: %s', ex)
-                # Now save stations to 6-hourly netcdfs
-                logger.info('Saving all station files for %s...', datestr)
 
-                '''
-                Contents of station netcdf:
-                    1) all vars, [time x stations x z-coords]
-                    2) lat coords [stations]
-                    3) lon coords [stations]
-                    4) time [time]
-                    5) water depth [stations]
-                    6) all surf vars
-                    7) all var z-coords
-                '''
-                if prop.whichcast == 'hindcast':
-                    cyc = t[-1].hour
-                    date = datetime.strftime(t[-1],'%Y%m%d')
-                else:
-                    cyc = t[0].hour
-                    date = datetime.strftime(t[0], '%Y%m%d')
-                ### Filename & filepath
-                filename=f'{prop.ofs}.t{cyc:02}z.{date}.stations.{prop.whichcast}.nc'
-                filepath = Path(os.path.join(dir_list_ofs[i],filename)).as_posix()
-                ### Set up station netcdf
-                if not os.path.isfile(filepath):
-                    ncfile = Dataset(filepath, mode='w', format='NETCDF4')
-                    name_length = 20
-                    ### Set up dimensions
-                    try:
-                        ncfile.createDimension('station', int(station_df['ID_num'].max()))
-                        ncfile.createDimension('clen', name_length)
-                        ncfile.createDimension('time', len(t))
-                        ncfile.createDimension('siglay', twod_vars['temp'].shape[2])
-                        num_strings_dim_name = 'num_entries'
-                        num_entries = twod_vars['temp'].shape[2]
-                        ncfile.createDimension(num_strings_dim_name, num_entries)
-                        ### Create variables
-                        # Deal with time
-                        time = ncfile.createVariable('time', np.float32, ('time'))
-                        time.units = (f'seconds since {prop.start_date_full[0:4]}-'
-                                      f'{prop.start_date_full[4:6]}-'
-                                      f'{prop.start_date_full[6:8]} '
-                                      f'{prop.start_date_full[-2:]}:00:00')
-                        # Do rest of vars
-                        lon = ncfile.createVariable('lon', np.float32, ('station'))
-                        lat = ncfile.createVariable('lat', np.float32, ('station'))
-                        name_station_var = ncfile.createVariable('name_station', 'S1', ('station'))
-                        zeta = ncfile.createVariable('zeta', np.float32, ('time','station'))
-                        uwind = ncfile.createVariable('uwind_speed', np.float32, ('time','station'))
-                        vwind = ncfile.createVariable('vwind_speed', np.float32, ('time','station'))
-                        temp = ncfile.createVariable('temp', np.float32, ('time','station','siglay',))
-                        salinity = ncfile.createVariable('salinity', np.float32, ('time','station','siglay'))
-                        u = ncfile.createVariable('u', np.float32, ('time','station','siglay'))
-                        v = ncfile.createVariable('v', np.float32, ('time','station','siglay'))
-                        zcoord = ncfile.createVariable('zcoords', np.float32, ('station','siglay'))
-                        # Assign vars to netcdf
-                        numeric_time = date2num(t, time.units)
-                        station_names = [f'station_{prop.ofs}_{i+1:02d}' \
-                                         for i in range(int(station_df['ID_num'].max()))]
-                        # names_char_array = nc.stringtochar(np.array(station_names,
-                        #                                             dtype=f'S{name_length}'))
-                        name_station_var[:] = np.array(station_names,
-                                                       dtype=f'S{name_length}')
-                        time[:] = numeric_time[:]
-                        lon[:] = station_df['lon']
-                        lat[:] = station_df['lat']
-                        zeta[:,:] = surf_vars['wl']
-                        uwind[:,:] = surf_vars['u_wind']
-                        vwind[:,:] = surf_vars['v_wind']
-                        temp[:,:,:] = twod_vars['temp']
-                        salinity[:,:,:] = twod_vars['salt']
-                        u[:,:,:] = twod_vars['u']
-                        v[:,:,:] = twod_vars['v']
-                        zcoord[:,:] = twod_z['u'][0,:,:]
-                        ncfile.close()
-                    except TypeError as te:
-                        logger.error('Station info was not found in SCHISM '
-                                     'output! Cannot process staout files '
-                                     'to netcdf! Error: %s', te)
-                    except Exception as ex:
-                        logger.error('Cannot process staout files '
-                                     'to netcdf! Error: %s', ex)
+                # ----------------- STATION FILE LOADING -----------------
+                if prop.process_type in ['stations', 'both']:
+                    # Set up dictionaries & empties for all vars
+                    # 2D vars
+                    twod_vars = {}
+                    for key in ['temp','salt','u','v']:
+                        twod_vars[key] = []
+                    # 2D z-coords
+                    twod_z = {}
+                    for key in ['temp','salt','u','v']:
+                        twod_z[key] = []
+                    # Surface vars
+                    surf_vars = {}
+                    for key in ['wl','u_wind','v_wind','temp','salt','u','v']:
+                        surf_vars[key] = []
+                    # Loop through staout/station files
+                    for name in staout_names:
+                        # Load each dir's station out files
+                        try:
+                            if int(name[-1]) < 5: # do surface water level, no z-coords
+                                np_staout, t = load_1d_station_files(dir_path,
+                                               name, logger)
+                                surf_vars[staout_names[name]] = np_staout
+                            else: # do 2D profiles (temp, salt, u, and v)
+                                np_staout, np_staout_z, np_staout_surf = \
+                                    load_2d_station_files(dir_path, name, logger)
+                                surf_vars[staout_names[name]] = np_staout_surf
+                                twod_vars[staout_names[name]] = np_staout
+                                twod_z[staout_names[name]] = np_staout_z
+                        except Exception as ex:
+                            logger.error('Error caught loading station files!'
+                                         'Error: %s', ex)
+
+                # ----------------- FIELD FILE COPYING -----------------
+                if prop.process_type in ['fields', 'both']:
+                    # Now loop through field 2D/3D output and copy it
+                    for name in field_names:
+                        filepath = Path(os.path.join(dir_path, name)).as_posix()
+                        try:
+                            logger.info('Copying field files for %s and %s-%s...',
+                                        name, datestr,filepath.split('/')[-3][-2:])
+                            copy_field_files(prop, filepath, dir_list_ofs[i], logger)
+                        except Exception as ex:
+                            logger.error('Error when copying SCHISM field files! '
+                                         'Error: %s', ex)
+
+                # ----------------- STATION NETCDF WRITING -----------------
+                if prop.process_type in ['stations', 'both']:
+                    # Now save stations to 6-hourly netcdfs
+                    logger.info('Saving all station files for %s...', datestr)
+
+                    '''
+                    Contents of station netcdf:
+                        1) all vars, [time x stations x z-coords]
+                        2) lat coords [stations]
+                        3) lon coords [stations]
+                        4) time [time]
+                        5) water depth [stations]
+                        6) all surf vars
+                        7) all var z-coords
+                    '''
+                    if prop.whichcast == 'hindcast':
+                        cyc = t[-1].hour
+                        date = datetime.strftime(t[-1],'%Y%m%d')
+                    else:
+                        cyc = t[0].hour
+                        date = datetime.strftime(t[0], '%Y%m%d')
+                    ### Filename & filepath
+                    filename=f'{prop.ofs}.t{cyc:02}z.{date}.stations.{prop.whichcast}.nc'
+                    filepath = Path(os.path.join(dir_list_ofs[i],filename)).as_posix()
+                    ### Set up station netcdf
+                    if not os.path.isfile(filepath):
+                        ncfile = Dataset(filepath, mode='w', format='NETCDF4')
+                        name_length = 20
+                        ### Set up dimensions
+                        try:
+                            ncfile.createDimension('station', int(station_df['ID_num'].max()))
+                            ncfile.createDimension('clen', name_length)
+                            ncfile.createDimension('time', len(t))
+                            ncfile.createDimension('siglay', twod_vars['temp'].shape[2])
+                            num_strings_dim_name = 'num_entries'
+                            num_entries = twod_vars['temp'].shape[2]
+                            ncfile.createDimension(num_strings_dim_name, num_entries)
+
+                            ### Create variables
+                            # Deal with time
+                            time = ncfile.createVariable('time', np.float32, ('time'))
+                            time.units = (f'seconds since {prop.start_date_full[0:4]}-'
+                                          f'{prop.start_date_full[4:6]}-'
+                                          f'{prop.start_date_full[6:8]} '
+                                          f'{prop.start_date_full[-2:]}:00:00')
+
+                            # Do rest of vars
+                            lon = ncfile.createVariable('lon', np.float32, ('station'))
+                            lat = ncfile.createVariable('lat', np.float32, ('station'))
+                            name_station_var = ncfile.createVariable('name_station', 'S1', ('station'))
+                            zeta = ncfile.createVariable('zeta', np.float32, ('time','station'))
+                            uwind = ncfile.createVariable('uwind_speed', np.float32, ('time','station'))
+                            vwind = ncfile.createVariable('vwind_speed', np.float32, ('time','station'))
+                            temp = ncfile.createVariable('temp', np.float32, ('time','station','siglay',))
+                            salinity = ncfile.createVariable('salinity', np.float32, ('time','station','siglay'))
+                            u = ncfile.createVariable('u', np.float32, ('time','station','siglay'))
+                            v = ncfile.createVariable('v', np.float32, ('time','station','siglay'))
+                            zcoord = ncfile.createVariable('zcoords', np.float32, ('station','siglay'))
+
+                            # Assign vars to netcdf
+                            numeric_time = date2num(t, time.units)
+                            station_names = [f'station_{prop.ofs}_{i+1:02d}' \
+                                             for i in range(int(station_df['ID_num'].max()))]
+                            name_station_var[:] = np.array(station_names,
+                                                           dtype=f'S{name_length}')
+                            time[:] = numeric_time[:]
+                            lon[:] = station_df['lon']
+                            lat[:] = station_df['lat']
+                            zeta[:,:] = surf_vars['wl']
+                            uwind[:,:] = surf_vars['u_wind']
+                            vwind[:,:] = surf_vars['v_wind']
+                            temp[:,:,:] = twod_vars['temp']
+                            salinity[:,:,:] = twod_vars['salt']
+                            u[:,:,:] = twod_vars['u']
+                            v[:,:,:] = twod_vars['v']
+                            zcoord[:,:] = twod_z['u'][0,:,:]
+
+                            ncfile.close()
+                        except TypeError as te:
+                            logger.error('Station info was not found in SCHISM '
+                                         'output! Cannot process staout files '
+                                         'to netcdf! Error: %s', te)
+                        except Exception as ex:
+                            logger.error('Cannot process staout files '
+                                         'to netcdf! Error: %s', ex)
     else:
         logger.error('No output directories found. Please check the file '
                       'path: %s', prop.filepath)
@@ -618,6 +639,20 @@ if __name__ == '__main__':
         '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')
 
+    parser.add_argument(
+        '-ft', '--FileTypes',
+        required=False,
+        default='out2d_1.nc,temperature_1.nc,zCoordinates_1.nc,horizontalVelX_1.nc,horizontalVelY_1.nc',
+        help="Comma-separated field files to process (e.g., 'out2d_1.nc,temperature_1.nc').",
+    )
+    parser.add_argument(
+        '-pt', '--ProcessType',
+        required=False,
+        default='both',
+        choices=['stations', 'fields', 'both'],
+        help="Choose what to process: 'stations', 'fields', or 'both'.",
+    )
+
     args = parser.parse_args()
     prop1 = model_properties.ModelProperties()
     prop1.config_file = args.config
@@ -628,5 +663,9 @@ if __name__ == '__main__':
     prop1.ofs = args.OFS.lower()
     prop1.model_source = get_model_source(args.OFS)
     prop1.whichcast = args.Whichcasts.lower()
+
+    # Map the new CLI arguments to the properties object
+    prop1.file_types = [ft.strip() for ft in args.FileTypes.split(',')]
+    prop1.process_type = args.ProcessType.lower()
 
     process_schism_stations(prop1, None)
