@@ -226,6 +226,15 @@ parallel_2d_interp=False
 # False = just interactive plots
 static_plots=False
 
+# Would you like to generate the interactive plotly express 2D maps
+# (time-slider maps of observations/model/difference plus per-statistic
+# maps) during the 2D skill assessment (create_2dplot.py)?
+# True  = write plotly 2D maps to data/skill/2d/plotly_maps
+# False = skip plotly 2D maps (default)
+# Note: this is independent of static_plots, which controls the static
+# .png 2D maps.
+make_plotly_2d_maps=False
+
 # NODD S3 bucket usage for model files. Three modes:
 #   True  = prefer local model files; read from the NODD S3 bucket only
 #           when local files are missing (recommended default)
