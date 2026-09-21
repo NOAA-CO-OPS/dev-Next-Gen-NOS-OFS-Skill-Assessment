@@ -93,7 +93,7 @@ pre-commit:
 # projsync is idempotent: a second run prints "already downloaded."
 proj-grids:
 	@echo "Downloading GEOID18 grid (us_noaa_g2018u0.tif, ~15 MB) into the env..."
-	$(CONDA_RUN) projsync --system-directory --file us_noaa_g2018u0.tif || \
+	@$(CONDA_RUN) projsync --system-directory --file us_noaa_g2018u0.tif || \
 	  (echo "" && \
 	   echo "ERROR: could not download us_noaa_g2018u0.tif." && \
 	   echo "PROJ fetches this grid from cdn.proj.org. Check that outbound" && \
