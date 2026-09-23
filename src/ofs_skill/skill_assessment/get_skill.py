@@ -42,12 +42,10 @@ from ofs_skill.utils.series_continuation import DEFAULT_CONTINUE_OVERLAP_HOURS
 from ofs_skill.utils.timeseries_coverage import (
     COVERS,
     PREFIX,
-    clamp_window_to_coverage,
     classify_coverage,
     continuation_start,
     covers_run_window,
     created_this_run,
-    dataset_time_bounds,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -1394,70 +1392,6 @@ def get_skill(prop, logger):
                 needs_fetch = True
         if needs_fetch:
             get_station_observations(p, logger_)
-
-    def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
-                          cached_model=None):
-        """Check for missing or stale .prd files, extract if needed.
-        Returns the (possibly updated) cached model dataset.
-
-        Like the .obs files, .prd filenames do not encode the run
-        window, so files left over from an earlier run would be reused
-        verbatim. Delete stale files first, then extract once so all
-        missing files are recreated for the current window.
-
-        The window checked against is clamped to the model catalog's
-        actual time coverage when the dataset is in hand: if the archive
-        cannot reach the requested window edges (files dropped after a
-        mid-window model-configuration change, or archive gaps), a fresh
-        extraction can never satisfy the raw window and deletion would
-        loop forever re-extracting identical data.
-        """
-        run_window = parse_run_window(p, logger_)
-        run_window = clamp_window_to_coverage(
-            run_window, dataset_time_bounds(cached_model),
-            logger=logger_, label=name_var)
-        needs_model = False
-        for i in range(0, len(read_ofs_ctl_file[-1])):
-            if p.whichcast == 'forecast_a':
-                prd_path = (
-                    f'{p.data_model_1d_node_path}/'
-                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
-                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
-                    f'{p.forecast_hr}_{p.ofsfiletype}_model.prd'
-                )
-            else:
-                prd_path = (
-                    f'{p.data_model_1d_node_path}/'
-                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
-                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
-                    f'{p.ofsfiletype}_model.prd'
-                )
-            if os.path.isfile(prd_path):
-                # Never delete a file the current process extracted:
-                # regeneration would reproduce it byte-for-byte, at the
-                # cost of a full extraction pass per variable.
-                if (run_window is not None
-                        and not created_this_run(prd_path)
-                        and not covers_run_window(
-                            prd_path, run_window[0], run_window[1],
-                            logger=logger_)):
-                    logger_.warning(
-                        '%s does not cover the run window %s to %s and '
-                        'is likely left over from an earlier run. '
-                        'Deleting it and re-extracting model data.',
-                        prd_path, run_window[0], run_window[1])
-                    if remove_stale_artifact(
-                            prd_path, p.data_model_1d_node_path, logger_):
-                        needs_model = True
-            else:
-                logger_.info('%s is missing', prd_path)
-                needs_model = True
-        if needs_model:
-            logger_.info('Calling OFS module for %s', p.whichcast)
-            result = get_node_ofs(p, logger_, model_dataset=cached_model)
-            if result is not None:
-                cached_model = result
-        return cached_model
 
     parallel_cfg = get_parallel_config(
         logger,

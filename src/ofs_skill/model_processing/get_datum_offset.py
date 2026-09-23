@@ -556,6 +556,7 @@ def get_datum_offset(prop: Any, node: int, model: xr.Dataset,
     logger.info('Doing datum conversion for %s station %s!', prop.ofs,
                 id_number)
     vdatums: Any = None
+    ds_wcofs: Any = None
     try:
         if prop.ofs not in ['secofs', 'loofs2'] and 'stofs' not in prop.ofs:
             vdatums = read_vdatum_from_bucket(prop, logger)
