@@ -87,7 +87,6 @@ from ofs_skill.model_processing import (
     model_properties,
     parse_ofs_ctlfile,
     read_vdatum_from_bucket,
-    validate_secofs_local_vdatum,
 )
 from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract

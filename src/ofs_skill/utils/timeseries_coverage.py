@@ -32,7 +32,6 @@ import os
 import time
 from datetime import UTC, datetime, timedelta
 
-
 # How far a cached artifact's data may stop short of the reachable run
 # window before the file is declared stale. Sized to absorb the nowcast
 # cycle spacing (up to 6 h between cycles) plus NODD/CO-OPS publication
@@ -260,26 +259,6 @@ def created_this_run(path):
     try:
         return (os.path.getmtime(path)
                 >= _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
-    except OSError:
-        return False
-
-
-def created_this_run(path):
-    """True if ``path``'s mtime says the current process wrote it.
-
-    A file created by the running pipeline is by definition not "left
-    over from an earlier run", no matter what window it covers — the
-    archive simply cannot provide more. Staleness deletion must skip
-    such files, or a window the catalog cannot fully cover turns into a
-    delete/re-extract loop: each multi-hour extraction pass is thrown
-    away and repeated by the next variable's check.
-
-    Returns False when the file is missing or unreadable, so callers
-    fall through to their normal handling.
-    """
-    try:
-        return os.path.getmtime(path) >= (
-            _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
     except OSError:
         return False
 
