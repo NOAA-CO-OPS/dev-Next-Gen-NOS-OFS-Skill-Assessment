@@ -120,8 +120,8 @@ if __name__ == '__main__':
         '-so',
         '--Station_Owner',
         required=False,
-        default = 'co-ops,ndbc,usgs,chs',
-        help="'CO-OPS','NDBC','USGS', 'CHS'", )
+        default='co-ops,ndbc,usgs,chs,emolt,mcfa',
+        help="'CO-OPS','NDBC','USGS', 'CHS', 'eMOLT', 'MCFA'", )
     parser.add_argument(
         '-c', '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')

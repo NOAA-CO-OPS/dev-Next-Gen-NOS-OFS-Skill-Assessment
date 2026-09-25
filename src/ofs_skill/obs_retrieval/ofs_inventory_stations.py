@@ -11,7 +11,7 @@ Abstract:
 
    This script is used to create a final inventory file, by combining
    all individual inventory dataframes
-   (T_C, NDBC, USGS, CHS...), and removing duplicates.
+   (T_C, NDBC, USGS, CHS, eMOLT, MCFA...), and removing duplicates.
    Duplicates are removed based on location (lat, and long).
    Stations with the same lat and long
    (2 decimal degree precision). Precedent is given to Tides
@@ -37,6 +37,12 @@ Scripts/Programs Called:
 
  inventory_USGS(lat1,lat2,lon1,lon2,start_date,end_date)
  --- This is to create the USGS inventory
+
+ inventory_emolt_station(lat1,lat2,lon1,lon2)
+ --- This is to create the eMOLT inventory
+
+ inventory_mcfa_station(lat1,lat2,lon1,lon2)
+ --- This is to create the MCFA inventory
 
 Usage: python ofs_inventory.py
 
@@ -94,6 +100,8 @@ from ofs_skill.obs_retrieval import (
 )
 from ofs_skill.obs_retrieval.filter_inventory import filter_inventory
 from ofs_skill.obs_retrieval.inventory_chs_station import inventory_chs_station
+from ofs_skill.obs_retrieval.inventory_emolt_station import inventory_emolt_station
+from ofs_skill.obs_retrieval.inventory_mcfa_station import inventory_mcfa_station
 from ofs_skill.obs_retrieval.inventory_ndbc_station import inventory_ndbc_station
 from ofs_skill.obs_retrieval.inventory_t_c_station import inventory_t_c_station
 from ofs_skill.obs_retrieval.inventory_usgs_station import inventory_usgs_station
@@ -151,8 +159,10 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
     usgs_future = None
     ndbc_future = None
     chs_future = None
+    emolt_future = None
+    mcfa_future = None
 
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=6) as executor:
         if 'co-ops' in stationowner:
             logger.info(
                 'Retrieving Tides and Currents inventory for %s from %s to %s',
@@ -182,6 +192,7 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
             usgs_future = executor.submit(
                 inventory_usgs_station, argu_list, start_date, end_date, logger
             )
+
         if 'chs' in stationowner:
             logger.info(
                 'Retrieving CHS inventory for %s from %s to %s',
@@ -191,11 +202,33 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
                 inventory_chs_station, lat1, lat2, lon1, lon2, logger
             )
 
+        if 'emolt' in stationowner:
+            logger.info(
+                'Retrieving eMOLT inventory for %s from %s to %s',
+                ofs, start_date, end_date
+            )
+            emolt_future = executor.submit(
+                inventory_emolt_station, lat1, lat2, lon1, lon2, start_date, end_date, logger,
+                config_file=config_file
+            )
+
+        if 'mcfa' in stationowner:
+            logger.info(
+                'Retrieving MCFA inventory for %s from %s to %s',
+                ofs, start_date, end_date
+            )
+            mcfa_future = executor.submit(
+                inventory_mcfa_station, lat1, lat2, lon1, lon2, start_date, end_date, logger,
+                config_file=config_file
+            )
+
     # Collect results (blocks until each future completes)
     t_c = t_c_future.result() if t_c_future else None
     usgs = usgs_future.result() if usgs_future else None
     ndbc = ndbc_future.result() if ndbc_future else None
     chs = chs_future.result() if chs_future else None
+    emolt = emolt_future.result() if emolt_future else None
+    mcfa = mcfa_future.result() if mcfa_future else None
 
     if t_c is not None:
         logger.info('Finished retrieving Tides and Currents inventory!')
@@ -205,18 +238,23 @@ def retrieving_inventories(geo, start_date, end_date, ofs, stationowner,
         logger.info('Finished retrieving USGS inventory!')
     if chs is not None:
         logger.info('Finished retrieving CHS inventory!')
+    if emolt is not None:
+        logger.info('Finished retrieving eMOLT inventory!')
+    if mcfa is not None:
+        logger.info('Finished retrieving MCFA inventory!')
 
-    return get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger)
+    return get_inventory_datasets(geo, t_c, usgs, ndbc, chs, emolt, mcfa, logger)
 
 
-def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger):
+def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, emolt, mcfa, logger):
     """
      Then these inventories are concatenated in order of priority
-     t_c,usgs,ndbc,chs.
+     t_c,usgs,ndbc,chs,emolt,mcfa.
 
      Within-source duplicates are collapsed by (Source, ID): every per-source
      inventory module (`inventory_t_c_station`, `inventory_ndbc_station`,
-     `inventory_usgs_station`, `inventory_chs_station`) already emits one row
+     `inventory_usgs_station`, `inventory_chs_station`, `inventory_emolt_station`,
+     `inventory_mcfa_station`) already emits one row
      per unique station ID, so this is defensive — it never merges two
      distinct station IDs. Cross-source duplicates at the same location are
      intentionally preserved (CO-OPS may serve water level at the same site
@@ -242,13 +280,13 @@ def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger):
 
     # Ensure all dataframes have the variable availability columns
     var_cols = ['has_wl', 'has_temp', 'has_salt', 'has_cu']
-    for df in [t_c, usgs, ndbc, chs]:
+    for df in [t_c, usgs, ndbc, chs, emolt, mcfa]:
         if df is not None:
             for col in var_cols:
                 if col not in df.columns:
                     df[col] = True  # Default to True for backwards compatibility
 
-    dataset = pd.concat([t_c, usgs, ndbc, chs], ignore_index=True)
+    dataset = pd.concat([t_c, usgs, ndbc, chs, emolt, mcfa], ignore_index=True)
 
     # Defensive dedup on (Source, ID). Per-source inventories already
     # enforce ID uniqueness, so this is a no-op for healthy inputs; if a
@@ -285,11 +323,12 @@ def get_inventory_datasets(geo, t_c, usgs, ndbc, chs, logger):
     )
     mask = points.within(ofs_polygon_buffered)
 
-    # Log stations outside the boundary
+# Log stations outside the boundary
     for idx in dataset_final.index[~mask]:
-        logger.debug(
-            'Station %s is %s degrees outside of the OFS shapefile.',
+        logger.info(
+            'Station %s (%s) is %s degrees outside of the OFS shapefile.',
             dataset_final['ID'].iloc[idx],
+            dataset_final['Source'].iloc[idx],
             points.iloc[idx].distance(ofs_polygon),
         )
 
@@ -315,7 +354,7 @@ def ofs_inventory_stations(ofs, start_date, end_date, path, stationowner,
                            logger, config_file=None):
     """Inventory observation stations inside an OFS domain for a date window.
 
-    Queries configured providers (CO-OPS, NDBC, USGS, CHS, and/or a fixed
+    Queries configured providers (CO-OPS, NDBC, USGS, CHS, eMOLT, MCFA, and/or a fixed
     station-id list), filters to the OFS extent, and writes inventory
     artifacts under the control-files directory.
 
@@ -429,8 +468,8 @@ if __name__ == '__main__':
         '-so',
         '--Station_Owner',
         required=False,
-        default = 'co-ops,ndbc,usgs,chs',
-        help="'CO-OPS', 'NDBC', 'USGS', 'CHS'", )
+        default='co-ops,ndbc,usgs,chs,emolt,mcfa',
+        help="'CO-OPS', 'NDBC', 'USGS', 'CHS', 'eMOLT', 'MCFA'", )
 
 
     args = parser.parse_args()
