@@ -17,6 +17,7 @@ land on disk.
 """
 
 import logging
+import logging.config
 from types import SimpleNamespace
 
 import numpy as np
@@ -41,7 +42,7 @@ def _no_global_logging_reconfig(monkeypatch):
     later in the same process.
     """
     monkeypatch.setattr(
-        processing_2d.logging.config, 'fileConfig', lambda *a, **k: None,
+        logging.config, 'fileConfig', lambda *a, **k: None,
     )
 
 
