@@ -812,12 +812,15 @@ def _build_ascii_grid_filename(
         # Match the scalar model JSON hour tag so the front end can pair the
         # vector layers with the SST/SSH/SSS layers on the same time axis.
         date_str = dtime.strftime('%Y%m%d-%Hz')
+        try:
+            date_str = date_str.split('-')[0] + '-' + whichcast[0] + date_str.split('-')[1]
+        except IndexError:
+            pass
         suffix = None
     if suffix is None:
-        return os.path.join(
-            outdir,
-            f'{ofs}_{derived_var}_{date_str}.txt',
-        )
+        fname = f'{ofs}_{derived_var}_{date_str}.txt'
+        return os.path.join(outdir, fname)
+
     return os.path.join(
         outdir,
         f'{ofs}_{derived_var}_{date_str}_{suffix}.txt',

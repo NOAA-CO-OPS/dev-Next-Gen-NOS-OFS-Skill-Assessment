@@ -104,7 +104,8 @@ nesdis_npp=https://www.star.nesdis.noaa.gov/pub/socd2/coastwatch/sst/nrt/viirs/n
 nesdis_coastwatch=https://www.star.nesdis.noaa.gov/data/pub0053/coastwatch/sst/l3s
 nesdis_dodsC=https://www.star.nesdis.noaa.gov/thredds/dodsC
 nssr_sport=https://nssrgeo.ndc.nasa.gov/SPoRT/enhanced_sst/ghrsst_netcdf
-
+coastwatch_direct_g18=https://coastwatch.noaa.gov/data/pub0014/coastwatch/sst/nrt/abi/g18/l3c/
+coastwatch_direct_g19=https://coastwatch.noaa.gov/data/pub0014/coastwatch/sst/nrt/abi/g19/l3c/
 
 [datums]
 # List of vertical datums that the program can convert between. If a new datum
