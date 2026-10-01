@@ -203,9 +203,13 @@ def get_title(
             if start_datetime >= v2p1_first_run:
                 ofs_group = ofs_group + '&nbsp;(bias-corrected)'
             elif end_datetime >= v2p1_first_run:
-                logger.warning('STOFS-2D-Global has both bias-corrected and '
-                               'uncorrected data for this time period.')
-                ofs_group = ofs_group + '&nbsp;(partially&nbsp;bias-corrected)'
+                msg = ( f'Invalid date range ({start_date} to {end_date}): '
+                        f'start_datetime is before first v2p1 run ({v2p1_first_run}) '
+                        f'and end_datetime is after.'
+                        f'SA run cannot span both V2.0 and V2.1 of STOFS-2D-Global:'
+                        f'The two versions have different grids.')
+                logger.error(msg)
+                raise ValueError(msg)
         # Note as of 2026-06-18:
         # Later we might need to add annotation for fields file bias correction,
         # depending on future STOFS-2D-Global releases. The above test
