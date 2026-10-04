@@ -135,6 +135,8 @@ def _run_pipeline(run_args):
         else:
             prop1.var_list = vs.lower()
 
+    prop1.build_ctl_only = getattr(run_args, 'Build_Ctl_Only', False)
+
     get_station_observations(prop1, None)
 
 
@@ -165,6 +167,7 @@ def main(argv=None):
         '-d',
         '--Datum',
         required=False,
+        default='mllw',
         help="prop.datum: 'MHHW', 'MHW', 'MLW', 'MLLW', 'NAVD88', 'LWD', "
         "'IGLD85', 'xgeoid20b'",
     )
@@ -172,11 +175,13 @@ def main(argv=None):
         '-so',
         '--Station_Owner',
         required=False,
+        default='co-ops,usgs,ndbc,chs',
         help="'CO-OPS', 'NDBC', 'USGS', 'CHS'", )
     parser.add_argument(
         '-vs',
         '--Var_Selection',
         required=False,
+        default='water_level,water_temperature,salinity,currents',
         help='Which variables do you want to skill assess? Options are: '
             'water_level, water_temperature, salinity, and currents. Choose '
             'any combination. Default (no argument) is all variables.')
@@ -188,6 +193,14 @@ def main(argv=None):
              'processed and/or overrides their depth/orientation. Columns: '
              'station_id,bin,depth,orientation,name. See the wiki: '
              'https://github.com/NOAA-CO-OPS/dev-Next-Gen-NOS-OFS-Skill-Assessment/wiki/CO%E2%80%90OPS-ADCP-current-processing')
+    parser.add_argument(
+        '-b',
+        '--Build_Ctl_Only',
+        action='store_true',
+        help='Build the obs control file(s) and write an '
+        'obs station summary report (CSV + interactive map), then '
+        'stop before extracting time series. Lets you probe obs availability '
+        'before a full run.')
     parser.add_argument(
         '-c', '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')
