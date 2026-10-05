@@ -26,24 +26,13 @@ from ofs_skill.obs_retrieval.chs_utils import (
     is_chs_uuid,
 )
 
-# CHS caps a single data request at 7 days multiplied by the resolution,
-# to a maximum of 31 days: 1-minute data is limited to a week, while any
-# resolution of 5 minutes or coarser reaches the 31-day maximum. See
-# https://tides.gc.ca/en/web-services-offered-canadian-hydrographic-service
-#
-# The API defaults to ONE_MINUTE when no resolution is given, which is what
-# searvey's fetch_chs_station requested (it never sends the parameter, and
-# hardcodes the matching 7-day cap). Over a 190-day window that is 28
-# requests per station per code, against a documented 30 req/min budget --
-# roughly one station per minute.
-#
-# FIVE_MINUTES is the finest resolution that still reaches the 31-day
-# maximum, cutting the same window to 7 requests. It is finer than the
-# 6-minute CO-OPS water level these stations are assessed alongside and
-# finer than the model output they are compared against, so nothing the
-# skill assessment consumes is lost.
-_CHS_RESOLUTION = 'FIVE_MINUTES'
-_CHS_CHUNK_HOURS = 31 * 24
+# CHS caps data per request based on resolution:
+#   - 1-minute data: limited to 1 week (7 days)
+#   - 3-minute data: limited to 3 weeks (21 days)
+#   - 5-minute and coarser data: limited to 1 month (31 days)
+# See: https://tides.gc.ca/en/web-services-offered-canadian-hydrographic-service
+_CHS_RESOLUTION = 'THREE_MINUTES'
+_CHS_CHUNK_HOURS = 21 * 24
 
 # CHS time series codes per variable, in priority order (try first, fallback)
 _SCALAR_CODE_MAP = {
