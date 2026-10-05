@@ -31,6 +31,7 @@ def logger():
     logging.basicConfig(level=logging.INFO)
     return logging.getLogger('test_chs')
 
+
 @pytest.fixture(autouse=True)
 def mock_chs_uuid():
     """Bypass network UUID resolution and echo back the test station ID."""
@@ -40,7 +41,8 @@ def mock_chs_uuid():
     ):
         yield
 
-def _make_chs_api_response(values, start='2025-01-01', minutes=5):
+
+def _make_chs_api_response(values, start='2025-01-01', minutes=3):
     """Helper to create a fake CHS API response DataFrame."""
     n = len(values)
     dates = pd.date_range(start, periods=n, freq=f'{minutes}min')
@@ -291,7 +293,7 @@ class TestRetrieveScalar:
     def test_qc_filtering_rejects_suspect_data(self, mock_fetch, logger):
         """Records with qcFlagCode 3 (suspect) or 4 (erroneous) are filtered."""
         n = 5
-        dates = pd.date_range('2025-01-01', periods=n, freq='5min')
+        dates = pd.date_range('2025-01-01', periods=n, freq='3min')
         df = pd.DataFrame({
             'eventDate': [d.strftime('%Y-%m-%dT%H:%M:%SZ') for d in dates],
             'qcFlagCode': ['1', '2', '3', '4', '1'],
@@ -407,11 +409,11 @@ class TestRetrieveCurrents:
 
 
 class TestDateChunking:
-    """Test 31-day date chunking behavior."""
+    """Test 21-day date chunking behavior."""
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_short_range_no_chunking(self, mock_fetch, logger):
-        """Ranges <= 31 days should result in a single API call."""
+        """Ranges <= 21 days should result in a single API call."""
         mock_fetch.return_value = _make_chs_api_response([1.0])
 
         retrieve_chs_station(
@@ -420,8 +422,8 @@ class TestDateChunking:
         assert mock_fetch.call_count == 1
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
-    def test_range_within_one_month_not_chunked(self, mock_fetch, logger):
-        """A 19-day range fits one request at FIVE_MINUTES resolution.
+    def test_range_within_three_weeks_not_chunked(self, mock_fetch, logger):
+        """A 19-day range fits one request at THREE_MINUTES resolution.
 
         Under the previous ONE_MINUTE default this needed three requests.
         """
@@ -434,7 +436,7 @@ class TestDateChunking:
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_long_range_chunked(self, mock_fetch, logger):
-        """Ranges > 31 days should be split into multiple API calls."""
+        """Ranges > 21 days should be split into multiple API calls."""
         mock_fetch.return_value = _make_chs_api_response([1.0])
 
         retrieve_chs_station(
@@ -444,25 +446,24 @@ class TestDateChunking:
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_six_month_window_request_count(self, mock_fetch, logger):
-        """A ~6-month window costs 7 requests, not the former 28.
+        """A ~6-month window costs 10 requests with THREE_MINUTES (21-day chunks).
 
-        This is the whole point of sending an explicit resolution: at the
-        API's ONE_MINUTE default each request is capped at 7 days, and a
-        station consumed nearly the entire 30 req/min budget on its own.
+        This is significantly fewer than the 28 requests required at
+        the API's default ONE_MINUTE resolution.
         """
         mock_fetch.return_value = _make_chs_api_response([1.0])
 
         retrieve_chs_station(
             '20260226', '20260904', 'test_st', 'water_level', logger)
 
-        assert mock_fetch.call_count == 7
+        assert mock_fetch.call_count == 10
 
 
 class TestRequestResolution:
     """The explicit resolution parameter must reach the CHS API."""
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
-    def test_window_request_sends_five_minute_resolution(self, mock_get):
+    def test_window_request_sends_three_minute_resolution(self, mock_get):
         """Omitting resolution silently caps the window at 7 days."""
         mock_get.return_value = Mock(
             json=Mock(return_value=[]), raise_for_status=Mock()
@@ -470,15 +471,15 @@ class TestRequestResolution:
 
         retrieve_chs_station_module._fetch_chs_window(
             'abc123', 'wlo',
-            datetime(2026, 3, 1), datetime(2026, 4, 1),
+            datetime(2026, 3, 1), datetime(2026, 3, 22),
             logging.getLogger('chs_resolution_test'),
         )
 
         url = mock_get.call_args[0][0]
-        assert 'resolution=FIVE_MINUTES' in url
+        assert 'resolution=THREE_MINUTES' in url
         assert 'time-series-code=wlo' in url
         assert 'from=2026-03-01T00:00:00Z' in url
-        assert 'to=2026-04-01T00:00:00Z' in url
+        assert 'to=2026-03-22T00:00:00Z' in url
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station.chs_get')
     def test_error_object_is_not_treated_as_data(self, mock_get):
@@ -490,7 +491,7 @@ class TestRequestResolution:
 
         result = retrieve_chs_station_module._fetch_chs_window(
             'abc123', 'wlo',
-            datetime(2026, 3, 1), datetime(2026, 4, 1),
+            datetime(2026, 3, 1), datetime(2026, 3, 22),
             logging.getLogger('chs_resolution_test'),
         )
 
@@ -533,7 +534,7 @@ class TestWindowHttpErrors:
 
         result = retrieve_chs_station_module._fetch_chs_window(
             'abc123', 'wlo',
-            datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+            datetime(2026, 3, 1), datetime(2026, 3, 22), logger,
         )
 
         assert result.empty
@@ -546,7 +547,7 @@ class TestWindowHttpErrors:
         with caplog.at_level(logging.WARNING):
             result = retrieve_chs_station_module._fetch_chs_window(
                 'abc123', 'wlo',
-                datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+                datetime(2026, 3, 1), datetime(2026, 3, 22), logger,
             )
 
         assert result is None
@@ -560,10 +561,7 @@ class TestWindowHttpErrors:
             json=Mock(return_value=good.to_dict('records')),
             raise_for_status=Mock(),
         )
-        mock_get.side_effect = [
-            self._response(500), good_response, good_response,
-            good_response, good_response, good_response, good_response,
-        ]
+        mock_get.side_effect = [self._response(500)] + [good_response] * 9
 
         result = retrieve_chs_station(
             '20260226', '20260904', '000000000000000000000065',
@@ -579,13 +577,13 @@ class TestFailedWindowsAreReported:
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_partial_series_warns_with_gap_size(self, mock_fetch, logger,
                                                 caplog):
-        """6 of 7 windows returning is not success; say what is missing.
+        """9 of 10 windows returning is not success; say what is missing.
 
         Concatenating the survivors and reporting data-found would write an
-        .obs file and skill statistics over an undisclosed month-long hole.
+        .obs file and skill statistics over an undisclosed multi-week hole.
         """
         good = _make_chs_api_response([1.0, 1.5])
-        mock_fetch.side_effect = [good, good, None, good, good, good, good]
+        mock_fetch.side_effect = [good, good, None] + [good] * 7
 
         with caplog.at_level(logging.WARNING):
             result = retrieve_chs_station(
@@ -594,7 +592,7 @@ class TestFailedWindowsAreReported:
 
         assert result is not None
         joined = '\n'.join(r.getMessage() for r in caplog.records)
-        assert '1 of 7 window(s) could not be retrieved' in joined
+        assert '1 of 10 window(s) could not be retrieved' in joined
         assert 'day(s) are missing' in joined
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
@@ -622,7 +620,7 @@ class TestFailedWindowsAreReported:
 
         result = retrieve_chs_station_module._fetch_chs_window(
             'abc123', 'wlo',
-            datetime(2026, 3, 1), datetime(2026, 4, 1), logger,
+            datetime(2026, 3, 1), datetime(2026, 3, 22), logger,
         )
 
         assert result is None
@@ -655,7 +653,7 @@ class TestRequestedWindowCoverage:
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_no_chunk_exceeds_the_api_maximum(self, mock_fetch, logger):
-        """CHS rejects a window longer than 31 days at this resolution."""
+        """CHS rejects a window longer than 21 days at this resolution."""
         mock_fetch.return_value = _make_chs_api_response([1.0])
 
         retrieve_chs_station(
@@ -663,7 +661,7 @@ class TestRequestedWindowCoverage:
 
         for call in mock_fetch.call_args_list:
             span = (call.args[3] - call.args[2]).days
-            assert span <= 31, f'chunk of {span} days exceeds the API cap'
+            assert span <= 21, f'chunk of {span} days exceeds the API cap'
 
     @patch('ofs_skill.obs_retrieval.retrieve_chs_station._fetch_chs_window')
     def test_short_window_is_requested_verbatim(self, mock_fetch, logger):
