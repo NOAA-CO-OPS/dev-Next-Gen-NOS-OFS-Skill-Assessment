@@ -89,6 +89,32 @@ def _extract_filename_from_encoding(ds):
     return ''
 
 
+# Static FVCOM station variables the pipeline never reads. Kept out of
+# the combine so a projection change mid-window cannot abort it.
+FVCOM_DROP_VARIABLES = ('x', 'y')
+
+
+def station_dims_compatible(station_dims) -> tuple[bool, int | None]:
+    """Are all files' station counts equal, and if not, which is smallest?
+
+    Returns ``(compatible, reference_index)``. ``reference_index`` is the
+    index of the file with the fewest stations when they disagree (the
+    reference ``remove_extra_stations`` slices the batch down to), and
+    None when they all match.
+
+    This used to be ``np.nanmax(np.diff(station_dims)) != 0``, which only
+    catches an *increase*: for [279, 279, 275] the diffs are [0, -4] and
+    the maximum is 0, so a batch whose station count drops partway
+    through -- and never recovers -- was reported as compatible. The
+    direct combine then failed on the station dimension instead of being
+    routed to ``remove_extra_stations``. Comparing the set of sizes
+    catches a change in either direction. See issue #311.
+    """
+    if len(set(station_dims)) > 1:
+        return False, int(np.argmin(station_dims))
+    return True, None
+
+
 def make_preprocess_with_filename(urlpaths):
     """Create a preprocess function that maps datasets to filenames.
 
@@ -272,6 +298,16 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         ]
     elif prop.model_source == 'fvcom':
         time_name = 'time'
+        # ``x``/``y`` are the station coordinates in the model's Cartesian
+        # projection. Nothing on the FVCOM path reads them -- station
+        # matching uses ``lat``/``lon`` (indexing.py) and the ctl writer
+        # only reads x/y for STOFS/ADCIRC -- but a projection change
+        # mid-window shifts every value by ~1e6 m, and under
+        # ``data_vars='minimal'`` that conflict aborts the whole combine
+        # with ``MergeError: conflicting values for variable 'x'``.
+        # Dropping them is the same treatment SCHISM already gives
+        # ``SCHISM_hgrid_edge_x/y``. See issue #311.
+        drop_variables = list(FVCOM_DROP_VARIABLES)
     elif prop.model_source == 'schism':
         drop_variables = [
             'temp_surface', 'temp_bottom', 'salt_surface', 'salt_bottom',
@@ -287,6 +323,20 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         ]
         time_name = 'time'
 
+    # FVCOM stations archives accumulate static-metadata differences that
+    # are not station relocations: a Cartesian projection change (x/y,
+    # dropped above), a longitude convention flip (values differ by
+    # exactly 360), and one-off bathymetry corrections. Under the default
+    # strict compare any of these aborts a multi-month combine. Wrapping
+    # the values back is not an option — ``((lon + 180) % 360) - 180``
+    # does not reproduce the original bits, so a wrapped file still will
+    # not compare equal. Reconciling instead (``compat='override'``)
+    # keeps every time step and takes the static values from the first
+    # file, with validate_model_files reporting what differed. See
+    # issue #311.
+    reconcile_statics = (prop.model_source == 'fvcom'
+                         and prop.ofsfiletype == 'stations')
+
     # Choose the engine by detecting the batch's on-disk format (magic
     # bytes) rather than a hardcoded per-OFS list — formats differ per
     # OFS, per file type (stofs_2d_glo stations are NetCDF-3 while its
@@ -299,7 +349,9 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
     # multi-file open — files left behind by an interrupted forecast
     # were failing whole multi-month runs (issue #194).
     file_list, dropped_files, file_dims = validate_model_files(
-        file_list, engine, time_name, prop.ofsfiletype, logger)
+        file_list, engine, time_name, prop.ofsfiletype, logger,
+        ignore_vars=drop_variables or (),
+        reconcile_statics=reconcile_statics)
     if dropped_files:
         # Corrupt files sniff as 'unknown' and can pull the whole batch
         # down to netcdf4; re-resolve now that they are gone (cached
@@ -339,9 +391,9 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
             if f in file_dims and 'station' in file_dims[f]
         ]
         if len(station_dims) == len(urlpaths):
-            if np.nanmax(np.diff(station_dims)) != 0:
-                dim_compat = False
-                dim_ref = int(np.argmin(station_dims))
+            dim_compat, ref_idx = station_dims_compatible(station_dims)
+            if not dim_compat:
+                dim_ref = ref_idx
             logger.info(
                 'Station dimension check reused validation probes for '
                 '%d files (compatible=%s)', len(urlpaths), dim_compat)
@@ -470,18 +522,27 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                 # ``[1]`` time slicing; the ``_static_coord_1d`` helper in
                 # indexing.py now normalises both shapes so the call sites
                 # are happy under either mode.
+                combine_kwargs: dict[str, Any] = {
+                    'combine': 'nested',
+                    'engine': open_engine,
+                    'preprocess': preprocess_fn,
+                    'concat_dim': time_name,
+                    'data_vars': 'minimal',
+                    'decode_times': True,
+                    'drop_variables': drop_variables,
+                    'chunks': chunk_spec,
+                }
+                if reconcile_statics:
+                    # Take conflicting static variables from the first
+                    # file instead of refusing to combine. ``coords``
+                    # must move with ``compat`` — xarray rejects
+                    # compat='override' alongside the default
+                    # coords='different'.
+                    combine_kwargs['compat'] = 'override'
+                    combine_kwargs['coords'] = 'minimal'
                 source = intake.open_netcdf(
                     urlpath=urlpaths,
-                    xarray_kwargs={
-                        'combine': 'nested',
-                        'engine': open_engine,
-                        'preprocess': preprocess_fn,
-                        'concat_dim': time_name,
-                        'data_vars': 'minimal',
-                        'decode_times': True,
-                        'drop_variables': drop_variables,
-                        'chunks': chunk_spec,
-                    },
+                    xarray_kwargs=combine_kwargs,
                     **s3_storage_opts,
                 )
             # Read the dataset lazily
@@ -491,7 +552,7 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
         return remove_extra_stations(
             open_engine,
             urlpaths, dim_ref, drop_variables or [],
-            time_name or '', logger,
+            time_name or '', logger, reconcile_statics,
         )
 
     try:
@@ -1350,7 +1411,9 @@ def get_station_dim(engine: str, urlpaths: list[str],
             },
         )
         ds = source.read()
-        dim = ds.dims['station']
+        # ``Dataset.dims`` is documented to become a set of names; use
+        # ``sizes``, which is the name -> length mapping.
+        dim = ds.sizes['station']
         ds.close()
         return dim
 
@@ -1364,19 +1427,17 @@ def get_station_dim(engine: str, urlpaths: list[str],
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         station_dim = list(executor.map(_read_dim, urlpaths))
 
-    dim_compat = True
     dim_ref: Any = []
-
-    if np.nanmax(np.diff(station_dim)) != 0:
-        dim_compat = False
-        # Get reference dataset index
-        dim_ref = int(np.argmin(station_dim))
+    dim_compat, ref_idx = station_dims_compatible(station_dim)
+    if not dim_compat:
+        # Reference dataset index: the file with the fewest stations
+        dim_ref = ref_idx
     return dim_compat, dim_ref
 
 
 def remove_extra_stations(engine: str,
     urlpaths: list[str], dim_ref: int, drop_variables: list[str], time_name: str,
-    logger: Logger,
+    logger: Logger, reconcile_statics: bool = False,
 ) -> xr.Dataset:
     """
     Remove extra stations from files to ensure dimension compatibility.
@@ -1400,6 +1461,11 @@ def remove_extra_stations(engine: str,
         Name of time dimension for concatenation
     logger : Logger
         Logger instance for logging messages
+    reconcile_statics : bool
+        Take conflicting static variables from the first file instead of
+        refusing to combine. Set for FVCOM stations batches, where a
+        projection or longitude-convention change between files is not a
+        station relocation (issue #311).
 
     Returns
     -------
@@ -1484,11 +1550,14 @@ def remove_extra_stations(engine: str,
             ds = tempds
         elif file != urlpaths[0]:
             try:
-                ds = xr.combine_nested(
-                    [ds, tempds],
-                    concat_dim=time_name,
-                    data_vars='minimal',
-                )
+                combine_kwargs: dict[str, Any] = {
+                    'concat_dim': time_name,
+                    'data_vars': 'minimal',
+                }
+                if reconcile_statics:
+                    combine_kwargs['compat'] = 'override'
+                    combine_kwargs['coords'] = 'minimal'
+                ds = xr.combine_nested([ds, tempds], **combine_kwargs)
             except ValueError as e_x:
                 logger.error(f'Station dims are inconsistent! {e_x}')
                 logger.info('Check intake_scisa.py.')
