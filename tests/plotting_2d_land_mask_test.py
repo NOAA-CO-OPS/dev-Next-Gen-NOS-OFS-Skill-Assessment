@@ -21,6 +21,7 @@ rather than back to a blank map.
 import logging
 
 import pytest
+from shapely.geometry import Polygon
 
 from ofs_skill.visualization import plotting_2d
 
@@ -57,6 +58,18 @@ def test_returns_none_and_does_not_retry_when_geometry_fails(monkeypatch):
     assert plotting_2d._land_without_lakes(logger) is None
     assert len(calls) == 1
 
+def test_lake_probes_guard_returns_false_when_probes_outside_lakes(monkeypatch):
+    """The guard must return False if probes do not intersect the lakes."""
+    class MockLakesFeature:
+        def geometries(self):
+            # A small polygon far from the Great Lakes (e.g., near Null Island)
+            yield Polygon([(0, 0), (0, 1), (1, 1), (1, 0)])
+
+    # Patch cartopy.feature.LAKES before the function imports it
+    monkeypatch.setattr('cartopy.feature.LAKES', MockLakesFeature())
+
+    # Call the guard function directly
+    assert _lake_probes_are_resolvable() is False
 
 def test_cached_feature_is_reused(monkeypatch):
     """A built feature is served from the cache, not rebuilt per figure.
