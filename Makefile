@@ -1,4 +1,4 @@
-ENV_NAME = ofs_dps_91826
+ENV_NAME = ofs_dps
 CONDA_RUN = $(_CONDA_EXE_FWD) run -n $(ENV_NAME)
 
 # ---------- cross-platform solver detection (prefer mamba) ----------
