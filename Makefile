@@ -1,4 +1,4 @@
-ENV_NAME = ofs_dps
+ENV_NAME = ofs_dps_91826
 CONDA_RUN = $(_CONDA_EXE_FWD) run -n $(ENV_NAME)
 
 # ---------- cross-platform solver detection (prefer mamba) ----------
@@ -101,7 +101,16 @@ proj-grids:
 	   echo "Until it succeeds, NAVD88 <-> MLLW datum conversions will fail" && \
 	   echo "and those stations will be dropped from the skill assessment." && \
 	   exit 1)
-
+	@echo "Downloading NOAA LWD-ITRF2020 grid..."
+	@$(CONDA_RUN) python -c "\
+	import urllib.request, os;\
+	url = 'https://noaa-nos-stofs2d-pds.s3.amazonaws.com/_archive/coastalmodeling-vdatum/us_noaa_nos_LWD-ITRF2020_2020.0_nwldatum_4.7.0_20240621_3.tif';\
+	fn = 'us_noaa_nos_LWD-ITRF2020_2020.0_nwldatum_4.7.0_20240621_3.tif';\
+	dest = os.path.join(os.environ['CONDA_PREFIX'], 'share', 'proj', fn);\
+	os.makedirs(os.path.dirname(dest), exist_ok=True);\
+	exists = os.path.exists(dest);\
+	urllib.request.urlretrieve(url, dest) if not exists else None;\
+	print('Grid already exists.' if exists else 'NOAA LWD-ITRF2020 grid download complete.')"
 ## Fast local gate used by pre-push (not the full CI matrix)
 ci-local:
 	$(CONDA_RUN) bash scripts/ci-local.sh
