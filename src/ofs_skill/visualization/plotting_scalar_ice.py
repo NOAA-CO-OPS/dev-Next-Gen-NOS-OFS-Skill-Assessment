@@ -24,6 +24,7 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from .plotting_functions import (
+    apply_title_band,
     find_max_data_gap,
     get_error_range,
     get_markerstyles,
@@ -389,17 +390,16 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
             tickvals=[-100, -75, -50, -25, 0, 25, 50, 75, 100],
         ),
     )
-    # Issue #136: each whichcast above 1 adds another legend row that
-    # otherwise overlaps the title. Use the same formula as the scalar
-    # and vector plots (60% of their base since the ice figure is 600
-    # px tall vs 700 px and starts narrower).
-    tmargin = 120 + 30 * max(0, len(prop.whichcasts) - 1)
+    # Issue #136: see plotting_scalar - the top margin has to hold the
+    # title block and the wrapped legend block, not just one row per
+    # whichcast. This figure is the tightest of the three: 600 px tall
+    # with the legend lifted 3% off the plot area, so the 4-line title
+    # was landing on the legend even at a single whichcast.
+    title_text = get_title(prop, node, station_id, name_var, logger)
     fig.update_layout(
         transition_ordering='traces first', dragmode='zoom',
         hovermode='x unified', height=figheight, width=figwidth,
-        template='plotly_white', margin=dict(
-            t=tmargin, b=100,
-        ),
+        template='plotly_white', margin=dict(b=100),
         legend=dict(
             orientation='h', yanchor='bottom',
             y=yoffset, xanchor='left', x=-0.05,
@@ -411,12 +411,12 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
             ),
         ),
         title=dict(
-            text=get_title(prop, node, station_id, name_var, logger),
+            text=title_text,
             font=dict(size=14, color='black', family='Open Sans'),
-            y=0.97,  # new
             x=0.5, xanchor='center', yanchor='top',
         ),
     )
+    apply_title_band(fig, title_text, figheight, figwidth, yoffset)
 
     # Set x-axis moving bar
     fig.update_xaxes(
