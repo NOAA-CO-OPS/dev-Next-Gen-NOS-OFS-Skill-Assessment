@@ -957,7 +957,12 @@ def index_nearest_depth(
                     dist.append(float(station_depth) + depth)
 
                 dist = [abs(i) for i in dist]
-                index_min_depth_node = dist.index(np.nanmin(dist))
+                try:
+                    index_min_depth_node = dist.index(np.nanmin(dist))
+                except ValueError:
+                    index_min_depth.append(np.nan)
+                    depth_value.append(np.nan)
+                    continue
                 depth_value.append(model_depths[
                     index_min_depth_node])
                 index_min_depth.append(index_min_depth_node)

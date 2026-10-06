@@ -17,6 +17,9 @@ Provides functionality for:
 from ofs_skill.model_processing import do_horizon_skill
 from ofs_skill.model_processing.check_model_files import check_model_files
 
+# Control file operations
+from ofs_skill.model_processing.ctl_builder_report import report_ctl_matches
+
 # Datum conversions
 from ofs_skill.model_processing.get_datum_offset import (
     get_datum_offset,
@@ -62,8 +65,6 @@ from ofs_skill.model_processing.model_properties import ModelProperties
 
 # Model source detection
 from ofs_skill.model_processing.model_source import get_model_source
-
-# Control file operations
 from ofs_skill.model_processing.parse_ofs_ctlfile import parse_ofs_ctlfile
 
 # Distance calculations
@@ -83,6 +84,7 @@ __all__ = [
     'parse_ofs_ctlfile',
     'write_ofs_ctlfile',
     'user_input_extract',
+    'report_ctl_matches',
     # Forecast cycle
     'get_fcst_dates',
     'get_fcst_hours',
