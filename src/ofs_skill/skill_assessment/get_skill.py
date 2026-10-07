@@ -45,6 +45,7 @@ from ofs_skill.utils.timeseries_coverage import (
     classify_coverage,
     continuation_start,
     covers_run_window,
+    created_this_run,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -1343,6 +1344,54 @@ def get_skill(prop, logger):
     # Inside this loop there is another loop that will go over each line
     # in the station ctl file and will try to download the data from TandC,
     # USGS, and NDBC based on the station data source
+
+    def _ensure_obs_files(read_station_ctl_file, p, name_var, logger_):
+        """Check for missing or stale .obs files, download if needed.
+
+        Obs filenames do not encode the run window, and the obs module
+        skips stations whose .obs file already exists -- so a file left
+        over from an earlier run window would be reused verbatim. Delete
+        stale files first, then fetch once so all missing files are
+        recreated for the current window.
+        """
+        run_window = parse_run_window(p, logger_)
+        needs_fetch = False
+        for i in range(0, len(read_station_ctl_file[0])):
+            obs_path = os.path.join(p.data_observations_1d_station_path,
+                    str(read_station_ctl_file[0][i][0]+'_'+p.ofs+'_'+\
+                        name_var+'_station.obs'))
+            if os.path.isfile(obs_path):
+                if os.path.getsize(obs_path) > 0:
+                    # A file this process fetched is not "left over from
+                    # an earlier run" no matter what it covers — the
+                    # provider has no more data. Re-deleting it would
+                    # just re-fetch the identical series.
+                    if (run_window is not None
+                            and not created_this_run(obs_path)
+                            and not covers_run_window(
+                                obs_path, run_window[0], run_window[1],
+                                logger=logger_)):
+                        logger_.warning(
+                            '%s does not cover the run window %s to %s '
+                            'and is likely left over from an earlier '
+                            'run. Deleting it and re-fetching '
+                            'observations.',
+                            obs_path, run_window[0], run_window[1])
+                        if remove_stale_artifact(
+                                obs_path,
+                                p.data_observations_1d_station_path,
+                                logger_):
+                            needs_fetch = True
+                    else:
+                        logger_.info('%s found', obs_path)
+                else:
+                    logger_.error('%s is empty', obs_path)
+            else:
+                logger_.error(
+                    '%s is missing, calling Obs Module', obs_path)
+                needs_fetch = True
+        if needs_fetch:
+            get_station_observations(p, logger_)
 
     parallel_cfg = get_parallel_config(
         logger,
