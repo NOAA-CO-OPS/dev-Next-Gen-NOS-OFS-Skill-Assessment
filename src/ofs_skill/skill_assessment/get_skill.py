@@ -42,9 +42,9 @@ from ofs_skill.utils.series_continuation import DEFAULT_CONTINUE_OVERLAP_HOURS
 from ofs_skill.utils.timeseries_coverage import (
     COVERS,
     PREFIX,
+    clamp_window_to_coverage,
     classify_coverage,
     continuation_start,
-    clamp_window_to_coverage,
     covers_run_window,
     created_this_run,
     dataset_time_bounds,
