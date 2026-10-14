@@ -973,8 +973,12 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
     actual_var = model_var
     if prop.model_source == 'roms' and model_var == 'salinity':
         actual_var = 'salt'
-    if prop.model_source == 'schism' and model_var == 'temp':
-        actual_var = 'temperature'
+    if prop.model_source == 'schism' and model_var in ('temp', 'temperature'):
+        # STOFS files name the variable 'temperature'; SECOFS stations
+        # files keep SCHISM's native 'temp'. Probe instead of assuming,
+        # or the KeyError drops the variable to per-station extraction.
+        actual_var = 'temperature' if 'temperature' in model.variables \
+            else 'temp'
     if prop.model_source == 'schism' and model_var == 'zeta':
         actual_var = 'elevation' if prop.ofsfiletype == 'fields' else model_var
 
@@ -1007,7 +1011,7 @@ def _precompute_scalar_data(prop, model, ofs_ctlfile, model_var, logger):
     elif prop.model_source == 'schism':
         if 'stofs' in prop.ofs and model_var in ('temp', 'temperature'):
             scalar_data = _batch_extract(
-                model, 'temperature', indices, None, logger=logger, **extract_kwargs
+                model, actual_var, indices, None, logger=logger, **extract_kwargs
             )
         elif is_2d:
             scalar_data = _batch_extract(
@@ -2069,11 +2073,13 @@ def get_node_ofs(prop, logger, model_dataset=None):
             serieskey = _merge_filename_key(filepath, serieskey, logger)
         serieskey.to_csv(filepath, index_label='DateTime')
     except KeyError:
-        logger.error(
-            'No filename variable found in the lazy loaded model '
-            'dataset! Cannot write filename time series key. '
-            'Moving on...'
-        )
+        # Expected whenever a cached/pre-loaded dataset is reused: the
+        # filename bookkeeping variable is dropped during resampling,
+        # and the key CSV was already written on the first load. Not an
+        # error — at ERROR level this repeated on every extraction pass.
+        logger.info('No filename variable in the model dataset (typical '
+                    'for a cached/pre-loaded dataset); skipping the '
+                    'filename time series key.')
     except Exception as ex:
         logger.error('Error writing model time series filename ' 'key: %s', ex)
 
