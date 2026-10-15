@@ -31,9 +31,9 @@ jobs:
 
       - name: Calculate Date Ranges & Run Weekly Scenario
         run: |
-          # 1. Weekly Dates (Past 7 Days)
-          WEEKLY_START=$(date -d "7 days ago" +%Y-%m-%dT00:00:00Z)
-          END_DATE=$(date +%Y-%m-%dT23:59:59Z)
+          # HARDCODED DATES FOR TESTING
+          WEEKLY_START="2026-02-01T00:00:00Z"
+          END_DATE="2026-02-08T23:59:59Z"
 
           echo "=== RUNNING WEEKLY SCENARIO ($WEEKLY_START to $END_DATE) ==="
           python bin/skill_assessment/do_iceskill_all_GLOFS_2.py \
@@ -51,9 +51,9 @@ jobs:
 
       - name: Calculate Season-to-Date & Run Season Scenario
         run: |
-          # Calculate Season Start Date (Nov 1st of current ice season)
-          SEASON_START=$(python -c "from datetime import datetime; now = datetime.now(); season_year = now.year if now.month >= 11 else now.year - 1; print(f'{season_year}-11-01T00:00:00Z')")
-          END_DATE=$(date +%Y-%m-%dT23:59:59Z)
+          # HARDCODED DATES FOR TESTING
+          SEASON_START="2026-02-01T00:00:00Z"
+          END_DATE="2026-02-08T23:59:59Z"
 
           echo "=== RUNNING SEASON-TO-DATE SCENARIO ($SEASON_START to $END_DATE) ==="
           python bin/skill_assessment/do_iceskill_all_GLOFS_2.py \
