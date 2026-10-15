@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          ref: 'your-branch-name' # Forces the workflow to check out this specific branch
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
