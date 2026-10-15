@@ -1,9 +1,11 @@
 name: Weekly and Season-to-Date Ice Skill Assessment
 
 on:
+  push:
+    branches:
+      - 'ice-tuneup' # <-- Replace with your actual branch name
   schedule:
-    - cron: '0 0 * * 0' # Every Sunday at 00:00 UTC
-  workflow_dispatch: # Allows manual trigger
+    - cron: '0 0 * * 0'
 
 permissions:
   contents: read
