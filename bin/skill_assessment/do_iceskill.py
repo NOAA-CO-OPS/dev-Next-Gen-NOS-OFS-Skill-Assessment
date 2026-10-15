@@ -87,8 +87,6 @@ from bin.model_processing import get_icecover_model
 from bin.obs_retrieval import get_icecover_observations
 from bin.visualization import create_1dplot_ice
 from mpl_toolkits.basemap import Basemap
-from numpy import isnan
-from sklearn.metrics import confusion_matrix
 
 from ofs_skill.model_processing import (
     model_properties,
@@ -100,27 +98,44 @@ from ofs_skill.visualization import make_ice_boxplots, make_ice_map
 
 
 def make_2d_mask(array_to_mask, conditional_array, threshold):
-    '''
-    '''
+    """
+    Applies a threshold mask to a 2D array.
+
+    Args:
+        array_to_mask (np.ndarray): The primary array to be masked.
+        conditional_array (np.ndarray, optional): A secondary array to check the threshold against. If None, checks the primary array.
+        threshold (float): The threshold value below which elements are set to NaN.
+
+    Returns:
+        np.ndarray: The masked array with values below the threshold replaced by np.nan.
+    """
+    masked = array_to_mask.copy()
     if conditional_array is not None:
-        array_to_mask[conditional_array < threshold] = np.nan
+        masked[conditional_array < threshold] = np.nan
     else:
-        array_to_mask[array_to_mask < threshold] = np.nan
-    return array_to_mask
+        masked[masked < threshold] = np.nan
+    return masked
 
 
 def iceonoff(time_all_dt, meanicecover, logger):
-    '''
-    Finds and returns ice onset and thaw dates for ice conc
-    time series. Returns 'None' if dates cannot be found.
-    '''
+    """
+    Finds and returns ice onset and thaw dates for an ice concentration time series.
+
+    Args:
+        time_all_dt (list): List of datetime.date objects corresponding to the time series.
+        meanicecover (np.ndarray or list): 1D array of mean ice concentration values.
+        logger (logging.Logger): Logger instance for outputting status messages.
+
+    Returns:
+        tuple: (iceon, iceoff) where both are datetime.date objects or None if not found.
+    """
     counter = 0
     iceon = None
     iceoff = None
     # Find ice onset date
     for i in range(len(time_all_dt)):
         if meanicecover[i] >= 10:
-            counter = counter + 1
+            counter += 1
         else:
             counter = 0
         if counter == 5:
@@ -129,13 +144,12 @@ def iceonoff(time_all_dt, meanicecover, logger):
             break
     if iceon is None:
         logger.info('Ice onset date not found!')
+
     # Find ice thaw date
     try:
         logger.info('Trying ice thaw enumerate...')
         idx = len(meanicecover) - next(
-            i for i, val in
-            enumerate(reversed(meanicecover), 1)
-            if val >= 10
+            i for i, val in enumerate(reversed(meanicecover), 1) if val >= 10
         )
         logger.info('Completed ice thaw enumerate!')
         if (
@@ -148,16 +162,24 @@ def iceonoff(time_all_dt, meanicecover, logger):
         else:
             logger.info('Ice thaw date not found!')
     except StopIteration:
-        logger.error('StopIteration exception: ice thaw date not found!')
+        logger.warning('StopIteration exception: ice thaw date not found!')
+
     logger.info('Completed ice onset/thaw date-finding, return to main...')
     return iceon, iceoff
 
 
 def ice_climatology(prop, time_all_dt, ice_clim):
-    '''
-    Handles loading and parsing 1D and 2D Great Lakes ice
-    cover climatology.
-    '''
+    """
+    Handles loading and parsing 1D and 2D Great Lakes ice cover climatology.
+
+    Args:
+        prop (ModelProperties): Object containing model configuration and paths.
+        time_all_dt (list): List of datetime.date objects for the target time period.
+        ice_clim (np.ndarray): 3D array of climatology data.
+
+    Returns:
+        tuple: (icecover_hist, icecover_hist_2d) containing 1D and 2D climatology arrays matched to the time series.
+    """
     filename = utils.resolve_asset_path(prop.path, 'conf', 'gl_1d_clim.csv')
     df = pd.read_csv(filename, header=0)
     df['DateTime'] = pd.to_datetime(
@@ -168,14 +190,15 @@ def ice_climatology(prop, time_all_dt, ice_clim):
     dateindex = []
     for i in range(0, len(time_all_dt)):
         tempindex = df.index[(
-            df['DateTime'].dt.month ==
-            time_all_dt[i].month
-        )
-            & (
-            df['DateTime'].dt.day ==
-            time_all_dt[i].day
+            df['DateTime'].dt.month == time_all_dt[i].month
+        ) & (
+            df['DateTime'].dt.day == time_all_dt[i].day
         )]
-        dateindex.append(tempindex[0])
+        if len(tempindex) > 0:
+            dateindex.append(tempindex[0])
+
+    if not dateindex:
+        return np.array([]), []
 
     dfsubset = df.iloc[dateindex]
     icecover_hist = dfsubset[prop.ofs.removesuffix('2')].to_numpy()
@@ -188,20 +211,12 @@ def ice_climatology(prop, time_all_dt, ice_clim):
     # Get climatology days that correspond to time_all_dt
     slices = []
     for i in range(0, len(time_all_dt)):
-        datesstr = str(time_all_dt[i].month) + '-' +\
-            str(time_all_dt[i].day)
+        datesstr = f'{time_all_dt[i].month}-{time_all_dt[i].day}'
         for j in range(0, len(uniq)):
             if datesstr == uniq[j]:
                 slices.append(np.array(ice_clim[j, :, :]))
-                # print(datesstr[i])
-    if slices is not None:
-        if len(time_all_dt) == len(slices):
-            icecover_hist_2d = np.stack(slices)
-        elif len(time_all_dt) != len(slices):
-            icecover_hist_2d = []
-    else:
-        icecover_hist_2d = []
 
+    icecover_hist_2d = np.stack(slices) if len(time_all_dt) == len(slices) else []
     return icecover_hist, icecover_hist_2d
 
 
@@ -209,10 +224,22 @@ def pair_ice(
     time_m, icecover_m, time_o, icecover_o, prop, logger,
     ice_clim,
 ):
-    '''
-    Pairs the observed and modeled ice conc time series, and
-    makes sure time is correct between time, obs, and mod
-    '''
+    """
+    Pairs the observed and modeled ice concentration time series, ensuring temporal alignment.
+
+    Args:
+        time_m (np.ndarray): Modeled time array.
+        icecover_m (np.ndarray): Modeled ice concentration array.
+        time_o (np.ndarray): Observed time array.
+        icecover_o (np.ndarray): Observed ice concentration array.
+        prop (ModelProperties): Object containing model configuration.
+        logger (logging.Logger): Logger instance.
+        ice_clim (np.ndarray): 3D array of climatology data.
+
+    Returns:
+        tuple: Aligned paired arrays and time lists:
+               (icecover_o_pair, icecover_m_pair, time_all, time_all_dt, icecover_hist, icecover_hist_2d)
+    """
     time_all = []
     time_all_dt = []
     icecover_o_pair = []
@@ -246,6 +273,7 @@ def pair_ice(
 
     icecover_o_pair = np.stack(icecover_o_pair)
     icecover_m_pair = np.stack(icecover_m_pair)
+
     # Load climatology
     icecover_hist = None
     icecover_hist_2d = None
@@ -258,7 +286,16 @@ def pair_ice(
 
 
 def do_iceskill(prop, logger):
-    '''Main ice skill function! Let's go'''
+    """
+    Main ice skill assessment pipeline function.
+
+    Retrieves observations and model data, spatially and temporally pairs them,
+    calculates 1D and 2D skill metrics, generates statistical maps, and exports results to CSV.
+
+    Args:
+        prop (ModelProperties): Object containing model configuration, paths, and date ranges.
+        logger (logging.Logger): Logger instance.
+    """
 
     _conf = getattr(prop, 'config_file', None)
     if logger is None:
@@ -288,17 +325,14 @@ def do_iceskill(prop, logger):
                 )
                 logger.error(error_message)
                 sys.exit(-1)
-            if prop.forecast_hr[-2:] == 'hr':
-                print('what are you doing here?')
-                # prop.start_date_full, prop.end_date_full =\
-                #    get_fcst_cycle.get_fcst_cycle(prop,logger)
-            else:
+            if prop.forecast_hr[-2:] != 'hr':
                 error_message = (
                     f'Please check Forecast Hr format - '
                     f'{prop.forecast_hr}. Abort!'
                 )
                 logger.error(error_message)
                 sys.exit(-1)
+
     # Set filetype to fields (this is not currently used but might be later)
     prop.ofsfiletype = 'fields'
 
@@ -306,8 +340,8 @@ def do_iceskill(prop, logger):
     try:
         prop.start_date_full_before = prop.start_date_full
         prop.end_date_full_before = prop.end_date_full
-        datetime.strptime(prop.start_date_full, '%Y-%m-%dT%H:%M:%SZ')
-        datetime.strptime(prop.end_date_full, '%Y-%m-%dT%H:%M:%SZ')
+        start_date_obj = datetime.strptime(prop.start_date_full, '%Y-%m-%dT%H:%M:%SZ')
+        end_date_obj = datetime.strptime(prop.end_date_full, '%Y-%m-%dT%H:%M:%SZ')
     except ValueError:
         error_message = (
             f'Please check Start Date - '
@@ -315,19 +349,16 @@ def do_iceskill(prop, logger):
             f'{prop.end_date_full}. Abort!'
         )
         logger.error(error_message)
-        print(error_message)
         sys.exit(-1)
-    if datetime.strptime(
-            prop.start_date_full, '%Y-%m-%dT%H:%M:%SZ',
-    ) > datetime.strptime(
-        prop.end_date_full, '%Y-%m-%dT%H:%M:%SZ',
-    ):
+
+    if start_date_obj > end_date_obj:
         error_message = (
             f'End Date {prop.end_date_full} '
-            f'is before Start Date {prop.end_date_full}. Abort!'
+            f'is before Start Date {prop.start_date_full}. Abort!'
         )
         logger.error(error_message)
         sys.exit(-1)
+
     # Make sure home path is set
     if prop.path is None:
         prop.path = dir_params['home']
@@ -379,7 +410,6 @@ def do_iceskill(prop, logger):
     # Daily model average argument verification
     if prop.dailyavg is None:
         prop.dailyavg = False
-
 
     # Directory tree set-up
     # stats csv files
@@ -438,26 +468,16 @@ def do_iceskill(prop, logger):
     )
 
     # Parse whichcasts argument
-    prop.whichcasts = prop.whichcasts.replace('[', '')
-    prop.whichcasts = prop.whichcasts.replace(']', '')
-    prop.whichcasts = prop.whichcasts.split(',')
+    prop.whichcasts = prop.whichcasts.replace('[', '').replace(']', '').split(',')
 
     #########################################################
 
     # Constants:
-    #cellarea = 1.33807829*1.40637584    # GLSEA cell area in km^2.
-    # GLSEA Dx=0.01617deg(~1.338km),
-    # DY=0.01263deg(~1.406km)
     brdr = 0.2                          # margin for plotting
     shouldimakemaps = True  # Should i make maps?
     shouldimakeplots = True  # Should i make plots?
-    dailyplotdays = 10  # Number of days before end date to
-    # start making daily plots. If you want
-    # plots every day, set it to a big 'ol
-    # number like 999
-    seasonrun = 'yes'  # Run for the current ice season? This
-    # option makes sure forecast fields files
-    # are available; if not, exits.
+    dailyplotdays = 10  # Number of days before end date to start making daily plots.
+    seasonrun = 'yes'  # Run for the current ice season?
 
     # Ice SA related settings and thresholds:
     threshold_exte = 10    # threshold ice concentration in % at for ice extent
@@ -472,21 +492,10 @@ def do_iceskill(prop, logger):
     for cast in prop.whichcasts:
         prop.whichcast = cast.lower()
         # Adjust start date if using forecast and doing a current season run.
-        # Set the start date for 60 days before the end date, as that is how
-        # long fields forecast files are retained.
         if prop.whichcast == 'forecast_b' and seasonrun == 'yes':
             prop.oldstartdate = prop.start_date_full
             if (
-                (
-                    datetime.strptime(
-                        prop.end_date_full,
-                        '%Y-%m-%dT%H:%M:%SZ',
-                    ) -
-                    datetime.strptime(
-                        prop.start_date_full,
-                        '%Y-%m-%dT%H:%M:%SZ',
-                    )
-                ).days > 60
+                (end_date_obj - start_date_obj).days > 60
             ):
                 logger.info('Adjusting start date for forecast_b...')
                 start_date_forecast = date.today() - timedelta(days=60)
@@ -509,6 +518,7 @@ def do_iceskill(prop, logger):
                         monthlist,
                     )
                     sys.exit(-1)
+
     # -------------------------------------------------------------------------
         # Download, concatenate, and mask/clip satellite and 2D climatology
         obsice, ice_clim = get_icecover_observations.get_icecover_observations(
@@ -516,7 +526,7 @@ def do_iceskill(prop, logger):
         )
         logger.info('Grabbed ice cover observations')
         # Concatenate existing model output
-        icecover_m, lon_m, lat_m, time_m = get_icecover_model.\
+        icecover_m, lon_m, lat_m, time_m, h_m = get_icecover_model.\
         get_icecover_model(prop, logger)
         logger.info('Grabbed ice cover model output')
     # -------------------------------------------------------------------------
@@ -526,25 +536,18 @@ def do_iceskill(prop, logger):
         lat_o = np.asarray(obsice.variables['lat'][:])
         icecover_o = np.asarray(obsice.variables['ice_concentration'][:, :, :])
         time_o = np.asarray(obsice.variables['time'][:])
+
         # Tile lat & lon into arrays
-        latsize = np.size(lat_o)
-        lonsize = np.size(lon_o)
-        lon_o = np.tile(lon_o, (latsize, 1))
-        lat_o = np.tile(lat_o, (lonsize, 1))
-        lat_o = np.transpose(lat_o)
+        lat_o, lon_o = np.meshgrid(lat_o, lon_o, indexing='ij')
         logger.info('GLSEA parsing complete')
 
         # First check time arrays for size compatibility
         set_o = set(time_o)
         set_m = set(time_m)
-        # Find dates in set_o but not in set_m
         difference_o_minus_m = set_o - set_m
-        # Convert the result back to a list
-        result_o = list(difference_o_minus_m)
-        # Find dates in set_m but not in set_o
         difference_m_minus_o = set_m - set_o
-        result_m = list(difference_m_minus_o)
-        if len(result_m) > 0 or len(result_o) > 0:
+
+        if len(difference_m_minus_o) > 0 or len(difference_o_minus_m) > 0:
             logger.error('Model & GLSEA dates are mismatched! Please '
                          'delete the "data" directory and try again!')
 
@@ -563,8 +566,8 @@ def do_iceskill(prop, logger):
         # Get OFS station inventory, find model & obs lat & lon nearest to
         # stations, extract 1D time series, and save to file for each whichcast
         inventory = find_ofs_ice_stations.find_ofs_ice_stations(
-            prop,lon_m, lat_m, lon_o, lat_o, time_all_dt, time_all, icecover_o,
-            icecover_m, logger,
+            prop, lon_m, lat_m, lon_o, lat_o, time_all_dt, time_all, icecover_o,
+            icecover_m, icecover_hist_2d, logger,
         )
         logger.info('Completed inventory and .int files')
 
@@ -572,505 +575,226 @@ def do_iceskill(prop, logger):
         # ---> Let's do some statistics now, ok? ok.
 
         # -- 1D obs & model statistics through time
-        ice_1d_stats = {
-            'mod_meanicecover': [],
-            'mod_stdmic': [],
-            'mod_extent': [],
-            'obs_meanicecover': [],
-            'obs_stdmic': [],
-            'obs_extent': [],
-            'extent_error': [],
-            'r_all': [],
-            'rmse_either': [],
-            'rmse_all': [],
-            'skill_score': [],
-            'csi_all': [],
-            'csi_misses': [],
-            'csi_falsealarms': [],
-        }
+        ice_1d_stats = {k: [] for k in [
+            'mod_meanicecover', 'mod_stdmic', 'mod_extent', 'obs_meanicecover',
+            'obs_stdmic', 'obs_extent', 'extent_error', 'r_all', 'rmse_either',
+            'rmse_all', 'skill_score', 'csi_all', 'csi_misses', 'csi_falsealarms'
+        ]}
 
-        # -- 2D statistics through time
-        ice_2d_stats = {
-            'obsmoddiff_all': [],
-            'icecover_m_interp_all': [],
-            'obs_all': [],
-            'mod_all': [],
-            'obs_extent_map_all': [],
-            'mod_extent_map_all': [],
-            'overlap_map_all': [],
-            'obs_icedays_all': [],
-            'mod_icedays_all': [],
-            'falarm_map_all': [],
-            'miss_map_all': [],
-            'total_extent': [],
-        }
+        # -- 2D statistics mapped through time
+        ice_2d_stats = {k: [] for k in [
+            'obsmoddiff_all', 'obs_all', 'mod_all', 'obs_extent_map_all',
+            'mod_extent_map_all', 'overlap_map_all', 'falarm_map_all',
+            'miss_map_all', 'total_extent'
+        ]}
 
-        # --- 2D masks, collect 'em all
-        ice_2d_masks = {
-            'noiceobs_all': [],
-            'noicemod_all': [],
-            'noiceobs_ext_all': [],
-            'noicemod_ext_all': [],
-            'openwater_all': [],
-            'openwater_ext_all': [],
-        }
-
-        # Loop through each day and compare GLSEA and model output
         dayrange = ((time_all_dt[-1] - time_all_dt[0]).days)+1
+
+        # Pre-calculate common mapping objects
+        ice_map = Basemap(
+            projection='merc',
+            resolution='i', area_thresh=1.0,
+            llcrnrlon=lon_o.min()-brdr,
+            llcrnrlat=lat_o.min()-brdr,
+            urcrnrlon=lon_o.max()+brdr,
+            urcrnrlat=lat_o.max()+brdr,
+        )
+        xo, yo = ice_map(lon_o, lat_o)
+        xm, ym = ice_map(lon_m, lat_m)
+
         for i in range(0, len(time_all)):
-            # print(i)
-            # percentcomplete = ((i+1)/dayrange)*100
             logger.info(
                 '%s percent complete: %s',
                 prop.whichcast,
                 np.round((i/dayrange)*100, decimals=0),
             )
-            # Extract ice concentration info from GLSEA data
+
+            # Extract and interpolate ice arrays
             icecover_o_mask = np.array(icecover_o[i][:][:])
-
-            # ---------INTERPOLATION-----------------
-            # Create a map
-            ice_map = Basemap(
-                projection='merc',
-                resolution='i', area_thresh=1.0,
-                llcrnrlon=lon_o.min()-brdr,
-                llcrnrlat=lat_o.min()-brdr,
-                urcrnrlon=lon_o.max()+brdr,
-                urcrnrlat=lat_o.max()+brdr,
-            )
-
-            # Project GLSEA lon&lat onto xo&yo
-            xo, yo = ice_map(lon_o, lat_o)
-            # Project model lon&lat onto xm&ym
-            xm, ym = ice_map(lon_m, lat_m)
-            # Interpolate model data to GLSEA grid
             icecover_m_interp = interp.griddata(
                 (xm, ym), np.array(icecover_m[i, :]*100), (xo, yo),
                 method='nearest',
             )
-            ice_2d_stats['icecover_m_interp_all'].append(icecover_m_interp)
             # Apply land mask to interpolated model grid
-            # (this is a sneaky way to do it!)
             icecover_m_mask = icecover_m_interp - (icecover_o_mask*0)
-            # -----------------------------------------
 
-            # Statistics
+            # Statistics Pre-processing
+            logger.info('Stats pre-processing -- applying masks...')
 
-            #Pre-processing
-            logger.info('Stats pre-processing -- make masks for open water...')
-            # Mask where there is open water (both model AND
-            # observation have no ice!!)
-            # First do openwater mask for conc
-            icecover_add = np.array(icecover_o_mask + icecover_m_mask)
-            ice_2d_masks['openwater_all'].append(
-                make_2d_mask(
-                    np.array(icecover_o_mask)*0, icecover_add, stathresh,
-                ),
-            )
-            # Now do openwater mask for extent
-            ice_2d_masks['openwater_ext_all'].append(
-                make_2d_mask(
-                    np.array(icecover_o_mask)*0, icecover_add, threshold_exte,
-                ),
-            )
-            # Now remove ice conc below stathresh
-            icecover_o_mask2 = make_2d_mask(
-                np.array(icecover_o_mask),
-                icecover_add, stathresh,
-            )
-            icecover_m_mask2 = make_2d_mask(
-                np.array(icecover_m_mask),
-                icecover_add, stathresh,
-            )
-            # Mask where open water for observation only, ice conc
-            ice_2d_masks['noiceobs_all'].append(
-                make_2d_mask(
-                    np.array(icecover_o_mask), None, stathresh,
-                ),
-            )
-            # Mask where open water for model only, ice conc
-            ice_2d_masks['noicemod_all'].append(
-                make_2d_mask(
-                    np.array(icecover_m_mask), None, stathresh,
-                ),
-            )
-            # Mask where open water for observation only, ice extent
-            ice_2d_masks['noiceobs_ext_all'].append(
-                make_2d_mask(
-                    np.array(icecover_o_mask), None, threshold_exte,
-                ),
-            )
-            # Mask where open water for model only, ice extent
-            ice_2d_masks['noicemod_ext_all'].append(
-                make_2d_mask(
-                    np.array(icecover_m_mask), None, threshold_exte,
-                ),
-            )
+            # Create a shared mask for open water and missing data
+            icecover_add = icecover_o_mask + icecover_m_mask
+            valid_mask = ~np.isnan(icecover_add)
 
-            # Flatten arrays to calculate corr coefficient amd remove nans
-            obs_flat = icecover_o_mask2.flatten()
-            mod_flat = icecover_m_mask2.flatten()
-            badnans = ~np.logical_or(np.isnan(obs_flat), np.isnan(mod_flat))
-            obs_flat = np.array(np.compress(badnans, obs_flat))
-            mod_flat = np.array(np.compress(badnans, mod_flat))
+            # Apply low ice threshold for continuous calculations
+            icecover_o_mask2 = np.where((icecover_add >= stathresh) & valid_mask, icecover_o_mask, np.nan)
+            icecover_m_mask2 = np.where((icecover_add >= stathresh) & valid_mask, icecover_m_mask, np.nan)
 
             # Calculate stats
             logger.info('Calculating stats!')
-            ###############################################
+
             # Mean ice cover & standard deviation
-            ice_1d_stats['mod_meanicecover'].append(
-                np.nanmean(icecover_m_mask))
+            ice_1d_stats['mod_meanicecover'].append(np.nanmean(icecover_m_mask))
             ice_1d_stats['mod_stdmic'].append(np.nanstd(icecover_m_mask))
-            ice_1d_stats['obs_meanicecover'].append(
-                np.nanmean(icecover_o_mask))
+            ice_1d_stats['obs_meanicecover'].append(np.nanmean(icecover_o_mask))
             ice_1d_stats['obs_stdmic'].append(np.nanstd(icecover_o_mask))
 
             # Percent ice cover (extent)
-            # MODEL
-            if (((icecover_m_mask >= 0).sum())*100) > 0:
-                ice_1d_stats['mod_extent'].append(
-                    ((
-                        icecover_m_mask >= threshold_exte
-                    ).sum() /
-                        (icecover_m_mask >= 0).sum())*100,
-                )
-            else:
-                ice_1d_stats['mod_extent'].append(0)
-            # OBS
-            if (((icecover_o_mask >= 0).sum())*100) > 0:
-                ice_1d_stats['obs_extent'].append(
-                    ((
-                        icecover_o_mask >= threshold_exte
-                    ).sum() /
-                        (icecover_o_mask >= 0).sum())*100,
-                )
-            else:
-                ice_1d_stats['obs_extent'].append(0)
+            mod_valid_count = (icecover_m_mask >= 0).sum()
+            obs_valid_count = (icecover_o_mask >= 0).sum()
 
-            # Pearson's R where either model or observations have ice
-            # if np.nansum(~isnan(icecover_m_mask2)) > 5 and np.nansum(
-            #         ~isnan(icecover_o_mask2)) > 5:
-            #     r_value1 = stats.pearsonr(obs_flat,mod_flat)[0]
+            mod_extent_pct = ((icecover_m_mask >= threshold_exte).sum() / mod_valid_count) * 100 if mod_valid_count > 0 else 0
+            obs_extent_pct = ((icecover_o_mask >= threshold_exte).sum() / obs_valid_count) * 100 if obs_valid_count > 0 else 0
 
-            #     r_all.append(np.around(r_value1, decimals=3))
-            # else:
+            ice_1d_stats['mod_extent'].append(mod_extent_pct)
+            ice_1d_stats['obs_extent'].append(obs_extent_pct)
             ice_1d_stats['r_all'].append(np.nan)
 
-            # RMSE all pixels
-            if np.nansum(~isnan(icecover_m_mask)) >= 2 and np.nansum(
-                    ~isnan(icecover_o_mask),
-            ) >= 2:
-                ice_1d_stats['rmse_all'].append(
-                    nos_metrics.rmse(icecover_m_mask, icecover_o_mask),
-                )
+            # RMSE calculations
+            if np.nansum(~np.isnan(icecover_m_mask)) >= 2 and np.nansum(~np.isnan(icecover_o_mask)) >= 2:
+                rmse_all = nos_metrics.rmse(icecover_m_mask, icecover_o_mask)
+                ice_1d_stats['rmse_all'].append(rmse_all)
+
+                # Skill Score
+                mse2_fC = np.nanmean((icecover_m_mask - icecover_hist_2d[i, :, :])**2)
+                skillscore = 1 - ((rmse_all**2) / mse2_fC) if mse2_fC > 0 else np.nan
+                ice_1d_stats['skill_score'].append(skillscore)
             else:
                 ice_1d_stats['rmse_all'].append(np.nan)
+                ice_1d_stats['skill_score'].append(np.nan)
 
-            # RMSE ice where either model or observations
-            if np.nansum(~isnan(icecover_m_mask2)) >= 2 and np.nansum(
-                    ~isnan(icecover_o_mask2),
-            ) >= 2:
-                ice_1d_stats['rmse_either'].append(
-                    nos_metrics.rmse(icecover_m_mask2, icecover_o_mask2),
-                )
+            if np.nansum(~np.isnan(icecover_m_mask2)) >= 2 and np.nansum(~np.isnan(icecover_o_mask2)) >= 2:
+                ice_1d_stats['rmse_either'].append(nos_metrics.rmse(icecover_m_mask2, icecover_o_mask2))
             else:
                 ice_1d_stats['rmse_either'].append(np.nan)
 
-            # Skill score from Hebert et al. (2015)
-            # DOI: 10.1002/2015JC011283
-            # Do it in 2D
-            if np.nansum(~isnan(icecover_m_mask)) >= 2 and np.nansum(
-                    ~isnan(icecover_o_mask),
-            ) >= 2:
-                mse2_fO = ice_1d_stats['rmse_all'][i]**2
-                mse2_fC = np.nanmean(
-                    (
-                        icecover_m_mask-icecover_hist_2d[i, :, :]
-                    )**2,
-                )
-                if mse2_fC > 0:
-                    skillscore = 1 - (mse2_fO/mse2_fC)
-                else:
-                    skillscore = np.nan
-                ice_1d_stats['skill_score'].append(skillscore)
-            else:
-                ice_1d_stats['skill_score'].append(np.nan)
+            # Daily ice extent & CSI mapping
+            obs_extent_map = np.where(icecover_o_mask >= threshold_exte, 1, 0).astype(float)
+            mod_extent_map = np.where(icecover_m_mask >= threshold_exte, 1, 0).astype(float)
 
-            # Daily ice extent & total ice days
-            # Do observations
-            obs_extent_map = np.array(icecover_o_mask)
-            obs_extent_map[obs_extent_map < threshold_exte] = 0
-            obs_extent_map[obs_extent_map >= threshold_exte] = 1
+            # Keep NaNs where data is invalid
+            obs_extent_map[~valid_mask] = np.nan
+            mod_extent_map[~valid_mask] = np.nan
+
             ice_2d_stats['obs_extent_map_all'].append(obs_extent_map)
-            # Do model
-            mod_extent_map = np.array(icecover_m_mask)
-            mod_extent_map[mod_extent_map < threshold_exte] = 0
-            mod_extent_map[mod_extent_map >= threshold_exte] = 1
             ice_2d_stats['mod_extent_map_all'].append(mod_extent_map)
-            # Collect obs OR model extent to get total ice days for either obs
-            # or model
-            total_extent = np.array(mod_extent_map + obs_extent_map)
-            total_extent[total_extent > 1] = 1
+
+            total_extent = np.where((mod_extent_map + obs_extent_map) > 0, 1, 0).astype(float)
+            total_extent[~valid_mask] = np.nan
             ice_2d_stats['total_extent'].append(total_extent)
-            # Do extent overlap (hits), misses, and false alarms
-            overlap_map = np.array(mod_extent_map + obs_extent_map)
-            overlap_map[overlap_map <= 1] = 0
-            overlap_map[overlap_map == 2] = 1
+
+            overlap_map = np.where((mod_extent_map + obs_extent_map) == 2, 1, 0).astype(float)
+            overlap_map[~valid_mask] = np.nan
             ice_2d_stats['overlap_map_all'].append(overlap_map)
-            csi_map = np.array(mod_extent_map - obs_extent_map)
-            falarm_map = np.array(csi_map)
-            falarm_map[falarm_map != 1] = 0
+
+            csi_map = mod_extent_map - obs_extent_map
+            falarm_map = np.where(csi_map == 1, 1, 0).astype(float)
+            falarm_map[~valid_mask] = np.nan
             ice_2d_stats['falarm_map_all'].append(falarm_map)
-            miss_map = np.array(csi_map)
-            miss_map[miss_map != -1] = 0
-            miss_map = miss_map * -1
+
+            miss_map = np.where(csi_map == -1, 1, 0).astype(float)
+            miss_map[~valid_mask] = np.nan
             ice_2d_stats['miss_map_all'].append(miss_map)
-            # Do CSI
-            # hits: cm[1][1]
-            # false alarms: cm[0][1]
-            # misses: cm[1][0]
-            try:
-                cm = confusion_matrix(
-                    obs_extent_map[~isnan(obs_extent_map)].flatten(),
-                    mod_extent_map[~isnan(mod_extent_map)].flatten(),
-                    labels=[0, 1],
-                )
-                if (cm[1][1] + cm[0][1] + cm[1][0]) > 0:
-                    csi = cm[1][1]/(cm[1][1] + cm[0][1] + cm[1][0])
-                    misses = cm[0][1]/(cm[1][1] + cm[0][1] + cm[1][0])
-                    falarms = cm[1][0]/(cm[1][1] + cm[0][1] + cm[1][0])
-                else:
-                    csi = 0
-                    misses = 0
-                    falarms = 0
-                ice_1d_stats['csi_all'].append(csi)
-                ice_1d_stats['csi_misses'].append(falarms)
-                ice_1d_stats['csi_falsealarms'].append(misses)
-                ice_1d_stats['extent_error'].append(falarms+misses)
-            except ValueError:
+
+            # 1D CSI metrics
+            hits = np.nansum(overlap_map)
+            falarms = np.nansum(falarm_map)
+            misses = np.nansum(miss_map)
+            total_events = hits + falarms + misses
+
+            if total_events > 0:
+                ice_1d_stats['csi_all'].append(hits / total_events)
+                ice_1d_stats['csi_misses'].append(misses / total_events)
+                ice_1d_stats['csi_falsealarms'].append(falarms / total_events)
+                ice_1d_stats['extent_error'].append((falarms + misses) / total_events)
+            else:
                 ice_1d_stats['csi_all'].append(np.nan)
                 ice_1d_stats['csi_misses'].append(np.nan)
                 ice_1d_stats['csi_falsealarms'].append(np.nan)
                 ice_1d_stats['extent_error'].append(np.nan)
 
-            # 2D -- diff between obs and mod
-            ice_2d_stats['obsmoddiff_all'].append(
-                icecover_m_mask2 -
-                icecover_o_mask2,
-            )
-            # Also keep model interpolated and observation arrays
+            # 2D Diff mapping
+            ice_2d_stats['obsmoddiff_all'].append(icecover_m_mask2 - icecover_o_mask2)
             ice_2d_stats['obs_all'].append(icecover_o_mask)
             ice_2d_stats['mod_all'].append(icecover_m_mask)
 
-            # Make a map once each day, and save it
-            if shouldimakemaps:
-                if ((
-                    prop.ice_dt == 'hourly' and
-                    time_all[i].hour == 12
-                )
-                    or
-                    (
-                        prop.ice_dt == 'daily' and
-                        (time_all_dt[-1]-time_all_dt[i]).days <= dailyplotdays
-                )):
-                    # Static maps
-                    mapdata = np.stack(
-                        (
-                            icecover_o_mask2, icecover_m_mask2,
-                            ice_2d_stats['obsmoddiff_all'][i],
-                        ),
-                    )
-                    make_ice_map.make_ice_map(
-                        prop, lon_o, lat_o, xo, yo, mapdata,
-                        time_all[i],
-                        'daily', logger,
-                    )
+            # Output daily map
+            if shouldimakemaps and (
+                (prop.ice_dt == 'hourly' and time_all[i].hour == 12) or
+                (prop.ice_dt == 'daily' and (time_all_dt[-1] - time_all_dt[i]).days <= dailyplotdays)
+            ):
+                mapdata = np.stack((icecover_o_mask2, icecover_m_mask2, ice_2d_stats['obsmoddiff_all'][i]))
+                make_ice_map.make_ice_map(prop, lon_o, lat_o, xo, yo, mapdata, time_all[i], 'daily', logger)
 
-            # If last time step, do 2D stats and maps and plots etc.
-            #    over time period
-            ###
+            # Final Step: Aggregate 2D Stats
             if i == len(time_all)-1 and dayrange >= 5:
-                # Keep these separate as numpy arrays
-                obsmoddiff_all = np.stack(ice_2d_stats['obsmoddiff_all'])
-                obs_all = np.stack(ice_2d_stats['obs_all'])
-                mod_all = np.stack(ice_2d_stats['mod_all'])
+                logger.info('Calculating cumulative 2D maps...')
 
-                # Average 3D arrays through time to make 2D arrays
-                # First make new masks to mask out open water
-                # for obs and/or model averaged arrays.
-                # First do ice concentration masks
+                # Stack arrays for fast vectorized processing
+                obsmoddiff_stack = np.stack(ice_2d_stats['obsmoddiff_all'])
+                obs_stack = np.stack(ice_2d_stats['obs_all'])
+                mod_stack = np.stack(ice_2d_stats['mod_all'])
+
+                # Generate global masks to hide open water across the entire time period
+                ice_mask = np.nanmax(obs_stack + mod_stack, axis=0) >= stathresh
+                openwater_mask = np.where(ice_mask, 1, np.nan)
+
+                ext_mask = np.nanmax(obs_stack + mod_stack, axis=0) >= threshold_exte
+                openwater_ext_mask = np.where(ext_mask, 1, np.nan)
+
                 with warnings.catch_warnings():
                     warnings.simplefilter('ignore', category=RuntimeWarning)
-                    ice_2d_masks['noiceobs_mask'] = np.array(
-                        np.nanmean(
-                            np.stack(ice_2d_masks['noiceobs_all']), axis=0,
-                        ),
-                    )*0
-                    ice_2d_masks['noicemod_mask'] = np.array(
-                        np.nanmean(
-                            np.stack(ice_2d_masks['noicemod_all']), axis=0,
-                        ),
-                    )*0
-                    ice_2d_masks['openwater_mask'] = np.array(
-                        np.nanmean(
-                            np.stack(ice_2d_masks['openwater_all']), axis=0,
-                        ),
-                    )  # Already multiplied by zero earlier
-                    # Now do ice extent masks
-                    ice_2d_masks['noiceobs_ext_mask'] = np.array(
-                        np.nanmean(
-                            np.stack(ice_2d_masks['noiceobs_ext_all']), axis=0,
-                        ),
-                    )*0
-                    ice_2d_masks['noicemod_ext_mask'] = np.array(
-                        np.nanmean(
-                            np.stack(ice_2d_masks['noicemod_ext_all']), axis=0,
-                        ),
-                    )*0
-                    ice_2d_masks['openwater_ext_mask'] = np.array(
-                        np.nanmean(
-                            np.stack(ice_2d_masks['openwater_ext_all']),axis=0,
-                        ),
-                    )  # Already multiplied by zero earlier
 
-                    # Now proceed and do mean, min, and max diffs & means for
-                    # ice cover
-                    ice_2d_stats['obsmoddiff_allmean'] = np.array(
-                        np.nanmean(obsmoddiff_all, axis=0),
-                    )
-                    ice_2d_stats['obsmoddiff_allmax'] = np.array(
-                        np.nanmax(obsmoddiff_all, axis=0),
-                    )
-                    ice_2d_stats['obsmoddiff_allmin'] = np.array(
-                        np.nanmin(obsmoddiff_all, axis=0),
-                    )
-                    ice_2d_stats['obs_allmean'] = np.array(
-                        np.nanmean(obs_all, axis=0),
-                    )+ice_2d_masks['noiceobs_mask']
-                    ice_2d_stats['mod_allmean'] = np.array(
-                        np.nanmean(mod_all, axis=0),
-                    )+ice_2d_masks['noicemod_mask']
-                    # Do RMSE
-                    ice_2d_stats['rmse_2d'] = np.array(
-                        np.sqrt(
-                            np.nanmean(
-                                ((obsmoddiff_all)**2), axis=0,
-                            ),
-                        ),
-                    )
-                    ice_2d_stats['rmse_2d'] = ice_2d_stats['rmse_2d'] + \
-                        ice_2d_masks['openwater_mask']
+                    # Mean/Min/Max differences
+                    ice_2d_stats['obsmoddiff_allmean'] = np.nanmean(obsmoddiff_stack, axis=0) * openwater_mask
+                    ice_2d_stats['obsmoddiff_allmax'] = np.nanmax(obsmoddiff_stack, axis=0) * openwater_mask
+                    ice_2d_stats['obsmoddiff_allmin'] = np.nanmin(obsmoddiff_stack, axis=0) * openwater_mask
 
-                    # Make ice extents & days of ice cover
-                    # NOTE! numpy nansum returns zeros when
-                    # summing across nans! Yargh! So we gotta re-apply
-                    # masks.
-                    # Do obs --
-                    obs_extent_map_allsum = np.array(
-                        np.nansum(ice_2d_stats['obs_extent_map_all'], axis=0),
-                    )
-                    ice_2d_stats['obs_icedays_all'] = np.array(
-                        obs_extent_map_allsum +
-                        (ice_2d_masks['noiceobs_ext_mask']),
-                    )
-                    obs_extent_map_allsum[obs_extent_map_allsum > 0] = 1
-                    ice_2d_stats['obs_extent_map_allsum'] = np.array(
-                        obs_extent_map_allsum +
-                        (ice_2d_masks['noiceobs_ext_mask']),
-                    )
-                    # Do model --
-                    mod_extent_map_allsum = np.array(
-                        np.nansum(ice_2d_stats['mod_extent_map_all'], axis=0),
-                    )
-                    ice_2d_stats['mod_icedays_all'] = np.array(
-                        mod_extent_map_allsum +
-                        (ice_2d_masks['noicemod_ext_mask']),
-                    )
-                    mod_extent_map_allsum[mod_extent_map_allsum > 0] = 1
-                    ice_2d_stats['mod_extent_map_allsum'] = np.array(
-                        mod_extent_map_allsum +
-                        (ice_2d_masks['noicemod_ext_mask']),
-                    )
+                    ice_2d_stats['obs_allmean'] = np.nanmean(obs_stack, axis=0) * openwater_mask
+                    ice_2d_stats['mod_allmean'] = np.nanmean(mod_stack, axis=0) * openwater_mask
 
-                    # Do Critical Success Index mapping -->
-                    # First, map hits
-                    csi_norm = np.array(
-                        np.nansum(
-                            ice_2d_stats['total_extent'],
-                            axis=0,
-                        ),
-                    )
-                    csi_norm = csi_norm + ice_2d_masks['openwater_ext_mask']
-                    ice_2d_stats['hit_map_allsum'] = np.array(
-                        np.nansum(ice_2d_stats['overlap_map_all'], axis=0) /
-                        csi_norm,
-                    )*100 + ice_2d_masks['openwater_ext_mask']
-                    ice_2d_stats['miss_map_allsum'] = np.array(
-                        np.nansum(ice_2d_stats['miss_map_all'], axis=0) /
-                        csi_norm,
-                    )*100 + ice_2d_masks['openwater_ext_mask']
-                    ice_2d_stats['falarm_map_allsum'] = np.array(
-                        np.nansum(
-                            ice_2d_stats['falarm_map_all'], axis=0,
-                        )/csi_norm,
-                    )*100 +\
-                        ice_2d_masks['openwater_ext_mask']
+                    # RMSE
+                    ice_2d_stats['rmse_2d'] = np.sqrt(np.nanmean((obsmoddiff_stack**2), axis=0)) * openwater_mask
+
+                    # Total Ice Days
+                    obs_extent_stack = np.stack(ice_2d_stats['obs_extent_map_all'])
+                    mod_extent_stack = np.stack(ice_2d_stats['mod_extent_map_all'])
+
+                    ice_2d_stats['obs_icedays_all'] = np.nansum(obs_extent_stack, axis=0) * openwater_ext_mask
+                    ice_2d_stats['mod_icedays_all'] = np.nansum(mod_extent_stack, axis=0) * openwater_ext_mask
+
+                    # CSI Map Metrics
+                    csi_norm = np.nansum(np.stack(ice_2d_stats['total_extent']), axis=0)
+
+                    # Prevent division by zero warnings
+                    csi_norm_safe = np.where(csi_norm == 0, np.nan, csi_norm)
+
+                    ice_2d_stats['hit_map_allsum'] = (np.nansum(np.stack(ice_2d_stats['overlap_map_all']), axis=0) / csi_norm_safe) * 100 * openwater_ext_mask
+                    ice_2d_stats['miss_map_allsum'] = (np.nansum(np.stack(ice_2d_stats['miss_map_all']), axis=0) / csi_norm_safe) * 100 * openwater_ext_mask
+                    ice_2d_stats['falarm_map_allsum'] = (np.nansum(np.stack(ice_2d_stats['falarm_map_all']), axis=0) / csi_norm_safe) * 100 * openwater_ext_mask
 
                 # Find ice-on and ice-off dates, if doing a season-long run
-                if time_all_dt[0].month == 11 or time_all_dt[0].month == 12:
-                    logger.info(
-                        'Starting ice onset/thaw date-finding routine...')
-                    obs_iceon, obs_iceoff = iceonoff(
-                        time_all_dt,
-                        ice_1d_stats[
-                            'obs_meanicecover'
-                        ],
-                        logger,
-                    )
-                    mod_iceon, mod_iceoff = iceonoff(
-                        time_all_dt,
-                        ice_1d_stats[
-                            'mod_meanicecover'
-                        ],
-                        logger,
-                    )
-                    clim_iceon, clim_iceoff = iceonoff(
-                        time_all_dt, icecover_hist,
-                        logger,
-                    )
-                    logger.info('Completed ice onset/thaw! Back in main.')
-                    if mod_iceon is not None and obs_iceon is not None:
-                        iceondiff = (mod_iceon-obs_iceon).days
-                    else:
-                        iceondiff = None
-                    if mod_iceoff is not None and obs_iceoff is not None:
-                        iceoffdiff = (mod_iceoff-obs_iceoff).days
-                    else:
-                        iceoffdiff = None
-                    logger.info('Calculated ice onset/thaw error!')
-                    # Combine ice on/off dates and diff to format for pandas
-                    # table
+                if time_all_dt[0].month in [11, 12]:
+                    logger.info('Starting ice onset/thaw date-finding routine...')
+                    obs_iceon, obs_iceoff = iceonoff(time_all_dt, ice_1d_stats['obs_meanicecover'], logger)
+                    mod_iceon, mod_iceoff = iceonoff(time_all_dt, ice_1d_stats['mod_meanicecover'], logger)
+                    clim_iceon, clim_iceoff = iceonoff(time_all_dt, icecover_hist, logger)
+
+                    iceondiff = (mod_iceon - obs_iceon).days if (mod_iceon and obs_iceon) else None
+                    iceoffdiff = (mod_iceoff - obs_iceoff).days if (mod_iceoff and obs_iceoff) else None
+
                     logger.info('Writing ice onset/thaw table...')
                     iceonoffall = [
                         [' ', 'Ice onset', 'Ice thaw'],
                         ['Observed', str(obs_iceon), str(obs_iceoff)],
                         ['Modeled', str(mod_iceon), str(mod_iceoff)],
                         ['Climatology', str(clim_iceon), str(clim_iceoff)],
-                        [
-                            'Model-obs difference (days)', str(iceondiff),
-                            str(iceoffdiff),
-                        ],
+                        ['Model-obs difference (days)', str(iceondiff), str(iceoffdiff)],
                     ]
 
-                    # Write to csv
-                    title = r'' +\
-                        f'{prop.data_skill_stats_path}/' +\
-                        f'skill_{prop.ofs}_iceonoff_{prop.whichcast}.csv'
+                    title = os.path.join(prop.data_skill_stats_path, f'skill_{prop.ofs}_iceonoff_{prop.whichcast}.csv')
                     with open(title, 'w', newline='') as csvfile:
                         writer = csv.writer(csvfile)
-                        # Write the header row (column labels)
                         writer.writerow(iceonoffall[0])
-                        # Write the data rows
                         for row in iceonoffall[1:]:
                             writer.writerow(row)
                     logger.info('Ice on/off table saved!')
@@ -1078,101 +802,61 @@ def do_iceskill(prop, logger):
                 # Make 2D stats maps
                 if shouldimakemaps:
                     logger.info('Starting all stats maps...')
-                    # Map conc: mean model, mean obs, and rmse
-                    mapdata = np.stack(
-                        (
-                            ice_2d_stats['obs_allmean'],
-                            ice_2d_stats['mod_allmean'],
-                            ice_2d_stats['rmse_2d'],
-                        ),
+                    make_ice_map.make_ice_map(
+                        prop, lon_o, lat_o, xo, yo,
+                        np.stack((ice_2d_stats['obs_allmean'], ice_2d_stats['mod_allmean'], ice_2d_stats['rmse_2d'])),
+                        time_all[i], 'rmse means', logger
                     )
                     make_ice_map.make_ice_map(
-                        prop, lon_o, lat_o, xo, yo, mapdata,
-                        time_all[i], 'rmse means', logger,
-                    )
-                    # Map extent: total ice days model,
-                    # ice days obs, ice distance
-                    mapdata = np.stack(
-                        (
-                            ice_2d_stats['obs_icedays_all'],
-                            ice_2d_stats['mod_icedays_all'],
-                        ),
+                        prop, lon_o, lat_o, xo, yo,
+                        np.stack((ice_2d_stats['obs_icedays_all'], ice_2d_stats['mod_icedays_all'])),
+                        time_all[i], 'extents', logger
                     )
                     make_ice_map.make_ice_map(
-                        prop, lon_o, lat_o, xo, yo, mapdata, time_all[i],
-                        'extents', logger,
-                    )
-                    # Map diff conc: mean diff, max diff,
-                    # min diff
-                    mapdata = np.stack(
-                        (
-                            ice_2d_stats['obsmoddiff_allmean'],
-                            ice_2d_stats['obsmoddiff_allmax'],
-                            ice_2d_stats['obsmoddiff_allmin'],
-                        ),
+                        prop, lon_o, lat_o, xo, yo,
+                        np.stack((ice_2d_stats['obsmoddiff_allmean'], ice_2d_stats['obsmoddiff_allmax'], ice_2d_stats['obsmoddiff_allmin'])),
+                        time_all[i], 'diff', logger
                     )
                     make_ice_map.make_ice_map(
-                        prop, lon_o, lat_o, xo, yo, mapdata,
-                        time_all[i], 'diff', logger,
-                    )
-                    # Map CSI metrics
-                    mapdata = np.stack(
-                        (
-                            ice_2d_stats['hit_map_allsum'],
-                            ice_2d_stats['falarm_map_allsum'],
-                            ice_2d_stats['miss_map_allsum'],
-                        ),
-                    )
-                    make_ice_map.make_ice_map(
-                        prop, lon_o, lat_o, xo, yo, mapdata,
-                        time_all[i], 'csi', logger,
+                        prop, lon_o, lat_o, xo, yo,
+                        np.stack((ice_2d_stats['hit_map_allsum'], ice_2d_stats['falarm_map_allsum'], ice_2d_stats['miss_map_allsum'])),
+                        time_all[i], 'csi', logger
                     )
                     logger.info('All stats maps complete!')
+
                 if shouldimakeplots:
                     logger.info('Starting histograms...')
-                    # ---HISTOGRAMS/PDFs-----------------------------------
-                    # Make distributions of errors
-                    # Do all RMSEs
-                    make_ice_boxplots.make_ice_boxplots(
-                        obs_all, mod_all,
-                        time_all_dt, prop, logger,
-                    )
+                    make_ice_boxplots.make_ice_boxplots(obs_stack, mod_stack, time_all_dt, prop, logger)
                     plt.close('all')
                     logger.info('Box plots complete!')
+
             elif i == len(time_all)-1 and dayrange < 5:
-                logger.info(
-                    'Day range is < 5, so no maps or cumulative stats!')
+                logger.info('Day range is < 5, so no maps or cumulative stats!')
 
         # Before plotting, make pandas dataframe with stats time series
         logger.info('Compiling time series stats for table output...')
-        pd.DataFrame(
-            {
-                'time_all_dt': time_all_dt,
-                'obs_meanicecover': ice_1d_stats['obs_meanicecover'],
-                'mod_meanicecover': ice_1d_stats['mod_meanicecover'],
-                'obs_stdmic': ice_1d_stats['obs_stdmic'],
-                'mod_stdmic': ice_1d_stats['mod_stdmic'],
-                'icecover_hist': icecover_hist,
-                'SS': ice_1d_stats['skill_score'],
-                'rmse_all': ice_1d_stats['rmse_all'],
-                'rmse_either': ice_1d_stats['rmse_either'],
-                'obs_extent': ice_1d_stats['obs_extent'],
-                'mod_extent': ice_1d_stats['mod_extent'],
-                'r_all': ice_1d_stats['r_all'],
-                'csi_all': ice_1d_stats['csi_all'],
-                'csi_falsealarms': ice_1d_stats['csi_falsealarms'],
-                'csi_misses': ice_1d_stats['csi_misses'],
-                'extent_error': ice_1d_stats['extent_error'],
-            },
-        ).to_csv(
-            r'' + f'{prop.data_skill_stats_path}/'
-                  f'skill_{prop.ofs}_'
-            f'icestatstseries_{prop.whichcast}.csv',
+        pd.DataFrame({
+            'time_all_dt': time_all_dt,
+            'obs_meanicecover': ice_1d_stats['obs_meanicecover'],
+            'mod_meanicecover': ice_1d_stats['mod_meanicecover'],
+            'obs_stdmic': ice_1d_stats['obs_stdmic'],
+            'mod_stdmic': ice_1d_stats['mod_stdmic'],
+            'icecover_hist': icecover_hist,
+            'SS': ice_1d_stats['skill_score'],
+            'rmse_all': ice_1d_stats['rmse_all'],
+            'rmse_either': ice_1d_stats['rmse_either'],
+            'obs_extent': ice_1d_stats['obs_extent'],
+            'mod_extent': ice_1d_stats['mod_extent'],
+            'r_all': ice_1d_stats['r_all'],
+            'csi_all': ice_1d_stats['csi_all'],
+            'csi_falsealarms': ice_1d_stats['csi_falsealarms'],
+            'csi_misses': ice_1d_stats['csi_misses'],
+            'extent_error': ice_1d_stats['extent_error'],
+        }).to_csv(
+            os.path.join(prop.data_skill_stats_path, f'skill_{prop.ofs}_icestatseries_{prop.whichcast}.csv')
         )
 
-        logger.info(
-            'Time series of OFS-wide skill stats is created successfully.',
-        )
+        logger.info('Time series of OFS-wide skill stats is created successfully.')
 
         # Switch date back to user-inputted start date if doing a season run
         if seasonrun == 'yes' and prop.whichcast == 'forecast_b':
@@ -1180,29 +864,22 @@ def do_iceskill(prop, logger):
 
     if shouldimakeplots:
         if dayrange >= 5:
-            # Send 1D stats, model, and obs time series to plotting module
-            create_1dplot_ice.create_1dplot_icestats(
-                prop,
-                time_all,
-                logger,
-            )
-            create_1dplot_ice.create_1dplot_ice(
-                prop, inventory,
-                time_all,
-                logger,
-            )
+            create_1dplot_ice.create_1dplot_icestats(prop, time_all, logger)
+            create_1dplot_ice.create_1dplot_ice(prop, inventory, time_all, logger)
         else:
-            logger.info(
-                'Need >=5 days for stats & 1D time series plots! '
-                'No 1D plots made.',
-            )
+            logger.info('Need >=5 days for stats & 1D time series plots! No 1D plots made.')
 
     logger.info('Program complete! Go get coffee and bagel')
 
 
 # Execution:
 def _run_pipeline(run_args):
-    """Execute the ice skill pipeline with the given arguments."""
+    """
+    Execute the ice skill pipeline with the given command-line arguments.
+
+    Args:
+        run_args (argparse.Namespace): Parsed command-line arguments.
+    """
     prop1 = model_properties.ModelProperties()
     ofs = getattr(run_args, 'OFS', None) or getattr(run_args, 'ofs', None)
     prop1.ofs = ofs.lower()
@@ -1215,13 +892,29 @@ def _run_pipeline(run_args):
         whichcasts, list) else whichcasts
     prop1.ice_dt = str(getattr(run_args, 'TimeStep', 'daily'))
     prop1.dailyavg = getattr(run_args, 'DailyAverage', False)
+    # Map the combined neighborhood flag and search radius
+    avg_radius = getattr(run_args, 'Neighborhood_Average', None)
+    if avg_radius is not None and avg_radius > 0:
+        prop1.Neighborhood_Average = True
+        prop1.Search_Radius = avg_radius
+    else:
+        prop1.Neighborhood_Average = False
+        prop1.Search_Radius = 0
     prop1.model_source = model_source.model_source(prop1.ofs)
 
     do_iceskill(prop1, None)
 
 
 def main(argv=None):
-    """Entry point for the do-iceskill console script."""
+    """
+    Entry point for the do-iceskill console script.
+
+    Parses command line arguments and routes execution to the main pipeline
+    or a GUI if no OFS is specified.
+
+    Args:
+        argv (list, optional): Command line arguments. Defaults to sys.argv.
+    """
     parser = argparse.ArgumentParser(prog='do-iceskill')
     parser.add_argument(
         '-o',
@@ -1268,6 +961,13 @@ def main(argv=None):
     parser.add_argument(
         '-c', '--config',
         help='Path to configuration file (default: conf/ofs_dps.conf)')
+    parser.add_argument(
+        '-avg',
+        '--Neighborhood_Average',
+        type=float,
+        default=None,
+        metavar='RADIUS_METERS',
+        help='Enable neighborhood averaging and set the search radius in meters. If not provided, neighborhood averaging is off.', )
     args = parser.parse_args(argv)
 
     if args.ofs is None:

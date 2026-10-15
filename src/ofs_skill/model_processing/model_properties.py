@@ -136,14 +136,15 @@ class ModelProperties:
 
         # Ice-specific paths & variables
         self.ice_dt: str = ''
-        self.dailyavg: str = ''
+        self.dailyavg: Any = False
         self.data_skill_ice1dpair_path: str = ''
         self.visuals_maps_ice_path: str = ''
         self.visuals_1d_ice_path: str = ''
         self.visuals_stats_ice_path: str = ''
         self.data_observations_2d_satellite_path: str = ''
         self.data_model_ice_path: str = ''
-
+        self.Neighborhood_Average: Any = False
+        self.Search_Radius: Any = 0
         self.model_source: str = ''
         self.config_file = None
 

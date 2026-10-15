@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLOFS Ice Skill Assessment Dashboard</title>
+    <style>
+        body {
+            font-family: 'Open Sans', Arial, sans-serif;
+            background-color: #f4f7f6;
+            color: #333;
+            margin: 0;
+            padding: 20px;
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        /* Navigation Tabs */
+        .tab-container {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 25px;
+            gap: 15px;
+        }
+        .tab-button {
+            padding: 12px 30px;
+            font-size: 16px;
+            font-weight: bold;
+            color: #2c3e50;
+            background-color: #e0e6ed;
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .tab-button.active {
+            background-color: #2980b9;
+            color: white;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        /* Scenario Sections */
+        .scenario-section {
+            display: none;
+        }
+        .scenario-section.active {
+            display: block;
+        }
+        /* Grid Layout */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
+            gap: 20px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            padding: 15px;
+            text-align: center;
+        }
+        .card.full-width {
+            grid-column: 1 / -1;
+        }
+        .card h2 {
+            font-size: 1.2rem;
+            color: #34495e;
+            margin-top: 0;
+        }
+        iframe {
+            width: 100%;
+            height: 650px;
+            border: none;
+        }
+        img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>Great Lakes OFS Ice Skill Assessment Dashboard</h1>
+
+    <!-- Scenario Switcher Tabs -->
+    <div class="tab-container">
+        <button class="tab-button active" onclick="switchScenario('weekly')">Weekly Assessment (Past 7 Days)</button>
+        <button class="tab-button" onclick="switchScenario('season')">Season-to-Date (11/01 to Date)</button>
+    </div>
+
+    <!-- ==================== WEEKLY SCENARIO ==================== -->
+    <div id="weekly-section" class="scenario-section active">
+        <div class="dashboard-grid">
+
+            <!-- 0. Summary Table -->
+            <div class="card full-width">
+                <h2>Summary Statistics</h2>
+                <iframe src="weekly/summary_table_ice_nowcast_all_GLOFS.html" style="height: 220px;"></iframe>
+            </div>
+
+            <!-- 1. Bar Plot -->
+            <div class="card">
+                <h2>System-Wide Skill Metrics (Bar Plot)</h2>
+                <iframe src="weekly/bars_ice_nowcast_all_GLOFS.html"></iframe>
+            </div>
+
+            <!-- 2. Scatter Plot -->
+            <div class="card">
+                <h2>Modeled vs. Observed Ice Concentration (Scatter)</h2>
+                <iframe src="weekly/scatter_ice_nowcast_all_GLOFS.html"></iframe>
+            </div>
+
+            <!-- 3. Ice Concentration / Skill Time Series -->
+            <div class="card full-width">
+                <h2>Ice Concentration & Skill Time Series Summary</h2>
+                <iframe src="weekly/series_ice_nowcast_all_GLOFS.html" style="height: 550px;"></iframe>
+            </div>
+
+            <!-- 4. Static Overview Maps -->
+            <div class="card">
+                <h2>Mean Observed Ice Concentration</h2>
+                <img src="weekly/map_ice_nowcast_continuous_obs.png" alt="Observed Ice Map">
+            </div>
+
+            <div class="card">
+                <h2>Mean Modeled Ice Concentration</h2>
+                <img src="weekly/map_ice_nowcast_continuous_mod.png" alt="Modeled Ice Map">
+            </div>
+
+            <div class="card">
+                <h2>RMSE Overview Map</h2>
+                <img src="weekly/map_ice_nowcast_continuous_rmse.png" alt="RMSE Map">
+            </div>
+
+            <div class="card">
+                <h2>CSI Overview Map</h2>
+                <img src="weekly/map_ice_nowcast_continuous_csi.png" alt="CSI Map">
+            </div>
+
+            <div class="card full-width">
+                <h2>Mean Error Overview Map (Model - Obs)</h2>
+                <img src="weekly/map_ice_nowcast_continuous_diff.png" alt="Mean Error Map">
+            </div>
+
+            <div class="card full-width">
+                <h2>Daily Error Evolution</h2>
+                <img src="weekly/animated_ice_nowcast_daily_diff.gif" alt="Daily Error GIF">
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== SEASON-TO-DATE SCENARIO ==================== -->
+    <div id="season-section" class="scenario-section">
+        <div class="dashboard-grid">
+
+            <!-- 0. Summary Table -->
+            <div class="card full-width">
+                <h2>Summary Statistics</h2>
+                <iframe src="season/summary_table_ice_nowcast_all_GLOFS.html" style="height: 220px;"></iframe>
+            </div>
+
+            <!-- 1. Bar Plot -->
+            <div class="card">
+                <h2>System-Wide Skill Metrics (Bar Plot)</h2>
+                <iframe src="season/bars_ice_nowcast_all_GLOFS.html"></iframe>
+            </div>
+
+            <!-- 2. Scatter Plot -->
+            <div class="card">
+                <h2>Modeled vs. Observed Ice Concentration (Scatter)</h2>
+                <iframe src="season/scatter_ice_nowcast_all_GLOFS.html"></iframe>
+            </div>
+
+            <!-- 3. Ice Concentration / Skill Time Series -->
+            <div class="card full-width">
+                <h2>Ice Concentration & Skill Time Series Summary</h2>
+                <iframe src="season/series_ice_nowcast_all_GLOFS.html" style="height: 550px;"></iframe>
+            </div>
+
+            <!-- 4. Static Overview Maps -->
+            <div class="card">
+                <h2>Mean Observed Ice Concentration</h2>
+                <img src="season/map_ice_nowcast_continuous_obs.png" alt="Observed Ice Map">
+            </div>
+
+            <div class="card">
+                <h2>Mean Modeled Ice Concentration</h2>
+                <img src="season/map_ice_nowcast_continuous_mod.png" alt="Modeled Ice Map">
+            </div>
+
+            <div class="card">
+                <h2>RMSE Overview Map</h2>
+                <img src="season/map_ice_nowcast_continuous_rmse.png" alt="RMSE Map">
+            </div>
+
+            <div class="card">
+                <h2>CSI Overview Map</h2>
+                <img src="season/map_ice_nowcast_continuous_csi.png" alt="CSI Map">
+            </div>
+
+            <div class="card full-width">
+                <h2>Mean Error Overview Map (Model - Obs)</h2>
+                <img src="season/map_ice_nowcast_continuous_diff.png" alt="Mean Error Map">
+            </div>
+
+            <div class="card full-width">
+                <h2>Daily Error Evolution</h2>
+                <img src="season/animated_ice_nowcast_daily_diff.gif" alt="Daily Error GIF">
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchScenario(scenario) {
+            // Hide all sections
+            document.querySelectorAll('.scenario-section').forEach(sec => sec.classList.remove('active'));
+            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+
+            // Activate selected scenario
+            if (scenario === 'weekly') {
+                document.getElementById('weekly-section').classList.add('active');
+                event.target.classList.add('active');
+            } else if (scenario === 'season') {
+                document.getElementById('season-section').classList.add('active');
+                event.target.classList.add('active');
+            }
+        }
+    </script>
+
+</body>
+</html>

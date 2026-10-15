@@ -74,6 +74,8 @@ def _process_daily_composite(prop, logger, list_files, list_days, ice_name, x_na
     """Process daily composite ice cover."""
     daily_composite_all = []
     list_files_datetime = file_name_to_datetime(list_files)
+    h_m = None  # Initialize bathymetry
+
     for day in list_days:
         logger.info('Making model daily average for %s', day)
         daystring = datetime.strftime(day, '%Y%m%d')
@@ -84,10 +86,32 @@ def _process_daily_composite(prop, logger, list_files, list_days, ice_name, x_na
             if os.path.exists(filepath):
                 df = pd.read_csv(filepath)
                 daily_composite, lon_m, lat_m = df['daily_composite'], df['lon'], df['lat']
+
+                # Read bathymetry from CSV if it exists, otherwise fetch and update the CSV
+                if 'h' in df.columns:
+                    h_m = df['h']
+                else:
+                    logger.info('Bathymetry missing in existing CSV. Fetching "h" to update %s', filename)
+                    date_indices = get_indices_for_day(list_files_datetime, day)
+                    if prop.model_source == 'schism':
+                        date_indices.append(date_indices[-1]+1)
+                    try:
+                        file_list_composite = [list_files[i] for i in date_indices]
+                    except IndexError:
+                        file_list_composite = [list_files[i] for i in date_indices[:-1]]
+
+                    concated_model = intake_scisa.intake_model(file_list_composite, prop, logger)
+                    try:
+                        h_m = np.asarray(concated_model.variables['h'][:])
+                    except KeyError:
+                        h_m = np.full_like(lon_m, np.nan)
+
+                    # Update existing CSV with the new 'h' column
+                    df['h'] = h_m
+                    df.to_csv(filepath, index=False)
             else:
                 raise FileNotFoundError()
         except (FileNotFoundError, pd.errors.EmptyDataError, KeyError):
-
             date_indices = get_indices_for_day(list_files_datetime, day)
             if prop.model_source == 'schism':
                 date_indices.append(date_indices[-1]+1)
@@ -98,19 +122,39 @@ def _process_daily_composite(prop, logger, list_files, list_days, ice_name, x_na
             concated_model = intake_scisa.intake_model(file_list_composite, prop, logger)
             if prop.model_source == 'schism':
                 concated_model = concated_model.sel(time=datetime.strftime(day,'%Y-%m-%d'))
+
             daily_composite = np.nanmean(np.asarray(concated_model.variables[ice_name][:]), axis=0)
             lon_m, lat_m = np.asarray(concated_model.variables[x_name][:]), np.asarray(concated_model.variables[y_name][:])
 
-            df_save = pd.DataFrame({'lon': lon_m, 'lat': lat_m, 'daily_composite': daily_composite})
+            # Extract bathymetry
+            try:
+                h_m = np.asarray(concated_model.variables['h'][:])
+            except KeyError:
+                if h_m is None:
+                    logger.warning('Bathymetry variable "h" not found in model files. Defaulting to NaN.')
+                h_m = np.full_like(lon_m, np.nan)
+
+            # Save full new composite CSV
+            df_save = pd.DataFrame({'lon': lon_m, 'lat': lat_m, 'h': h_m, 'daily_composite': daily_composite})
             df_save.to_csv(filepath, index=False)
 
         daily_composite_all.append(daily_composite)
+
     if prop.model_source == 'schism':
         transformer = Transformer.from_crs('EPSG:3174', 'EPSG:4326', always_xy=True)
         lon_m, lat_m = transformer.transform(lon_m, lat_m)
     else:
         lon_m = lon_m - 360
-    return np.stack(daily_composite_all), lon_m, lat_m, list_days
+
+    return np.stack(daily_composite_all), lon_m, lat_m, list_days, np.asarray(h_m) if h_m is not None else None
+
+    if prop.model_source == 'schism':
+        transformer = Transformer.from_crs('EPSG:3174', 'EPSG:4326', always_xy=True)
+        lon_m, lat_m = transformer.transform(lon_m, lat_m)
+    else:
+        lon_m = lon_m - 360
+
+    return np.stack(daily_composite_all), lon_m, lat_m, list_days, np.asarray(h_m) if h_m is not None else None
 
 
 def get_icecover_model(prop, logger):
@@ -144,17 +188,17 @@ def get_icecover_model(prop, logger):
             hour = 'out2d'
         list_files = [f for f in list_files if cycle in f and hour in f]
 
-    # Process daily averages if requested
+# Process daily averages if requested
     if prop.dailyavg and prop.ice_dt == 'daily':
         list_days = get_days_between_dates(
             datetime.strptime(prop.start_date_full, '%Y-%m-%dT%H:%M:%SZ'),
             datetime.strptime(prop.end_date_full, '%Y-%m-%dT%H:%M:%SZ'),
         )
-        icecover_m, lon_m, lat_m, time_m = _process_daily_composite(prop, logger, list_files, list_days, ice_name, x_name, y_name)
+        icecover_m, lon_m, lat_m, time_m, h_m = _process_daily_composite(prop, logger, list_files, list_days, ice_name, x_name, y_name)
         logger.info('Finished model daily averages!')
-        return icecover_m, lon_m, lat_m, time_m
+        return icecover_m, lon_m, lat_m, time_m, h_m
 
-    # Load model files
+# Load model files
     if len(list_files) == 0:
         logger.error('No model files to load!')
         sys.exit()
@@ -163,9 +207,15 @@ def get_icecover_model(prop, logger):
     concated_model = intake_scisa.intake_model(list_files, prop, logger)
 
     # Parse model output
-
     lon_m = np.asarray(concated_model.variables[x_name][:])
     lat_m = np.asarray(concated_model.variables[y_name][:])
+
+    # Extract bathymetry
+    try:
+        h_m = np.asarray(concated_model.variables['h'][:])
+    except KeyError:
+        logger.warning('Bathymetry variable "h" not found in model files. Defaulting to None.')
+        h_m = None
 
     if prop.model_source == 'schism':
         transformer = Transformer.from_crs('EPSG:3174', 'EPSG:4326', always_xy=True)
@@ -187,7 +237,7 @@ def get_icecover_model(prop, logger):
         time_m = time_m[hourly_indices]
         icecover_m = icecover_m[hourly_indices]
 
-    return icecover_m, lon_m, lat_m, time_m
+    return icecover_m, lon_m, lat_m, time_m, h_m
 
 
 def _build_properties(run_args):

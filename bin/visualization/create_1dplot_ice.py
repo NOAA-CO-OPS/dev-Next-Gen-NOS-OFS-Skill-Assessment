@@ -587,7 +587,7 @@ def create_1dplot_icestats(prop, time_all, logger):
             ss_ymin = np.floor(np.nanmin(dflist[i].SS))
             if ss_ymin > -1:
                 ss_ymin = -1
-        elif np.isnan(dflist[i].SS).all():
+        else:
             ss_ymin = -1
         fig.update_yaxes(
             title_text=title_text[2][i],

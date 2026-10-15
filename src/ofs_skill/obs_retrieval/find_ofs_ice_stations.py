@@ -20,9 +20,25 @@ from ofs_skill.obs_retrieval.ofs_inventory_stations import ofs_inventory_station
 from ofs_skill.skill_assessment import nos_metrics
 
 
+def haversine_distance_meters(lon1, lat1, lon2, lat2):
+    """
+    Calculate the great circle distance between two points
+    or arrays of points on the earth (specified in decimal degrees)
+    """
+    # Convert decimal degrees to radians
+    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
+
+    # Haversine formula
+    dlon = lon2 - lon1
+    dlat = lat2 - lat1
+    a = np.sin(dlat/2)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2)**2
+    c = 2 * np.arcsin(np.sqrt(a))
+    r = 6371000 # Radius of earth in meters
+    return c * r
+
 def find_ofs_ice_stations(
     prop, lon_m, lat_m, lon_o, lat_o, time_all_dt, time_all, icecover_o,
-    icecover_m, logger,
+    icecover_m, icecover_hist_2d, logger,
 ):
     '''
     This function spatially matches observation stations used in the main 1D
@@ -203,11 +219,12 @@ def find_ofs_ice_stations(
     ###
     # Do pseudo-ensemble/neighborhood methods by getting area of model output
     # around GLSEA analysis grid cell.
-    # Set search_radius = 0 if no neighborhood methods.
     ###
-    search_radius = 2
-    search_radius_arr = np.arange(3)
-    search_radius_min = []
+    # Use a flag from 'prop' to activate, defaulting to False.
+    # search_radius should now represent a distance in meters (e.g., 500)
+    use_neighborhood = getattr(prop, 'Neighborhood_Average', False)
+    search_radius = getattr(prop, 'Search_Radius', 500) if use_neighborhood else 0
+
     ###
     # Stats and plotting below
     ###
@@ -225,10 +242,6 @@ def find_ofs_ice_stations(
     xm_all = []
     ym_all = []
     name_all = []
-    # datestrend = str(time_all[len(time_all)-1]).split()
-    # datestrbegin = str(time_all[0]).split()
-    # title = prop.ofs.upper()+' '+prop.whichcast+' '+datestrbegin[0]+' to '+\
-    #     datestrend[0]
     for i in range(len(inventory['Name'])):
         if obs_rowcol[i, 0] != -999 and obs_rowcol[i, 1] != -999 and \
             mod_rowcol[i] != -999:
@@ -241,44 +254,59 @@ def find_ofs_ice_stations(
             ym_all.append(mod_xy[i][1])
             name_all.append(inventory['Name'].at[i])
 
-            rmse_neigh = []
             # Extract cell-to-cell time series
             obs_series = np.array(
                 icecover_o[:, obs_rowcol[i, 0], obs_rowcol[i, 1]])
             mod_series = np.array(icecover_m[:, mod_rowcol[i]]*100)
+            clim_series = np.array(
+                icecover_hist_2d[:, obs_rowcol[i, 0], obs_rowcol[i, 1]])
+            # Initialize standard deviation arrays
             mod_std = np.array(mod_series*0)
+            obs_std = np.array(obs_series*0)
             ###
-            # Apply search radius
+            # Apply search radius using Origin Lat/Lon in Meters
             ###
             if search_radius > 0:
-                for j in range(len(search_radius_arr)):
-                    ncells = ((search_radius_arr[j]*2)+1)**2
-                    ###
-                    # Model neighborhood
-                    ###
-                    modtarget = modellonlat[mod_rowcol[i], :]
-                    moddistances = np.linalg.norm(
-                        modellonlat-modtarget,
-                        axis=1,
-                    )
-                    modindex = np.argpartition(moddistances, ncells)[0:ncells]
-                    ens_mod_series = np.array(icecover_m[:, modindex]*100)
-                    mod_series_temp = np.nanmean(ens_mod_series, axis=1)
-                    mod_std_temp = np.nanstd(ens_mod_series, axis=1)
-                    rmse_neigh_temp = (
-                        np.sqrt(
-                            np.nanmean(
-                                (
-                                    mod_series_temp-obs_series
-                                )**2,
-                            ),
-                        )
-                    )
-                    rmse_neigh.append(rmse_neigh_temp)
-                    if search_radius_arr[j] == search_radius:
-                        # mod_series = mod_series_temp
-                        mod_std = mod_std_temp
-                search_radius_min.append(np.argmin(rmse_neigh))
+                # --- Model Neighborhood by Haversine Distance ---
+                mod_lon_origin = modellonlat[mod_rowcol[i], 0]
+                mod_lat_origin = modellonlat[mod_rowcol[i], 1]
+
+                # Calculate distance from origin to all model nodes in meters
+                moddistances = haversine_distance_meters(
+                    mod_lon_origin, mod_lat_origin,
+                    modellonlat[:, 0], modellonlat[:, 1]
+                )
+
+                # Find all model nodes within the search_radius (in meters)
+                modindex = np.where(moddistances <= search_radius)[0]
+
+                if len(modindex) > 0:
+                    ens_mod_series = np.array(icecover_m[:, modindex] * 100)
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore', category=RuntimeWarning)
+                        mod_series = np.nanmean(ens_mod_series, axis=1)
+                        mod_std = np.nanstd(ens_mod_series, axis=1)
+
+                # --- Observation Neighborhood by Haversine Distance ---
+                obs_lat_origin = lat_o[obs_rowcol[i, 0], 0]
+                obs_lon_origin = lon_o[0, obs_rowcol[i, 1]]
+
+                obsdistances = haversine_distance_meters(
+                    obs_lon_origin, obs_lat_origin,
+                    obslonlat[:, 0], obslonlat[:, 1]
+                )
+
+                # Find all observation grid points within the search_radius (in meters)
+                obsindex_flat = np.where(obsdistances <= search_radius)[0]
+
+                if len(obsindex_flat) > 0:
+                    icecover_o_flat = icecover_o.reshape(icecover_o.shape[0], -1)
+                    ens_obs_series = icecover_o_flat[:, obsindex_flat]
+
+                    with warnings.catch_warnings():
+                        warnings.simplefilter('ignore', category=RuntimeWarning)
+                        obs_series = np.nanmean(ens_obs_series, axis=1)
+                        obs_std = np.nanstd(ens_obs_series, axis=1)
 
             # Calculate stats
             badnans = ~isnan(obs_series) * ~isnan(mod_series)
@@ -326,7 +354,9 @@ def find_ofs_ice_stations(
                         'DateTime': time_all_dt,
                         'OBS': obs_series,
                         'OFS': mod_series,
-                        'STDEV': mod_std,
+                        'OBS_STDEV': obs_std,
+                        'OFS_STDEV': mod_std,
+                        'CLIM': clim_series,
                     },
                 ).to_csv(
                     r'' + f'{prop.data_skill_ice1dpair_path}/'

@@ -89,7 +89,7 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
     The 'cubehelix' palette linearly varies hue AND intensity
     so that colors can be distingushed by colorblind users or in greyscale.
     '''
-    ncolors = (len(prop.whichcasts)*1) + 1
+    ncolors = (len(prop.whichcasts)*1) + 2
     palette, palette_rgb = make_cubehelix_palette(ncolors, 2.5, 0.9, 0.65)
     # Observations are dashed, while model now/forecasts are solid (default)
     obslinestyle = 'solid'
@@ -104,7 +104,8 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
     #                 #len(prop.whichcasts) * 0.1
     #                 ]
     xaxis_share = True
-    neighborhood = False
+    # Check if neighborhood stats are available/enabled
+    neighborhood = getattr(prop, 'Neighborhood_Average', hasattr(now_fores_paired[0], 'OBS_STDEV'))
 
     # Create figure
     fig = make_subplots(
@@ -129,6 +130,53 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
             ),
         ), 1, 1,
     )
+    if neighborhood and hasattr(now_fores_paired[0], 'OBS_STDEV'):
+        obs_stdevup = now_fores_paired[0].OBS + now_fores_paired[0].OBS_STDEV
+        obs_stdevup[obs_stdevup > 100] = 100
+        obs_stdevdown = now_fores_paired[0].OBS - now_fores_paired[0].OBS_STDEV
+        obs_stdevdown[obs_stdevdown < 0] = 0
+
+        fig.add_trace(
+            go.Scatter(
+                x=list(now_fores_paired[0].DateTime),
+                y=list(obs_stdevup),
+                name=obsname + ' +1 sigma',
+                hovertemplate='skip',
+                mode='lines', line=dict(
+                    color=palette[0],
+                    width=0,
+                ),
+                showlegend=False,
+            ), 1, 1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=list(now_fores_paired[0].DateTime),
+                y=list(obs_stdevdown),
+                name=obsname + ' -1 sigma',
+                hovertemplate='skip',
+                mode='lines', line=dict(
+                    color=palette[0],
+                    width=0,
+                ),
+                fillcolor=f'rgba({palette_rgb[0][0]*255},{palette_rgb[0][1]*255},{palette_rgb[0][2]*255},0.1)',
+                fill='tonexty',
+                showlegend=False,
+            ), 1, 1,
+        )
+    if hasattr(now_fores_paired[0], 'CLIM'):
+        fig.add_trace(
+            go.Scatter(
+                x=list(now_fores_paired[0].DateTime),
+                y=list(now_fores_paired[0].CLIM),
+                name='Long-Term Climatology',
+                hovertemplate='%{y:.2f}',
+                mode='lines',
+                opacity=lineopacity,
+                line=dict(color='gray', width=1, dash='dot'),
+                legendgroup='climatology'
+            ), 1, 1,
+        )
 
     # Set legend for target error ranges
     #showlegend = [True, False, False]
@@ -169,9 +217,9 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
             ), 1, 1,
         )
         if neighborhood:
-            stdevup = now_fores_paired[i].OFS + now_fores_paired[i].STDEV
+            stdevup = now_fores_paired[i].OFS + now_fores_paired[i].OFS_STDEV
             stdevup[stdevup > 100] = 100
-            stdevdown = now_fores_paired[i].OFS - now_fores_paired[i].STDEV
+            stdevdown = now_fores_paired[i].OFS - now_fores_paired[i].OFS_STDEV
             stdevdown[stdevdown < 0] = 0
             fig.add_trace(
                 go.Scatter(
@@ -180,7 +228,7 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
                     # Updated hover text to show Obs/Fore/Now values
                     # instead of bias as per user comments
                     name=seriesname.split(' ')[1] + ' +1 sigma',
-                    hovertemplate='%{y:.2f}',
+                    hovertemplate='skip',
                     mode='lines', line=dict(
                         color=palette[i+1],
                         width=0,
@@ -195,7 +243,7 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
                     # Updated hover text to show Obs/Fore/Now values
                     # instead of bias as per user comments
                     name=seriesname.split(' ')[1] + ' -1 sigma',
-                    hovertemplate='%{y:.2f}',
+                    hovertemplate='skip',
                     mode='lines', line=dict(
                         color=palette[i+1],
                         width=0,
@@ -302,55 +350,6 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
         ), 2, 1,
     )
 
-        # ann_text1 = ''
-        # ann_text2 = ''
-        # fig.add_hline(
-        #     y=0, line_width=1,
-        #     line_color='black',
-        #     # line_dash='dash',
-        #     row=2, col=1,
-        # )
-        # fig.add_hline(
-        #     y=X1, line_color='black',
-        #     line_width=0,
-        #     # line_dash='dash',
-        #     annotation_text=ann_text1,
-        #     annotation_position='bottom left',
-        #     annotation_font_color='black',
-        #     annotation_font_size=12,
-        #     row=2, col=1,
-        # )
-        # fig.add_hline(
-        #     y=-X1, line_color='black',
-        #     line_width=0,
-        #     # line_dash='dash',
-        #     annotation_text=ann_text1,
-        #     annotation_position='top right',
-        #     annotation_font_color='black',
-        #     annotation_font_size=12,
-        #     row=2, col=1,
-        # )
-        # fig.add_hline(
-        #     y=X1*2, line_color='black',
-        #     line_width=0,
-        #     # line_dash='dash',
-        #     annotation_text=ann_text2,
-        #     annotation_position='bottom left',
-        #     annotation_font_color='black',
-        #     annotation_font_size=12,
-        #     row=2, col=1,
-        # )
-        # fig.add_hline(
-        #     y=-X1*2, line_color='black',
-        #     line_width=0,
-        #     # line_dash='dash',
-        #     annotation_text=ann_text2,
-        #     annotation_position='top right',
-        #     annotation_font_color='black',
-        #     annotation_font_size=12,
-        #     row=2, col=1,
-        # )
-
     # Figure Config
     figheight = 600
     figwidth = 900
@@ -393,7 +392,7 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
     # otherwise overlaps the title. Use the same formula as the scalar
     # and vector plots (60% of their base since the ice figure is 600
     # px tall vs 700 px and starts narrower).
-    tmargin = 120 + 30 * max(0, len(prop.whichcasts) - 1)
+    tmargin = 150 + 30 * max(0, len(prop.whichcasts) - 1)
     fig.update_layout(
         transition_ordering='traces first', dragmode='zoom',
         hovermode='x unified', height=figheight, width=figwidth,
