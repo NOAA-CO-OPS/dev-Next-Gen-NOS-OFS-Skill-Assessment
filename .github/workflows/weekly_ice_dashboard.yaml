@@ -40,7 +40,7 @@ jobs:
           END_DATE="2026-02-08T23:59:59Z"
 
           echo "=== RUNNING WEEKLY SCENARIO ($WEEKLY_START to $END_DATE) ==="
-          python bin/skill_assessment/do_iceskill_all_GLOFS_2.py \
+          python bin/utils/do_iceskill_all_GLOFS_2.py \
             -p ./ \
             -s $WEEKLY_START \
             -e $END_DATE \
@@ -60,7 +60,7 @@ jobs:
           END_DATE="2026-02-08T23:59:59Z"
 
           echo "=== RUNNING SEASON-TO-DATE SCENARIO ($SEASON_START to $END_DATE) ==="
-          python bin/skill_assessment/do_iceskill_all_GLOFS_2.py \
+          python bin/utils/do_iceskill_all_GLOFS_2.py \
             -p ./ \
             -s $SEASON_START \
             -e $END_DATE \
