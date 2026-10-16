@@ -296,6 +296,42 @@ def dataset_time_bounds(dataset):
     return None
 
 
+def filename_key_time_bounds(path, window):
+    """Return (first, last) datetimes recorded in a model filename key.
+
+    ``get_node_ofs`` writes ``{ofs}_{whichcast}_filename_key.csv`` with
+    the full time index of the dataset it extracted from, so on a rerun
+    whose model is not loaded yet the key is the one record of what the
+    catalog provided last time. Returns ``None`` when the file is
+    missing or unreadable, or when its span does not overlap ``window``
+    (a key left by a run over some other period says nothing about this
+    one, and must not narrow the check for it).
+
+    The key records what the catalog provided when it was written, not
+    what it provides now (model files restored to the archive since, or
+    a run over a user-chosen subset of files, are not reflected):
+    callers should treat its start as the earliest data a rerun can
+    expect, and its end as nothing more than where the last run stopped.
+    """
+    if window is None or not path or not os.path.isfile(path):
+        return None
+    try:
+        # Local import keeps this module import-light for CLI --help.
+        import pandas as pd  # pylint: disable=import-outside-toplevel
+        stamps = pd.to_datetime(
+            pd.read_csv(path, usecols=['DateTime'])['DateTime'],
+            errors='coerce').dropna()
+    except (OSError, ValueError, KeyError, ImportError):
+        return None
+    if stamps.empty:
+        return None
+    first = stamps.min().to_pydatetime().replace(tzinfo=None)
+    last = stamps.max().to_pydatetime().replace(tzinfo=None)
+    if first > window[1] or last < window[0]:
+        return None
+    return first, last
+
+
 def clamp_window_to_coverage(window, bounds, logger=None, label=None):
     """Clamp a requested run window to what the model catalog provides.
 
