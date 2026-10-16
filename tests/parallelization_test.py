@@ -148,6 +148,13 @@ class TestParallelConfig:
         assert isinstance(config['obs_coops_workers'], int)
         assert config['obs_coops_workers'] >= 1
 
+    def test_forecast_cycle_key_removed(self):
+        """The forecast_a cycle fan-out was removed (issue #110), so its
+        config switch must not linger as an unread key."""
+        from ofs_skill.obs_retrieval.utils import get_parallel_config
+
+        assert 'parallel_forecast_cycles' not in get_parallel_config(logger)
+
     def test_config_worker_counts_positive(self):
         """All worker counts should be positive integers."""
         from ofs_skill.obs_retrieval.utils import get_parallel_config
