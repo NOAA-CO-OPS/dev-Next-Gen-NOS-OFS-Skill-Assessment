@@ -1065,7 +1065,8 @@ def create_1dplot(prop, logger):
 
     # Continuation-run guards. Both excluded modes key their artifacts on
     # something other than the assessment window -- forecast_a reshuffles
-    # the window per cycle and puts forecast_hr in the .prd name, and
+    # the window around the requested cycle and puts forecast_hr in the
+    # .prd name, and
     # forecast-horizon runs write per-cycle CSVs instead of .prd files --
     # so 'the tail missing from this window' is not a question either one
     # can answer. Fall back to normal behavior rather than half-applying.
