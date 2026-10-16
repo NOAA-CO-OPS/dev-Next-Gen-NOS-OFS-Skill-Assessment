@@ -1720,6 +1720,10 @@ def get_skill(prop, logger):
                 'ctl file!. This might take a couple of minutes'
             )
             get_station_observations(p, logger)
+            # Building the ctl file re-fetches every station, and a
+            # signature-stale .obs is rewritten in place on the way, so
+            # no parse from before this call may be served again.
+            _clear_obs_frame_cache()
         read_station_ctl_file = \
             station_ctl_file_extract(ctl_path)
 
