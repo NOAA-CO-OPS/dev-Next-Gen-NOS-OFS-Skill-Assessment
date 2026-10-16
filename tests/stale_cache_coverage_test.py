@@ -39,11 +39,11 @@ import pandas as pd
 import pytest
 
 from ofs_skill.utils.timeseries_coverage import (
-    _row_datetime,
     covers_run_window,
     parse_run_window,
     read_first_last_timestamps,
     remove_stale_artifact,
+    row_datetime,
 )
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -97,7 +97,7 @@ def _read_first_last_full_scan(path):
     try:
         with open(path, encoding='utf-8') as file_handle:
             for line in file_handle:
-                stamp = _row_datetime(line)
+                stamp = row_datetime(line)
                 if stamp is None:
                     continue
                 if first is None:
