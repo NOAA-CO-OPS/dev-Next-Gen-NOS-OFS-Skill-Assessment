@@ -189,6 +189,7 @@ skip_empty = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src", "."]
 python_files = ["test_*.py", "*_test.py"]
 python_functions = ["test_*"]
 addopts = "--verbose --cov=src/ofs_skill --cov-report=html --cov-report=term-missing"
