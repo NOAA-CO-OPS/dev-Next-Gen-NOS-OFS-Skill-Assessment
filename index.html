@@ -119,12 +119,18 @@
             flex: 1;
             min-width: 200px;
             max-width: 250px;
-            border-top: 4px solid #00A9E0;
+            border-top: 4px solid #ccc;
         }
+        #card-csi { border-top-color: #e00061; }    /* Cerulean */
+        #card-rmse { border-top-color: #7367c1; }   /* Purple */
+        #card-obs { border-top-color: #17becf; }    /* Teal */
+        #card-mod { border-top-color: #f1913e; }    /* Orange */
+        #card-clim { border-top-color: #31b57e; }   /* Green */
+
         .kpi-card h3 {
             margin: 0;
             font-size: 0.9rem;
-            color: #666;
+            color: #060606;
             font-weight: 400;
         }
         .kpi-card .kpi-value {
@@ -356,23 +362,23 @@
 
     <!-- KPI Scorecard Row -->
     <div class="kpi-row" id="kpi-container">
-        <div class="kpi-card">
+        <div class="kpi-card" id="card-csi">
             <h3>Overall System CSI</h3>
             <div class="kpi-value" id="kpi-csi">--</div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card" id="card-rmse">
             <h3>Average RMSE</h3>
             <div class="kpi-value" id="kpi-rmse">--</div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card" id="card-obs">
             <h3>NIC Observed Ice</h3>
             <div class="kpi-value" id="kpi-obs-ice">--</div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card" id="card-mod">
             <h3>OFS Modeled Ice</h3>
             <div class="kpi-value" id="kpi-mod-ice">--</div>
         </div>
-        <div class="kpi-card">
+        <div class="kpi-card" id="card-clim">
             <h3>Climatology Mean</h3>
             <div class="kpi-value" id="kpi-clim-ice">--</div>
         </div>
@@ -385,7 +391,7 @@
             <!-- 1. Summary Table -->
             <div class="card full-width">
                 <h2>
-                    Summary Statistics
+                    Mean Summary Statistics&nbsp;<span id="summary-date-range" style="font-weight: 300; font-size: 1.05rem; color: #666;"></span>
                     <span class="tooltip">?<span class="tooltiptext">Top-level metrics aggregated across the OFS and selected time period. CSI measures spatial accuracy, and is the percent of observed and modeled ice that overlaps; a score of 100 means perfect overlap.</span></span>
                 </h2>
                 <div class="iframe-container" style="height: 220px;">
@@ -571,6 +577,13 @@
                         document.getElementById('kpi-obs-ice').innerText = data.obs_ice;
                         document.getElementById('kpi-mod-ice').innerText = data.mod_ice;
                         document.getElementById('kpi-clim-ice').innerText = data.clim_ice;
+
+                        // Populate the summary table header date range
+                        if(data.date_range) {
+                            document.getElementById('summary-date-range').innerText = `(${data.date_range})`;
+                        } else {
+                            document.getElementById('summary-date-range').innerText = "";
+                        }
                     })
                     .catch(error => console.error('Error loading KPIs:', error));
 

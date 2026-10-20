@@ -95,13 +95,22 @@ def export_kpi_json(df_ofs, prop, cast, logger):
     system_mod = get_weighted_avg(df_ofs, 'mod_meanicecover')
     system_clim = get_weighted_avg(df_ofs, 'icecover_hist')
 
+    # Determine date range string
+    start_date = getattr(prop, 'start_date_scorecard', '')
+    end_date = getattr(prop, 'end_date_scorecard', '')
+    if start_date and end_date and start_date != end_date:
+        date_str = f'{start_date} - {end_date}'
+    else:
+        date_str = start_date
+
     # Format the data into a dictionary
     kpi_data = {
         'csi': f'{system_csi:.2f}',
         'rmse': f'{system_rmse:.1f}%',
         'obs_ice': f'{system_obs:.1f}%',
         'mod_ice': f'{system_mod:.1f}%',
-        'clim_ice': f'{system_clim:.1f}%'
+        'clim_ice': f'{system_clim:.1f}%',
+        'date_range': date_str
     }
 
     # Save to JSON in the visuals folder
@@ -116,14 +125,31 @@ def make_overview_map(df1, df2, prop, cast, logger):
     Creates continuous geographic Matplotlib maps of the Great Lakes showing
     Observed, Modeled, RMSE, CSI Hits, and Mean Error using pcolor by pulling from the exported JSON map files.
     '''
-    map_configs = [
-        {'var': 'obs', 'suffix': 'mean_iceconc_obs.json', 'title': 'Mean NIC Ice Conc. (%)', 'cmap': 'Blues_r', 'vmin': 0, 'vmax': 100},
-        {'var': 'mod', 'suffix': 'mean_iceconc_mod.json', 'title': 'Mean OFS Ice Conc. (%)', 'cmap': 'Purples_r', 'vmin': 0, 'vmax': 100},
-        {'var': 'clim', 'suffix': 'mean_iceconc_clim.json', 'title': 'Mean Climatology (%)', 'cmap': 'Greens_r', 'vmin': 0, 'vmax': 100},
-        {'var': 'rmse', 'suffix': 'rmse.json', 'title': 'RMSE (%)', 'cmap': 'plasma', 'vmin': 0, 'vmax': 100},
-        {'var': 'csi', 'suffix': 'csi_hit.json', 'title': 'CSI Hit Rate (%)', 'cmap': 'brg', 'vmin': 0, 'vmax': 100},
-        {'var': 'diff', 'suffix': 'mean_error.json', 'title': 'Mean Error (%)', 'cmap': 'Spectral', 'vmin': -100, 'vmax': 100}
-    ]
+
+    # First, determine if this is a single day run by checking the json output folder
+    json_pattern_diff = os.path.join(prop.visuals_json_maps_ice_path, f'*_{cast}_daily_diff.json')
+    daily_files = glob.glob(json_pattern_diff)
+    is_single_day = len(daily_files) == 1
+
+    # Define prefixes/suffixes based on run length
+    if is_single_day:
+        date_prefix = os.path.basename(daily_files[0]).split(f'-lmhofs_{cast}')[0] # Grab date from filename
+        map_configs = [
+            {'var': 'obs', 'suffix': 'obs.json', 'prefix': f'{date_prefix}-', 'title': 'NIC Ice Conc. (%)', 'cmap': 'Blues_r', 'vmin': 0, 'vmax': 100},
+            {'var': 'mod', 'suffix': 'mod.json', 'prefix': f'{date_prefix}-', 'title': 'OFS Ice Conc. (%)', 'cmap': 'Purples_r', 'vmin': 0, 'vmax': 100},
+            {'var': 'clim', 'suffix': 'clim.json', 'prefix': f'{date_prefix}-', 'title': 'Climatology (%)', 'cmap': 'Greens_r', 'vmin': 0, 'vmax': 100},
+            {'var': 'diff', 'suffix': 'daily_diff.json', 'prefix': f'{date_prefix}-', 'title': 'Error (%)', 'cmap': 'Spectral', 'vmin': -100, 'vmax': 100}
+        ]
+        logger.info(f'Single day detected ({date_prefix}). Plotting discrete maps...')
+    else:
+        map_configs = [
+            {'var': 'obs', 'suffix': '*--*_map_mean_iceconc_obs.json', 'prefix': '', 'title': 'Mean NIC Ice Conc. (%)', 'cmap': 'Blues_r', 'vmin': 0, 'vmax': 100},
+            {'var': 'mod', 'suffix': '*--*_map_mean_iceconc_mod.json', 'prefix': '', 'title': 'Mean OFS Ice Conc. (%)', 'cmap': 'Purples_r', 'vmin': 0, 'vmax': 100},
+            {'var': 'clim', 'suffix': '*--*_map_mean_iceconc_clim.json', 'prefix': '', 'title': 'Mean Climatology (%)', 'cmap': 'Greens_r', 'vmin': 0, 'vmax': 100},
+            {'var': 'rmse', 'suffix': '*--*_map_rmse.json', 'prefix': '', 'title': 'RMSE (%)', 'cmap': 'plasma', 'vmin': 0, 'vmax': 100},
+            {'var': 'csi', 'suffix': '*--*_map_csi_hit.json', 'prefix': '', 'title': 'CSI Hit Rate (%)', 'cmap': 'brg', 'vmin': 0, 'vmax': 100},
+            {'var': 'diff', 'suffix': '*--*_map_mean_error.json', 'prefix': '', 'title': 'Mean Error (%)', 'cmap': 'Spectral', 'vmin': -100, 'vmax': 100}
+        ]
 
     ll_lon, ll_lat = -92.5, 41.0
     ur_lon, ur_lat = -75.5, 49.0
@@ -155,6 +181,7 @@ def make_overview_map(df1, df2, prop, cast, logger):
             title_date = f"{getattr(prop, 'start_date_scorecard', '')}"
         else:
             title_date = f"{getattr(prop, 'start_date_scorecard', '')} - {getattr(prop, 'end_date_scorecard', '')}"
+
         # Build the title string safely
         ax.set_title(f'{title_cast}\n{title_date}',
                      fontsize=16, pad=15)
@@ -172,7 +199,8 @@ def make_overview_map(df1, df2, prop, cast, logger):
         pcm = None
 
         for ofs in df1['ofs']:
-            json_pattern = os.path.join(prop.visuals_json_maps_ice_path, f"{ofs}_{cast}_*--*_map_{config['suffix']}")
+            # Use dynamic pattern based on single vs multi-day run
+            json_pattern = os.path.join(prop.visuals_json_maps_ice_path, f"{config['prefix']}{ofs}_{cast}_{config['suffix']}")
             matching_files = glob.glob(json_pattern)
 
             if matching_files:

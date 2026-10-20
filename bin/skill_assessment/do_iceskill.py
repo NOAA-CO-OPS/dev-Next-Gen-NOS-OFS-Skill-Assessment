@@ -753,7 +753,7 @@ def do_iceskill(prop, logger):
                 make_ice_map.make_ice_map(prop, lon_o, lat_o, xo, yo, mapdata, time_all[i], 'daily', logger)
 
             # Final Step: Aggregate 2D Stats
-            if i == len(time_all)-1 and dayrange >= 5:
+            if i == len(time_all)-1 and dayrange >= 1:
                 logger.info('Calculating cumulative 2D maps...')
 
                 # Stack arrays for fast vectorized processing
@@ -871,8 +871,8 @@ def do_iceskill(prop, logger):
                     plt.close('all')
                     logger.info('Box plots complete!')
 
-            elif i == len(time_all)-1 and dayrange < 5:
-                logger.info('Day range is < 5, so no maps or cumulative stats!')
+            elif i == len(time_all)-1 and dayrange < 1:
+                logger.info('Day range is < 1, so no maps or cumulative stats!')
 
         # Before plotting, make pandas dataframe with stats time series
         logger.info('Compiling time series stats for table output...')
@@ -904,7 +904,7 @@ def do_iceskill(prop, logger):
             prop.start_date_full = prop.oldstartdate
 
     if shouldimakeplots:
-        if dayrange >= 5:
+        if dayrange >= 2:
             create_1dplot_ice.create_1dplot_icestats(prop, time_all, logger)
             create_1dplot_ice.create_1dplot_ice(prop, inventory, time_all, logger)
         else:
