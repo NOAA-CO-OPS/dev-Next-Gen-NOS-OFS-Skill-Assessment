@@ -2126,7 +2126,6 @@ def get_node_ofs(prop, logger, model_dataset=None):
                         'must be present! Exiting...',
                         control_file,
                     )
-                    sys.exit()
 
                 if os.path.isfile(control_file) and os.path.getsize(control_file) > 0: # Gets size of obs ctl file!
                     ofs_ctlfile = ofs_ctlfile_extract(
