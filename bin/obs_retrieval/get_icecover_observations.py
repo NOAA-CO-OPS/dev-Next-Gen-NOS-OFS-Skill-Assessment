@@ -200,8 +200,10 @@ def masksat_by_ofs(sat_path, shape_file, prop):
     masked_sat = sat_nc.where(mask_sat == 0)
 
     # Now mask 2D climatology dataset
-    filename = utils.resolve_asset_path(prop.path, 'conf', 'gl_2d_clim.npy')
-    gl_clim = np.load(filename,allow_pickle=True)
+    filename = utils.resolve_asset_path(prop.path, 'conf', 'gl_2d_clim.nc')
+    with xr.open_dataset(filename) as ds:
+        var_name = list(ds.data_vars)[0]
+        gl_clim = ds[var_name].values
     lat_all = np.array(sat_nc.variables['lat'][:])
     lon_all = np.array(sat_nc.variables['lon'][:])
     latindex = np.where(np.logical_and(lat_all>=miny, lat_all<=maxy))

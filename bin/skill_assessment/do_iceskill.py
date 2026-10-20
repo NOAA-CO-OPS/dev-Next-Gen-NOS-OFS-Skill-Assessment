@@ -203,10 +203,14 @@ def ice_climatology(prop, time_all_dt, ice_clim):
     dfsubset = df.iloc[dateindex]
     icecover_hist = dfsubset[prop.ofs.removesuffix('2')].to_numpy()
 
-    # Now do 2D
-    filename = utils.resolve_asset_path(prop.path, 'conf', 'unique_dates.csv')
-    clim_dates = pd.read_csv(filename)
-    uniq = clim_dates['unique_dates'].tolist()
+    # Now do 2D (generated internally)
+    num_days = ice_clim.shape[0]
+    # Use a leap year (e.g., 2020) if the 2D climatology array has 366 days, otherwise a standard year (2021)
+    base_year = 2020 if num_days == 366 else 2021
+
+    # Generate the date range and format as 'M-D' (e.g., '1-1', '12-31') to match the datesstr logic
+    date_range = pd.date_range(start=f'{base_year}-01-01', periods=num_days)
+    uniq = [f'{d.month}-{d.day}' for d in date_range]
 
     # Get climatology days that correspond to time_all_dt
     slices = []
@@ -274,12 +278,8 @@ def pair_ice(
     icecover_o_pair = np.stack(icecover_o_pair)
     icecover_m_pair = np.stack(icecover_m_pair)
 
-    # Load climatology
-    icecover_hist = None
-    icecover_hist_2d = None
-    if prop.ice_dt == 'daily':
-        icecover_hist, icecover_hist_2d =\
-            ice_climatology(prop, time_all_dt, ice_clim)
+    # Load climatology (now active for both daily and hourly)
+    icecover_hist, icecover_hist_2d = ice_climatology(prop, time_all_dt, ice_clim)
 
     return icecover_o_pair, icecover_m_pair, time_all, \
         time_all_dt, icecover_hist, icecover_hist_2d
@@ -411,6 +411,14 @@ def do_iceskill(prop, logger):
     if prop.dailyavg is None:
         prop.dailyavg = False
 
+    # Enforce mutual exclusivity for Target Horizon and Daily Average
+    if getattr(prop, 'target_horizon', None) is not None and prop.dailyavg:
+        logger.error(
+            'The Target Horizon (-th) and Daily Average (-da) arguments '
+            'cannot be used together. Please choose one or the other. Au revoir!'
+        )
+        sys.exit(-1)
+
     # Directory tree set-up
     # stats csv files
     prop.data_skill_stats_path = os.path.join(
@@ -472,20 +480,39 @@ def do_iceskill(prop, logger):
 
     #########################################################
 
-    # Constants:
-    brdr = 0.2                          # margin for plotting
-    shouldimakemaps = True  # Should i make maps?
-    shouldimakeplots = True  # Should i make plots?
-    dailyplotdays = 10  # Number of days before end date to start making daily plots.
-    seasonrun = 'yes'  # Run for the current ice season?
+    # Read variables from configuration
+    ice_params = utils.Utils(_conf).read_config_section('ice_skill_settings', logger) or {}
 
-    # Ice SA related settings and thresholds:
-    threshold_exte = 10    # threshold ice concentration in % at for ice extent
-    stathresh = 1           # threshold for stats & calcs
+    shouldimakemaps = str(ice_params.get('shouldimakemaps', 'True')).lower() == 'true'
+    shouldimakeplots = str(ice_params.get('shouldimakeplots', 'True')).lower() == 'true'
+    dailyplotdays = int(ice_params.get('dailyplotdays', 10))
+    threshold_exte = float(ice_params.get('threshold_exte', 10))
+    stathresh = float(ice_params.get('stathresh', 1))
+
+    # Store output rendering flags in prop to pass to make_ice_map
+    prop.makestatic = str(ice_params.get('makestatic', 'False')).lower() == 'true'
+    prop.makejson = str(ice_params.get('makejson', 'True')).lower() == 'true'
+
+    # Hardcoded Constants:
+    brdr = 0.2                          # margin for plotting
+    seasonrun = 'yes'                   # Run for the current ice season?
 
     # CHECK ice_dt and daily average settings.
     if prop.ice_dt != 'daily' and prop.dailyavg is True:
         prop.dailyavg = False
+
+    # Expand whichcasts if multiple target horizons are provided
+    expanded_casts = []
+    target_horizons = getattr(prop, 'target_horizon', None)
+
+    for cast in prop.whichcasts:
+        if 'forecast' in cast.lower() and isinstance(target_horizons, list):
+            for hr in target_horizons:
+                expanded_casts.append(f'{cast.lower()}_{hr:03d}h')
+        else:
+            expanded_casts.append(cast.lower())
+
+    prop.whichcasts = expanded_casts
 
     ########################################################
     # Loop through whichcasts --> GO!
@@ -737,6 +764,10 @@ def do_iceskill(prop, logger):
                 # Generate global masks to hide open water across the entire time period
                 ice_mask = np.nanmax(obs_stack + mod_stack, axis=0) >= stathresh
                 openwater_mask = np.where(ice_mask, 1, np.nan)
+                obs_mask = np.nanmax(obs_stack, axis=0) >= stathresh
+                obs_mask = np.where(obs_mask, 1, np.nan)
+                mod_mask = np.nanmax(mod_stack, axis=0) >= stathresh
+                mod_mask = np.where(mod_mask, 1, np.nan)
 
                 ext_mask = np.nanmax(obs_stack + mod_stack, axis=0) >= threshold_exte
                 openwater_ext_mask = np.where(ext_mask, 1, np.nan)
@@ -749,9 +780,13 @@ def do_iceskill(prop, logger):
                     ice_2d_stats['obsmoddiff_allmax'] = np.nanmax(obsmoddiff_stack, axis=0) * openwater_mask
                     ice_2d_stats['obsmoddiff_allmin'] = np.nanmin(obsmoddiff_stack, axis=0) * openwater_mask
 
-                    ice_2d_stats['obs_allmean'] = np.nanmean(obs_stack, axis=0) * openwater_mask
-                    ice_2d_stats['mod_allmean'] = np.nanmean(mod_stack, axis=0) * openwater_mask
-
+                    ice_2d_stats['obs_allmean'] = np.nanmean(obs_stack, axis=0) * obs_mask
+                    ice_2d_stats['mod_allmean'] = np.nanmean(mod_stack, axis=0) * mod_mask
+                    # Calculate mean climatology 2D grid
+                    if icecover_hist_2d is not None and len(icecover_hist_2d) > 0:
+                        ice_2d_stats['clim_allmean'] = np.nanmean(icecover_hist_2d, axis=0)
+                    else:
+                        ice_2d_stats['clim_allmean'] = np.full(obs_stack[0].shape, np.nan)
                     # RMSE
                     ice_2d_stats['rmse_2d'] = np.sqrt(np.nanmean((obsmoddiff_stack**2), axis=0)) * openwater_mask
 
@@ -802,6 +837,12 @@ def do_iceskill(prop, logger):
                 # Make 2D stats maps
                 if shouldimakemaps:
                     logger.info('Starting all stats maps...')
+                    # Generate the Climatology Map
+                    make_ice_map.make_ice_map(
+                        prop, lon_o, lat_o, xo, yo,
+                        np.stack([ice_2d_stats['clim_allmean']]),
+                        time_all[i], 'clim', logger
+                    )
                     make_ice_map.make_ice_map(
                         prop, lon_o, lat_o, xo, yo,
                         np.stack((ice_2d_stats['obs_allmean'], ice_2d_stats['mod_allmean'], ice_2d_stats['rmse_2d'])),
@@ -890,6 +931,7 @@ def _run_pipeline(run_args):
     whichcasts = getattr(run_args, 'Whichcasts', None)
     prop1.whichcasts = ','.join(whichcasts) if isinstance(
         whichcasts, list) else whichcasts
+    prop1.target_horizon = getattr(run_args, 'Target_Horizon', None)
     prop1.ice_dt = str(getattr(run_args, 'TimeStep', 'daily'))
     prop1.dailyavg = getattr(run_args, 'DailyAverage', False)
     # Map the combined neighborhood flag and search radius
@@ -968,6 +1010,14 @@ def main(argv=None):
         default=None,
         metavar='RADIUS_METERS',
         help='Enable neighborhood averaging and set the search radius in meters. If not provided, neighborhood averaging is off.', )
+    parser.add_argument(
+        '-th',
+        '--Target_Horizon',
+        type=int,
+        nargs='+',  # Accepts multiple inputs: -th 24 48 120
+        required=False,
+        default=None,
+        help='Set specific forecast lead times in hours (e.g., 24 48 120; min = 1, max = 120) to extract.', )
     args = parser.parse_args(argv)
 
     if args.ofs is None:

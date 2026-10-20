@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script src="https://unpkg.com/@panzoom/panzoom@4.5.1/dist/panzoom.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GLOFS Ice Skill Assessment Dashboard</title>
     <style>
         body {
-            font-family: 'Open Sans', Arial, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-weight: 300;
             background-color: #f4f7f6;
             color: #333;
             margin: 0;
@@ -14,222 +17,632 @@
         }
         h1 {
             text-align: center;
-            color: #2c3e50;
-            margin-bottom: 20px;
+            color: #002868; /* NOAA Navy */
+            margin-bottom: 5px;
+            font-weight: 600;
+            letter-spacing: -0.5px;
         }
-        /* Navigation Tabs */
-        .tab-container {
+        .timestamp {
+            text-align: center;
+            color: #666;
+            font-size: 0.95rem;
+            margin-bottom: 25px;
+            font-style: italic;
+        }
+
+        /* Sticky Navigation Container */
+        .sticky-nav {
+            position: sticky;
+            top: 0;
+            background-color: rgba(244, 247, 246, 0.95);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            z-index: 1000;
+            padding-top: 15px;
+            padding-bottom: 5px;
+            margin-left: -20px;
+            margin-right: -20px;
+            border-bottom: 1px solid #d1d8e0;
+            margin-bottom: 25px;
+        }
+
+        /* Navigation Controls */
+        .nav-row {
             display: flex;
             justify-content: center;
-            margin-bottom: 25px;
+            margin-bottom: 15px;
             gap: 15px;
+            flex-wrap: wrap;
+            padding: 0 15px;
         }
-        .tab-button {
-            padding: 12px 30px;
-            font-size: 16px;
-            font-weight: bold;
-            color: #2c3e50;
+        .nav-btn {
+            padding: 10px 25px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #002868;
             background-color: #e0e6ed;
-            border: none;
-            border-radius: 25px;
+            border: 1px solid transparent;
             cursor: pointer;
-            transition: all 0.3s ease;
+            transition: all 0.2s ease;
+            font-family: inherit;
         }
-        .tab-button.active {
-            background-color: #2980b9;
+        .nav-btn:hover {
+            background-color: #cbd5e1;
+        }
+        .nav-btn.active {
+            background-color: #00A9E0;
             color: white;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            box-shadow: 0 4px 6px -1px rgba(0, 169, 224, 0.3);
         }
-        /* Scenario Sections */
-        .scenario-section {
+
+        /* Hierarchy styling: Timeframe (Blocky, Cerulean) */
+        #timeframe-controls .nav-btn {
+            border-radius: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 13px;
+        }
+
+        /* Hierarchy styling: Lake/OFS (Pill, Navy) */
+        #lake-controls .nav-btn {
+            border-radius: 25px;
+            background-color: #ffffff;
+            border: 1px solid #cbd5e1;
+            color: #475569;
+        }
+        #lake-controls .nav-btn:hover {
+            background-color: #f1f5f9;
+            border-color: #94a3b8;
+            color: #002868;
+        }
+        #lake-controls .nav-btn.active {
+            background-color: #002868; /* NOAA Navy */
+            color: white;
+            border-color: #002868;
+            box-shadow: 0 4px 6px -1px rgba(0, 40, 104, 0.3);
+        }
+
+        /* KPI Scorecard Styles */
+        .kpi-row {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-bottom: 30px;
+            flex-wrap: wrap;
+        }
+        .kpi-card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
+            padding: 20px;
+            text-align: center;
+            flex: 1;
+            min-width: 200px;
+            max-width: 250px;
+            border-top: 4px solid #00A9E0;
+        }
+        .kpi-card h3 {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #666;
+            font-weight: 400;
+        }
+        .kpi-card .kpi-value {
+            font-size: 2.2rem;
+            color: #002868;
+            font-weight: 600;
+            margin: 10px 0 0 0;
+        }
+
+        /* Layout Grids */
+        .view-section {
             display: none;
         }
-        .scenario-section.active {
+        .view-section.active {
             display: block;
+            animation: fadeIn 0.4s ease;
         }
-        /* Grid Layout */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
         .dashboard-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(600px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fit, minmax(min(100%, 600px), 1fr));
+            gap: 24px;
             max-width: 1400px;
             margin: 0 auto;
         }
         .card {
             background: white;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            padding: 15px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03);
+            padding: 20px;
             text-align: center;
         }
         .card.full-width {
             grid-column: 1 / -1;
         }
         .card h2 {
-            font-size: 1.2rem;
-            color: #34495e;
+            font-size: 1.15rem;
+            color: #002868;
             margin-top: 0;
+            margin-bottom: 15px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
-        iframe {
-            width: 100%;
-            height: 650px;
-            border: none;
-        }
-        img {
+
+        /* Map Image Hover State */
+        .card img {
+            cursor: zoom-in;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            border-radius: 6px;
             max-width: 100%;
             height: auto;
-            border-radius: 4px;
+        }
+        .card img:hover {
+            opacity: 0.9;
+        }
+
+        /* Lightbox Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 2000;
+            padding-top: 40px;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 40, 104, 0.7);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+        .modal-content {
+            margin: auto;
+            display: block;
+            max-width: 95%;
+            max-height: 90vh;
+            object-fit: contain;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+            border-radius: 8px;
+            cursor: grab;
+        }
+        .modal-content:active {
+            cursor: grabbing;
+        }
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 40px;
+            color: white;
+            font-size: 45px;
+            font-weight: 300;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+        .modal-close:hover { color: #00A9E0; }
+
+        /* Iframe & Spinner Containers */
+        .iframe-container {
+            position: relative;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+        }
+        .spinner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #00A9E0;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            z-index: 0;
+        }
+        @keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+        iframe {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            border: none;
+            background: transparent;
+        }
+
+        /* Tooltips */
+        .tooltip {
+            position: relative;
+            display: inline-block;
+            cursor: help;
+            color: white;
+            background-color: #00A9E0;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            line-height: 18px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 8px;
+            text-align: center;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 240px;
+            background-color: #002868;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 10px;
+            position: absolute;
+            z-index: 1050;
+            bottom: 135%;
+            left: 50%;
+            margin-left: -120px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 0.85rem;
+            font-family: 'Inter', sans-serif;
+            font-weight: 300;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .tooltip .tooltiptext::after {
+            content: "";
+            position: absolute;
+            top: 100%;
+            left: 50%;
+            margin-left: -5px;
+            border-width: 5px;
+            border-style: solid;
+            border-color: #002868 transparent transparent transparent;
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+
+        /* Mobile specific adjustments */
+        @media (max-width: 768px) {
+            .nav-row {
+                gap: 8px;
+            }
+            .nav-btn {
+                padding: 8px 16px;
+                font-size: 13px;
+                flex-grow: 1;
+            }
+            .card {
+                padding: 15px;
+            }
+            .kpi-card {
+                min-width: 150px;
+            }
+            .kpi-card .kpi-value {
+                font-size: 1.8rem;
+            }
         }
     </style>
 </head>
 <body>
 
-    <h1>Great Lakes OFS Ice Skill Assessment Dashboard</h1>
+    <div style="display: flex; align-items: center; justify-content: center; gap: 15px; margin-top: 15px; margin-bottom: 5px; flex-wrap: wrap;">
+        <img src="noaa_logo.png" alt="NOAA Logo" style="height: 60px; width: auto; border-radius: 0; cursor: default;">
+        <h1 style="margin: 0;">Great Lakes OFS Ice Skill Assessment</h1>
+    </div>
+    <div class="timestamp">Last Updated: {{TIMESTAMP}}</div>
 
-    <!-- Scenario Switcher Tabs -->
-    <div class="tab-container">
-        <button class="tab-button active" onclick="switchScenario('weekly')">Weekly Assessment (Past 7 Days)</button>
-        <button class="tab-button" onclick="switchScenario('season')">Season-to-Date (11/01 to Date)</button>
+    <!-- Sticky Navigation Wrapper -->
+    <div class="sticky-nav">
+        <!-- Timeframe Controls -->
+        <div class="nav-row" id="timeframe-controls">
+            <button class="nav-btn" data-time="daily" onclick="setTimeframe('daily')">Daily</button>
+            <button class="nav-btn active" data-time="weekly" onclick="setTimeframe('weekly')">Weekly</button>
+            <button class="nav-btn" data-time="season" onclick="setTimeframe('season')">Season-to-Date</button>
+        </div>
+
+        <!-- Lake Controls -->
+        <div class="nav-row" id="lake-controls">
+            <button class="nav-btn active" data-lake="all" onclick="setLake('all')">System-Wide</button>
+            <button class="nav-btn" data-lake="leofs" onclick="setLake('leofs')">LEOFS</button>
+            <button class="nav-btn" data-lake="lmhofs" onclick="setLake('lmhofs')">LMHOFS</button>
+            <button class="nav-btn" data-lake="loofs" onclick="setLake('loofs')">LOOFS</button>
+            <button class="nav-btn" data-lake="lsofs" onclick="setLake('lsofs')">LSOFS</button>
+        </div>
     </div>
 
-    <!-- ==================== WEEKLY SCENARIO ==================== -->
-    <div id="weekly-section" class="scenario-section active">
+    <!-- KPI Scorecard Row -->
+    <div class="kpi-row" id="kpi-container">
+        <div class="kpi-card">
+            <h3>Overall System CSI</h3>
+            <div class="kpi-value" id="kpi-csi">--</div>
+        </div>
+        <div class="kpi-card">
+            <h3>Average RMSE</h3>
+            <div class="kpi-value" id="kpi-rmse">--</div>
+        </div>
+        <div class="kpi-card">
+            <h3>NIC Observed Ice</h3>
+            <div class="kpi-value" id="kpi-obs-ice">--</div>
+        </div>
+        <div class="kpi-card">
+            <h3>OFS Modeled Ice</h3>
+            <div class="kpi-value" id="kpi-mod-ice">--</div>
+        </div>
+        <div class="kpi-card">
+            <h3>Climatology Mean</h3>
+            <div class="kpi-value" id="kpi-clim-ice">--</div>
+        </div>
+    </div>
+
+    <!-- ==================== SYSTEM-WIDE VIEW ==================== -->
+    <div id="view-all" class="view-section active">
         <div class="dashboard-grid">
 
-            <!-- 0. Summary Table -->
+            <!-- 1. Summary Table -->
             <div class="card full-width">
-                <h2>Summary Statistics</h2>
-                <iframe src="weekly/summary_table_ice_nowcast_all_GLOFS.html" style="height: 220px;"></iframe>
+                <h2>
+                    Summary Statistics
+                    <span class="tooltip">?<span class="tooltiptext">Top-level metrics aggregated across the OFS and selected time period. CSI measures spatial accuracy, and is the proportion of observed and modeled ice that overlaps; a score of 1 means perfect overlap.</span></span>
+                </h2>
+                <div class="iframe-container" style="height: 220px;">
+                    <div class="spinner"></div>
+                    <iframe loading="lazy" id="frame-summary" style="height: 100%;"></iframe>
+                </div>
             </div>
 
-            <!-- 1. Bar Plot -->
+            <!-- 2. Time Series Summary -->
+            <div class="card full-width plot-card">
+                <h2>
+                    System-Wide Time Series
+                    <span class="tooltip">?<span class="tooltiptext">Evolution of mean ice concentration and skill metrics through time. CSI measures spatial accuracy, and is the proportion of observed and modeled ice that overlaps; a score of 1 means perfect overlap. </span></span>
+                </h2>
+                <div class="iframe-container" style="height: 550px;">
+                    <div class="spinner"></div>
+                    <iframe loading="lazy" id="frame-series" style="height: 100%;"></iframe>
+                </div>
+            </div>
+
+            <!-- 3. Scatter Plots -->
+            <div class="card plot-card" style="grid-column: 1 / -1; max-width: 900px; margin: 0 auto; width: 100%; box-sizing: border-box;">
+                <h2>
+                    Modeled vs. Observed Ice
+                    <span class="tooltip">?<span class="tooltiptext">Compares model output directly against the satellite-based National Ice Center (NIC) analysis. Points above the line indicate over-icing; points below indicate under-icing.</span></span>
+                </h2>
+                <div class="iframe-container" style="height: 620px; max-width: 850px; margin: 0 auto;">
+                    <div class="spinner"></div>
+                    <iframe loading="lazy" id="frame-scatter" style="height: 100%;"></iframe>
+                </div>
+            </div>
+
+            <!-- 4. All Maps -->
             <div class="card">
-                <h2>System-Wide Skill Metrics (Bar Plot)</h2>
-                <iframe src="weekly/bars_ice_nowcast_all_GLOFS.html"></iframe>
+                <h2>NIC Ice Concentration <span class="tooltip">?<span class="tooltiptext">Satellite-based ice concentration from the National Ice Center (NIC) over the selected period.</span></span></h2>
+                <img loading="lazy" id="map-obs" alt="Observed Ice Map" onclick="openModal(this.src)">
             </div>
-
-            <!-- 2. Scatter Plot -->
             <div class="card">
-                <h2>Modeled vs. Observed Ice Concentration (Scatter)</h2>
-                <iframe src="weekly/scatter_ice_nowcast_all_GLOFS.html"></iframe>
+                <h2>OFS Ice Concentration <span class="tooltip">?<span class="tooltiptext">Modeled ice concentration from GLOFS over the selected period.</span></span></h2>
+                <img loading="lazy" id="map-mod" alt="Modeled Ice Map" onclick="openModal(this.src)">
             </div>
-
-            <!-- 3. Ice Concentration / Skill Time Series -->
-            <div class="card full-width">
-                <h2>Ice Concentration & Skill Time Series Summary</h2>
-                <iframe src="weekly/series_ice_nowcast_all_GLOFS.html" style="height: 550px;"></iframe>
-            </div>
-
-            <!-- 4. Static Overview Maps -->
             <div class="card">
-                <h2>Mean Observed Ice Concentration</h2>
-                <img src="weekly/map_ice_nowcast_continuous_obs.png" alt="Observed Ice Map">
+                <h2>Long-term Climatology <span class="tooltip">?<span class="tooltiptext">Historical mean ice concentration grid for this specific time period.</span></span></h2>
+                <img loading="lazy" id="map-clim" alt="Climatology Map" onclick="openModal(this.src)">
             </div>
-
             <div class="card">
-                <h2>Mean Modeled Ice Concentration</h2>
-                <img src="weekly/map_ice_nowcast_continuous_mod.png" alt="Modeled Ice Map">
+                <h2>RMSE <span class="tooltip">?<span class="tooltiptext">Root Mean Square Error spatial distribution. Lower values indicate better model performance.</span></span></h2>
+                <img loading="lazy" id="map-rmse" alt="RMSE Map" onclick="openModal(this.src)">
             </div>
-
             <div class="card">
-                <h2>RMSE Overview Map</h2>
-                <img src="weekly/map_ice_nowcast_continuous_rmse.png" alt="RMSE Map">
+                <h2>CSI <span class="tooltip">?<span class="tooltiptext">Critical Success Index spatial distribution. Values closer to 1 indicate higher accuracy.</span></span></h2>
+                <img loading="lazy" id="map-csi" alt="CSI Map" onclick="openModal(this.src)">
             </div>
-
             <div class="card">
-                <h2>CSI Overview Map</h2>
-                <img src="weekly/map_ice_nowcast_continuous_csi.png" alt="CSI Map">
+                <h2>Mean Error <span class="tooltip">?<span class="tooltiptext">Model minus NIC analysis. Identifies areas where the model systematically over-predicts or under-predicts ice.</span></span></h2>
+                <img loading="lazy" id="map-diff" alt="Mean Error Map" onclick="openModal(this.src)">
             </div>
-
-            <div class="card full-width">
-                <h2>Mean Error Overview Map (Model - Obs)</h2>
-                <img src="weekly/map_ice_nowcast_continuous_diff.png" alt="Mean Error Map">
-            </div>
-
-            <div class="card full-width">
-                <h2>Daily Error Evolution</h2>
-                <img src="weekly/animated_ice_nowcast_daily_diff.gif" alt="Daily Error GIF">
+            <div class="card" id="gif-card">
+                <h2>Daily Error Evolution <span class="tooltip">?<span class="tooltiptext">Animated GIF showing the daily spatial evolution of the mean error.</span></span></h2>
+                <img loading="lazy" id="map-gif" alt="Daily Error GIF" onclick="openModal(this.src)">
             </div>
         </div>
     </div>
 
-    <!-- ==================== SEASON-TO-DATE SCENARIO ==================== -->
-    <div id="season-section" class="scenario-section">
+    <!-- ==================== SINGLE OFS VIEW ==================== -->
+    <div id="view-single" class="view-section">
         <div class="dashboard-grid">
-
-            <!-- 0. Summary Table -->
+            <!-- 2. Ice Concentration Series -->
             <div class="card full-width">
-                <h2>Summary Statistics</h2>
-                <iframe src="season/summary_table_ice_nowcast_all_GLOFS.html" style="height: 220px;"></iframe>
+                <h2>
+                    Ice Concentration Time Series
+                    <span class="tooltip">?<span class="tooltiptext">Compares OFS modeled ice against the NIC analysis, including historical climatology bounds. The Skill Score compares the cell-to-cell daily variances between the model and NIC and the climatology and NIC. A Skill Score > 0 indicates the model better matches the NIC than the climatology.</span></span>
+                </h2>
+                <div class="iframe-container" style="height: 750px;">
+                    <div class="spinner"></div>
+                    <iframe loading="lazy" id="frame-single-conc" style="height: 100%;"></iframe>
+                </div>
             </div>
 
-            <!-- 1. Bar Plot -->
-            <div class="card">
-                <h2>System-Wide Skill Metrics (Bar Plot)</h2>
-                <iframe src="season/bars_ice_nowcast_all_GLOFS.html"></iframe>
-            </div>
-
-            <!-- 2. Scatter Plot -->
-            <div class="card">
-                <h2>Modeled vs. Observed Ice Concentration (Scatter)</h2>
-                <iframe src="season/scatter_ice_nowcast_all_GLOFS.html"></iframe>
-            </div>
-
-            <!-- 3. Ice Concentration / Skill Time Series -->
+            <!-- 3. Ice Extent Series -->
             <div class="card full-width">
-                <h2>Ice Concentration & Skill Time Series Summary</h2>
-                <iframe src="season/series_ice_nowcast_all_GLOFS.html" style="height: 550px;"></iframe>
+                <h2>
+                    Ice Extent & CSI Overlap
+                    <span class="tooltip">?<span class="tooltiptext">Tracks the total ice extent (% of basin that has at least 10% ice concentration) over time alongside critical success index (CSI) overlap metrics. CSI 'hits' is the proportion of model domain where modeled and NIC ice extent overlap. 'False alarms' is the proportion of the domain where the model predicted ice but it was absent in the NIC. 'Misses' is the proportion of the domain where the model failed to predict ice that was present in the NIC.</span></span>
+                </h2>
+                <div class="iframe-container" style="height: 550px;">
+                    <div class="spinner"></div>
+                    <iframe loading="lazy" id="frame-single-extent" style="height: 100%;"></iframe>
+                </div>
             </div>
-
-            <!-- 4. Static Overview Maps -->
-            <div class="card">
-                <h2>Mean Observed Ice Concentration</h2>
-                <img src="season/map_ice_nowcast_continuous_obs.png" alt="Observed Ice Map">
-            </div>
-
-            <div class="card">
-                <h2>Mean Modeled Ice Concentration</h2>
-                <img src="season/map_ice_nowcast_continuous_mod.png" alt="Modeled Ice Map">
-            </div>
-
-            <div class="card">
-                <h2>RMSE Overview Map</h2>
-                <img src="season/map_ice_nowcast_continuous_rmse.png" alt="RMSE Map">
-            </div>
-
-            <div class="card">
-                <h2>CSI Overview Map</h2>
-                <img src="season/map_ice_nowcast_continuous_csi.png" alt="CSI Map">
-            </div>
-
-            <div class="card full-width">
-                <h2>Mean Error Overview Map (Model - Obs)</h2>
-                <img src="season/map_ice_nowcast_continuous_diff.png" alt="Mean Error Map">
-            </div>
-
-            <div class="card full-width">
-                <h2>Daily Error Evolution</h2>
-                <img src="season/animated_ice_nowcast_daily_diff.gif" alt="Daily Error GIF">
+            <!-- 1. RMSE Violin Plot -->
+            <div class="card full-width" style="max-width: 950px; margin: 0 auto; width: 100%; box-sizing: border-box;">
+                <h2>
+                    RMSE Distribution by Concentration
+                    <span class="tooltip">?<span class="tooltiptext">Shows if the model is more accurate at predicting lower or higher ranges of ice concentration.</span></span>
+                </h2>
+                <div class="iframe-container" style="height: 650px;">
+                    <div class="spinner"></div>
+                    <iframe loading="lazy" id="frame-single-box" style="height: 100%;"></iframe>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        function switchScenario(scenario) {
-            // Hide all sections
-            document.querySelectorAll('.scenario-section').forEach(sec => sec.classList.remove('active'));
-            document.querySelectorAll('.tab-button').forEach(btn => btn.classList.remove('active'));
+        // Default State
+        let currentTimeframe = 'weekly';
+        let currentLake = 'all';
 
-            // Activate selected scenario
-            if (scenario === 'weekly') {
-                document.getElementById('weekly-section').classList.add('active');
-                event.target.classList.add('active');
-            } else if (scenario === 'season') {
-                document.getElementById('season-section').classList.add('active');
-                event.target.classList.add('active');
+        function setTimeframe(timeframe) {
+            currentTimeframe = timeframe;
+            // Force lake to 'all' if daily is selected since individual OFS is not available
+            if (currentTimeframe === 'daily') {
+                currentLake = 'all';
+            }
+            updateUI();
+            renderDashboard();
+        }
+
+        function setLake(lake) {
+            currentLake = lake;
+            updateUI();
+            renderDashboard();
+        }
+
+        function updateUI() {
+            document.querySelectorAll('#timeframe-controls .nav-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-time') === currentTimeframe);
+            });
+
+            document.querySelectorAll('#lake-controls .nav-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.getAttribute('data-lake') === currentLake);
+
+                // Hide individual lake buttons if daily is selected
+                if (btn.getAttribute('data-lake') !== 'all') {
+                    btn.style.display = (currentTimeframe === 'daily') ? 'none' : 'inline-block';
+                }
+            });
+
+            // Hide KPI row if not on system-wide view
+            const kpiContainer = document.getElementById('kpi-container');
+            if (currentLake === 'all') {
+                kpiContainer.style.display = 'flex';
+            } else {
+                kpiContainer.style.display = 'none';
+            }
+
+            // Show or hide non-map plots for daily runs
+            const plotCards = document.querySelectorAll('.plot-card');
+            plotCards.forEach(card => {
+                if (currentTimeframe === 'daily') {
+                    card.style.display = 'none';
+                } else {
+                    card.style.display = 'block';
+                }
+            });
+
+            // Hide GIF card on daily view
+            const gifCard = document.getElementById('gif-card');
+            if (gifCard) {
+                if (currentTimeframe === 'daily') {
+                    gifCard.style.display = 'none';
+                } else {
+                    gifCard.style.display = 'block';
+                }
             }
         }
+
+        function renderDashboard() {
+            const viewAll = document.getElementById('view-all');
+            const viewSingle = document.getElementById('view-single');
+
+            if (currentLake === 'all') {
+                viewSingle.classList.remove('active');
+                viewAll.classList.add('active');
+
+                // Fetch and populate KPI data
+                fetch(`${currentTimeframe}/kpis_nowcast.json`)
+                    .then(response => response.json())
+                    .then(data => {
+                        document.getElementById('kpi-csi').innerText = data.csi;
+                        document.getElementById('kpi-rmse').innerText = data.rmse;
+                        document.getElementById('kpi-obs-ice').innerText = data.obs_ice;
+                        document.getElementById('kpi-mod-ice').innerText = data.mod_ice;
+                        document.getElementById('kpi-clim-ice').innerText = data.clim_ice;
+                    })
+                    .catch(error => console.error('Error loading KPIs:', error));
+
+                document.getElementById('frame-summary').src = `${currentTimeframe}/summary_table_ice_nowcast_all_GLOFS.html`;
+                document.getElementById('frame-series').src = `${currentTimeframe}/series_ice_nowcast_all_GLOFS.html`;
+                document.getElementById('frame-scatter').src = `${currentTimeframe}/scatter_ice_nowcast_all_GLOFS.html`;
+
+                document.getElementById('map-obs').src = `${currentTimeframe}/map_ice_nowcast_continuous_obs.png`;
+                document.getElementById('map-mod').src = `${currentTimeframe}/map_ice_nowcast_continuous_mod.png`;
+                document.getElementById('map-clim').src = `${currentTimeframe}/map_ice_nowcast_continuous_clim.png`;
+                document.getElementById('map-rmse').src = `${currentTimeframe}/map_ice_nowcast_continuous_rmse.png`;
+                document.getElementById('map-csi').src = `${currentTimeframe}/map_ice_nowcast_continuous_csi.png`;
+                document.getElementById('map-diff').src = `${currentTimeframe}/map_ice_nowcast_continuous_diff.png`;
+                document.getElementById('map-gif').src = `${currentTimeframe}/animated_ice_nowcast_daily_diff.gif`;
+
+            } else {
+                viewAll.classList.remove('active');
+                viewSingle.classList.add('active');
+
+                document.getElementById('frame-single-box').src = `${currentTimeframe}/${currentLake}_nowcast_rmseboxplots.html`;
+                document.getElementById('frame-single-conc').src = `${currentTimeframe}/${currentLake}_nowcast_iceconcseries.html`;
+                document.getElementById('frame-single-extent').src = `${currentTimeframe}/${currentLake}_nowcast_iceextentseries.html`;
+            }
+        }
+
+        // Lightbox Modal & Panzoom Functions
+        let pzInstance = null;
+
+        function openModal(imageSrc) {
+            const modal = document.getElementById('map-modal');
+            const img = document.getElementById('modal-img');
+
+            modal.style.display = 'block';
+            img.src = imageSrc;
+
+            if (pzInstance) {
+                pzInstance.destroy();
+            }
+
+            // Initialize Panzoom on the image
+            pzInstance = Panzoom(img, {
+                maxScale: 4,
+                minScale: 1,
+                step: 0.2
+            });
+
+            // Enable zoom with the mouse wheel
+            img.parentElement.addEventListener('wheel', pzInstance.zoomWithWheel);
+        }
+
+        function closeModal(event) {
+            // Prevent closing if the user is clicking/dragging the image itself
+            if (event && event.target.id === 'modal-img') {
+                return;
+            }
+
+            document.getElementById('map-modal').style.display = 'none';
+
+            if (pzInstance) {
+                pzInstance.reset();
+            }
+        }
+
+        // Initial setup
+        updateUI();
+        renderDashboard();
     </script>
 
+    <!-- Lightbox Modal Container -->
+    <div id="map-modal" class="modal" onclick="closeModal(event)">
+        <span class="modal-close">&times;</span>
+        <img class="modal-content" id="modal-img">
+    </div>
 </body>
 </html>

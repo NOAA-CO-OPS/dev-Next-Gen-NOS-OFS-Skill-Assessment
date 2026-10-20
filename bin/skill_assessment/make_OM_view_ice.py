@@ -64,6 +64,52 @@ def parameter_validation(argu_list, logger):
         logger.error(error_message)
         sys.exit(-1)
 
+def export_kpi_json(df_ofs, prop, cast, logger):
+    """
+    Calculates area-weighted system-wide KPI means and exports to a JSON file.
+    """
+    logger.info(f'Exporting system KPIs for {cast}...')
+
+    # Approximate surface area weights for each GLOFS domain
+    area_weights = {
+        'lmhofs': 0.48,
+        'lsofs': 0.34,
+        'leofs': 0.10,
+        'loofs': 0.08
+    }
+
+    # Map the weights to the dataframe based on the OFS column
+    df_ofs['weight'] = df_ofs['OFS'].str.lower().map(area_weights)
+
+    # Helper to calculate weighted average and handle NaNs
+    def get_weighted_avg(df, col, weight_col='weight'):
+        clean_df = df.dropna(subset=[col, weight_col])
+        if not clean_df.empty:
+            return np.average(clean_df[col], weights=clean_df[weight_col])
+        return 0
+
+    # Calculate all system-wide weighted averages
+    system_csi = get_weighted_avg(df_ofs, 'csi_all')
+    system_rmse = get_weighted_avg(df_ofs, 'rmse_all')
+    system_obs = get_weighted_avg(df_ofs, 'obs_meanicecover')
+    system_mod = get_weighted_avg(df_ofs, 'mod_meanicecover')
+    system_clim = get_weighted_avg(df_ofs, 'icecover_hist')
+
+    # Format the data into a dictionary
+    kpi_data = {
+        'csi': f'{system_csi:.2f}',
+        'rmse': f'{system_rmse:.1f}%',
+        'obs_ice': f'{system_obs:.1f}%',
+        'mod_ice': f'{system_mod:.1f}%',
+        'clim_ice': f'{system_clim:.1f}%'
+    }
+
+    # Save to JSON in the visuals folder
+    output_file = os.path.join(prop.om_files, f'kpis_{cast}.json')
+    with open(output_file, 'w') as f:
+        json.dump(kpi_data, f)
+
+    logger.info(f'Wrote system KPIs to {output_file}')
 
 def make_overview_map(df1, df2, prop, cast, logger):
     '''
@@ -71,10 +117,11 @@ def make_overview_map(df1, df2, prop, cast, logger):
     Observed, Modeled, RMSE, CSI Hits, and Mean Error using pcolor by pulling from the exported JSON map files.
     '''
     map_configs = [
-        {'var': 'obs', 'suffix': 'mean_iceconc_obs.json', 'title': 'Mean Observed Ice Conc. (%)', 'cmap': 'Blues_r', 'vmin': 0, 'vmax': 100},
-        {'var': 'mod', 'suffix': 'mean_iceconc_mod.json', 'title': 'Mean Modeled Ice Conc. (%)', 'cmap': 'Blues_r', 'vmin': 0, 'vmax': 100},
+        {'var': 'obs', 'suffix': 'mean_iceconc_obs.json', 'title': 'Mean NIC Ice Conc. (%)', 'cmap': 'Blues_r', 'vmin': 0, 'vmax': 100},
+        {'var': 'mod', 'suffix': 'mean_iceconc_mod.json', 'title': 'Mean OFS Ice Conc. (%)', 'cmap': 'Purples_r', 'vmin': 0, 'vmax': 100},
+        {'var': 'clim', 'suffix': 'mean_iceconc_clim.json', 'title': 'Mean Climatology (%)', 'cmap': 'Greens_r', 'vmin': 0, 'vmax': 100},
         {'var': 'rmse', 'suffix': 'rmse.json', 'title': 'RMSE (%)', 'cmap': 'plasma', 'vmin': 0, 'vmax': 100},
-        {'var': 'csi', 'suffix': 'csi_hit.json', 'title': 'CSI', 'cmap': 'brg', 'vmin': 0, 'vmax': 100},
+        {'var': 'csi', 'suffix': 'csi_hit.json', 'title': 'CSI Hit Rate (%)', 'cmap': 'brg', 'vmin': 0, 'vmax': 100},
         {'var': 'diff', 'suffix': 'mean_error.json', 'title': 'Mean Error (%)', 'cmap': 'Spectral', 'vmin': -100, 'vmax': 100}
     ]
 
@@ -101,8 +148,15 @@ def make_overview_map(df1, df2, prop, cast, logger):
         logger.info(f"Plotting {config['title']} continuous map for all lakes...")
 
         fig, ax = plt.subplots(figsize=(10, 8))
-        ax.set_title(f"GLOFS {cast.strip('_b').upper()} {config['title']}\n"
-                     f"{getattr(prop, 'start_date_scorecard', '')} - {getattr(prop, 'end_date_scorecard', '')}",
+
+        # Use a new variable for the title instead of overwriting 'cast'
+        title_cast = cast.strip('_b').capitalize() if config['var'] != 'obs' else ''
+        if getattr(prop, 'start_date_scorecard', '') == getattr(prop, 'end_date_scorecard', ''):
+            title_date = f"{getattr(prop, 'start_date_scorecard', '')}"
+        else:
+            title_date = f"{getattr(prop, 'start_date_scorecard', '')} - {getattr(prop, 'end_date_scorecard', '')}"
+        # Build the title string safely
+        ax.set_title(f'{title_cast}\n{title_date}',
                      fontsize=16, pad=15)
 
         # High resolution to draw detailed peninsulas and islands
@@ -170,7 +224,7 @@ def make_overview_map(df1, df2, prop, cast, logger):
         for city, (lon, lat) in cities.items():
             cx, cy = m(lon, lat)
             m.plot(cx, cy, 'ko', markersize=3, zorder=6)
-            if city in ['Chicago', 'Duluth', 'Detroit', 'Milwaukee', 'Green Bay', 'Marquette', 'Toledo']:
+            if city in ['Chicago', 'Duluth', 'Detroit', 'Milwaukee', 'Green Bay', 'Marquette', 'Toledo', 'Toronto']:
                 x_offset = -20000
                 h_align = 'right'
             else:
@@ -183,7 +237,7 @@ def make_overview_map(df1, df2, prop, cast, logger):
             cbar.set_label(config['title'], fontsize=12)
 
         output_file = os.path.join(prop.om_files, f"map_ice_{cast}_continuous_{config['var']}.png")
-        fig.savefig(output_file, dpi=300, bbox_inches='tight')
+        fig.savefig(output_file, dpi=600, bbox_inches='tight')
         plt.close(fig)
         logger.info(f'Wrote continuous map to {output_file}')
 
@@ -243,7 +297,7 @@ def make_daily_error_gif(df1, prop, cast, logger):
 
     for date_str in sorted_dates:
         fig, ax = plt.subplots(figsize=(10, 8))
-        ax.set_title(f"GLOFS {cast.strip('_b').upper()} Daily Error (Model - Obs %)\n{date_str}",
+        ax.set_title(f"{cast.strip('_b').upper()} daily error\n{date_str}",
                      fontsize=16, pad=15)
 
         # High resolution map base
@@ -485,18 +539,23 @@ def make_bar_plots(df1, df2, prop, cast, logger):
 def make_scatter_plot(prop, df, cast, logger):
     nrows = 2
     ncols = 2
-    # Do stats time series
+
+    # Match the colors used in the time series plot
+    ofs_list = list_ofs()
+    ofs_colors = ['#e377c2', '#17becf', '#ff7f0e', '#9467bd']
+
+    # Format subplot titles with HTML color tags
+    colored_titles = [f"<span style='color:{ofs_colors[i]}'><b>{ofs.upper()}</b></span>" for i, ofs in enumerate(ofs_list)]
+
     fig = make_subplots(
         rows=nrows, cols=ncols, vertical_spacing=0.11,
         horizontal_spacing=0.1,
-        subplot_titles=list_ofs()
+        subplot_titles=colored_titles
     )
 
-    figtitle = 'GLOFS ' + cast.strip('_b') + ' ice conc.,<br>' + \
+    figtitle = 'GLOFS ' + cast.strip('_b') + '<br>' + \
         getattr(prop, 'start_date_scorecard', '') + ' - ' + getattr(prop, 'end_date_scorecard', '')
 
-    x_names = ['', 'GLSEA daily mean ice conc. (%)']
-    y_names = ['OFS daily mean ice conc. (%)', '']
     rownum = [1, 1, 2, 2]
     colnum = [1, 2, 1, 2]
     figheight = 600
@@ -508,33 +567,28 @@ def make_scatter_plot(prop, df, cast, logger):
     if axmax > 100 or pd.isna(axmax):
         axmax = 100
 
-    # Define a consistent tick interval for all plots (e.g., 5 intervals)
     tick_interval = axmax / 5 if axmax > 0 else 20
-
-    # Track if the colorbar has been plotted yet
     colorbar_added = False
-
-    for i, ofs in enumerate(list_ofs()):
-        # Filter df by ofs
+    # Grab the start date and slice the MM/DD characters
+    start_date_str = getattr(prop, 'start_date_scorecard', '11/01/YYYY')
+    cbar_date = start_date_str[:5]
+    for i, ofs in enumerate(ofs_list):
         df_filt = df[df['OFS'] == ofs]
-        color_scale = np.linspace(0, len(df_filt)-1, len(df_filt))
+        color_scale = np.linspace(0, len(df_filt)-1, len(df_filt)) if not df_filt.empty else []
 
         if df_filt.empty:
-            # Add annotation that OFS is missing/has no data
             fig.add_annotation(
                     text=f'No data for {ofs.upper()}!',
                     xref='x domain', yref='y domain',
                     font=dict(size=14, color='red'),
-                    x=0.5, y=0.5, # Center the text
+                    x=0.5, y=0.5,
                     showarrow=False,
                     row=rownum[i], col=colnum[i],
             )
-            # Ensure empty plots still have the matching axes
             fig.update_yaxes(range=[0, axmax], dtick=tick_interval, row=rownum[i], col=colnum[i])
             fig.update_xaxes(range=[0, axmax], dtick=tick_interval, row=rownum[i], col=colnum[i])
             continue
 
-        # Only show the colorbar for the first valid trace to prevent overprinting
         show_cbar = False
         if not colorbar_added:
             show_cbar = True
@@ -552,7 +606,7 @@ def make_scatter_plot(prop, df, cast, logger):
                     colorscale='viridis',
                     showscale=show_cbar,
                     colorbar=dict(
-                        title='Days since<br>11/01',
+                        title=f'Days since<br>{cbar_date}',
                         lenmode='fraction',
                         len=0.5,
                         thickness=10,
@@ -568,7 +622,6 @@ def make_scatter_plot(prop, df, cast, logger):
             ), row=rownum[i], col=colnum[i]
         )
 
-        # add the 1:1 line as a new scatter trace
         fig.add_trace(
             go.Scatter(
                 x=[0, axmax],
@@ -597,35 +650,37 @@ def make_scatter_plot(prop, df, cast, logger):
                     row=1, col=1,
             )
 
+        # Notice we removed title_text here so we can use global labels
         fig.update_yaxes(
-            title_text=y_names[colnum[i]-1],
-            title_font=dict(size=16, color='black'),
             range=[0, axmax],
-            dtick=tick_interval,  # Force identical intervals
-            tickfont=dict(size=16, color='black'),
+            dtick=tick_interval,
+            tickfont=dict(size=14, color='black'),
             row=rownum[i], col=colnum[i]
         )
         fig.update_xaxes(
-            title_text=x_names[rownum[i]-1],
-            title_font=dict(size=16, color='black'),
             range=[0, axmax],
-            dtick=tick_interval,  # Force identical intervals
-            tickfont=dict(size=16, color='black'),
+            dtick=tick_interval,
+            tickfont=dict(size=14, color='black'),
             row=rownum[i], col=colnum[i]
         )
 
-    fig.update_yaxes(
-        showline=True,
-        linewidth=1,
-        linecolor='black',
-        mirror=True,
+    fig.update_yaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
+    fig.update_xaxes(showline=True, linewidth=1, linecolor='black', mirror=True)
+
+    # Add Global Centered Axis Labels using paper coordinates
+    fig.add_annotation(
+        x=0.5, y=-0.12, xref='paper', yref='paper',
+        text='GLSEA daily mean ice conc. (%)',
+        showarrow=False, font=dict(size=18, color='black'),
+        xanchor='center', yanchor='top'
     )
-    fig.update_xaxes(
-        showline=True,
-        linewidth=1,
-        linecolor='black',
-        mirror=True,
+    fig.add_annotation(
+        x=-0.1, y=0.5, xref='paper', yref='paper',
+        text='OFS daily mean ice conc. (%)',
+        showarrow=False, font=dict(size=18, color='black'),
+        textangle=-90, xanchor='right', yanchor='middle'
     )
+
     fig.update_layout(
         title=dict(
             text=figtitle,
@@ -641,16 +696,13 @@ def make_scatter_plot(prop, df, cast, logger):
         height=figheight,
         width=figwidth,
         autosize=False,
-        yaxis=dict(
-            scaleanchor='x',
-            scaleratio=1,
-        ),
+        # Force 1:1 aspect ratio on all subplots
+        yaxis=dict(scaleanchor='x', scaleratio=1),
+        yaxis2=dict(scaleanchor='x2', scaleratio=1),
+        yaxis3=dict(scaleanchor='x3', scaleratio=1),
+        yaxis4=dict(scaleanchor='x4', scaleratio=1),
         template='plotly_white',
-        margin=dict(t=100, b=50, l=50, r=50),
-        legend=dict(
-            font=dict(size=16, color='black'),
-            bgcolor='rgba(0,0,0,0)',
-        ),
+        margin=dict(t=100, b=80, l=80, r=50), # Expanded bottom/left margins for global labels
     )
 
     # Write to file
@@ -683,6 +735,7 @@ def make_summary_table(df_ofs, prop, cast, logger):
     summary_df = df_ofs.groupby('OFS').agg(
         Obs_Ice_Mean=('obs_meanicecover', 'mean'),
         Mod_Ice_Mean=('mod_meanicecover', 'mean'),
+        Clim_Ice_Mean=('icecover_hist', 'mean'), # <-- Added climatology column
         RMSE_All=('rmse_all', 'mean'),
         CSI=('csi_all', 'mean')
     ).reset_index()
@@ -693,13 +746,15 @@ def make_summary_table(df_ofs, prop, cast, logger):
     # Format numeric columns
     summary_df['Obs_Ice_Mean'] = summary_df['Obs_Ice_Mean'].map('{:.2f}%'.format)
     summary_df['Mod_Ice_Mean'] = summary_df['Mod_Ice_Mean'].map('{:.2f}%'.format)
+    summary_df['Clim_Ice_Mean'] = summary_df['Clim_Ice_Mean'].map('{:.2f}%'.format)
     summary_df['RMSE_All'] = summary_df['RMSE_All'].map('{:.2f}%'.format)
-    summary_df['CSI'] = summary_df['CSI'].map('{:.3f}'.format)
+    summary_df['CSI'] = (summary_df['CSI'] * 100).map('{:.1f}'.format)
 
     # Rename columns for display
     summary_df.rename(columns={
-        'Obs_Ice_Mean': 'Observed Ice Conc.',
-        'Mod_Ice_Mean': 'Modeled Ice Conc.',
+        'Obs_Ice_Mean': 'NIC Ice Conc.',
+        'Mod_Ice_Mean': 'OFS Ice Conc.',
+        'Clim_Ice_Mean': 'Climatology Mean',
         'RMSE_All': 'RMSE'
     }, inplace=True)
 
@@ -707,8 +762,8 @@ def make_summary_table(df_ofs, prop, cast, logger):
     fig = go.Figure(data=[go.Table(
         header=dict(
             values=list(summary_df.columns),
-            fill_color='#2c3e50',
-            font=dict(color='white', size=14, family='Open Sans'),
+            fill_color='#6C4786',
+            font=dict(color='white', size=16, family='Open Sans'),
             align='center',
             height=40
         ),
@@ -1086,6 +1141,7 @@ def make_OM_view_ice(prop, logger):
                 make_overview_map(df1, df2, prop, cast, logger)
                 make_daily_error_gif(df1, prop, cast, logger)
                 make_summary_table(df_ofs, prop, cast, logger)
+                export_kpi_json(df_ofs, prop, cast, logger)
                 logger.info('Finished O&M ice plots! Good bye.')
             except Exception as ex:
                 logger.error('Exception caught in make_scorecard_plot, map, or GIF processing: %s', ex)

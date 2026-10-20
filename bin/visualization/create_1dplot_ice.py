@@ -88,7 +88,7 @@ def create_1dplot_icestats(prop, time_all, logger):
         if (
             os.path.isfile(
                 f'{prop.data_skill_stats_path}/skill_{prop.ofs}_'
-                f'icestatstseries_{prop.whichcast}.csv',
+                f'icestatseries_{prop.whichcast}.csv',
             ) is False
         ):
             logger.error(
@@ -101,7 +101,7 @@ def create_1dplot_icestats(prop, time_all, logger):
             counter = counter + 1  # Keep track of # whichcasts
             df = pd.read_csv(
                 r'' + f'{prop.data_skill_stats_path}/skill_{prop.ofs}_'
-                f'icestatstseries_{prop.whichcast}.csv',
+                f'icestatseries_{prop.whichcast}.csv',
             )
             logger.info(
                 'Ice stats time series csv found in %s',

@@ -312,3 +312,29 @@ ctl_availability_probe=True
 # incorrect results downstream)
 # False = safely deletes and regenerates stale control files (default)
 keep_stale_artifacts=False
+
+[ice_skill_settings]
+# -----------------------------------------------------------------------
+# Ice Skill Assessment Settings
+# -----------------------------------------------------------------------
+
+# Should the assessment generate static and/or JSON maps? (True/False)
+shouldimakemaps=True
+
+# If making maps, make static (.png) map figures? (True/False)
+makestatic=False
+
+# If making maps, make JSON map outputs? (True/False)
+makejson=True
+
+# Should the ice assessment generate 1D plots, time series, and box plots? (True/False)
+shouldimakeplots=True
+
+# Number of days before the end date to start making daily plots
+dailyplotdays=10
+
+# Threshold ice concentration (%) for calculating ice extent
+threshold_exte=10
+
+# Minimum threshold ice concentration (%) for statistics and calculations
+stathresh=1

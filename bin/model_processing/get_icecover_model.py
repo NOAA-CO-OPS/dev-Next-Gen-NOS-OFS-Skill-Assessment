@@ -164,6 +164,12 @@ def get_icecover_model(prop, logger):
         logger, getattr(prop, 'config_file', None), getattr(prop, 'path', None))
     logger.info('--- Starting OFS ice cover process ---')
 
+    # Extract embedded horizon if the whichcast was expanded
+    if '_h' in prop.whichcast or prop.whichcast[-1] == 'h':
+        parts = prop.whichcast.rsplit('_', 1)
+        prop.whichcast = parts[0]  # Restores 'forecast_b'
+        prop.target_horizon = int(parts[1].replace('h', ''))
+
     # Validate model source.
     if prop.model_source.lower() == 'adcirc':
         logger.error('Ice cover retrieval not implemented for ADCIRC.')
@@ -174,19 +180,58 @@ def get_icecover_model(prop, logger):
     end_dt = datetime.strptime(prop.end_date_full.replace('-', '').replace('Z', '').replace('T', '-').split('-')[0], '%Y%m%d')
     prop.startdate, prop.enddate = start_dt.strftime('%Y%m%d') + '00', end_dt.strftime('%Y%m%d') + '23'
 
-    # Get list of model files
-    dir_list = list_of_dir(prop, logger)
-    list_files = list_of_files(prop, dir_list, logger)
-
     ice_name, x_name, y_name = _get_variable_names(prop.model_source)
+    target_horizon = getattr(prop, 'target_horizon', None)
 
-    # Handle daily resolution
-    if prop.ice_dt == 'daily' and not prop.dailyavg:
-        cycle, hour = ('t12z', 'n006') if prop.whichcast == 'nowcast' else ('t06z', 'f006')
-        if prop.model_source == 'schism':
-            cycle = 't12z'
-            hour = 'out2d'
-        list_files = [f for f in list_files if cycle in f and hour in f]
+    if target_horizon is not None and prop.whichcast != 'nowcast':
+        # Safely fetch older initialization runs using forecast_a mode
+        list_files = []
+        orig_whichcast = prop.whichcast
+        orig_startdate = prop.startdate
+        orig_enddate = prop.enddate
+        orig_forecast_hr = getattr(prop, 'forecast_hr', None)
+
+        target_hr_str = 'out2d' if prop.model_source == 'schism' else f'f{str(target_horizon).zfill(3)}'
+
+        for day in get_days_between_dates(start_dt, end_dt):
+            # The daily GLSEA observation is at 12:00Z.
+            valid_dt = day + timedelta(hours=12)
+            # Shift back in time from valid_dt to find the exact model initialization cycle
+            init_dt = valid_dt - timedelta(hours=target_horizon)
+
+            cycle_hr = f'{init_dt.hour:02d}z'
+            cycle_prefix = f't{cycle_hr}'
+
+            prop.startdate = init_dt.strftime('%Y%m%d') + '00'
+            prop.enddate = init_dt.strftime('%Y%m%d') + '23'
+            prop.whichcast = 'forecast_a'
+            prop.forecast_hr = cycle_hr
+
+            day_dirs = list_of_dir(prop, logger)
+            day_files = list_of_files(prop, day_dirs, logger)
+
+            # Filter for just the cycle and specific horizon we need
+            day_files = [f for f in day_files if cycle_prefix in f and target_hr_str in f]
+            list_files.extend(day_files)
+
+        # Restore original prop values
+        prop.whichcast = orig_whichcast
+        prop.startdate = orig_startdate
+        prop.enddate = orig_enddate
+        prop.forecast_hr = orig_forecast_hr
+
+    else:
+        # Standard file retrieval
+        dir_list = list_of_dir(prop, logger)
+        list_files = list_of_files(prop, dir_list, logger)
+
+        # Handle daily resolution
+        if prop.ice_dt == 'daily' and not prop.dailyavg:
+            cycle, hour = ('t12z', 'n006') if prop.whichcast == 'nowcast' else ('t06z', 'f006')
+            if prop.model_source == 'schism':
+                cycle = 't12z'
+                hour = 'out2d'
+            list_files = [f for f in list_files if cycle in f and hour in f]
 
 # Process daily averages if requested
     if prop.dailyavg and prop.ice_dt == 'daily':
