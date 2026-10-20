@@ -932,7 +932,7 @@ def collect_stats_files(prop, ofs, var, cast, logger):
     stat_file = [
         file for file in
         os.listdir(prop.data_skill_stats_path)
-        if ofs in file and cast in file and 'icestatstseries' in file
+        if ofs in file and cast in file and 'icestatseries' in file
     ]
     try:  # Check to see if any files were found
         stat_file[0]
@@ -1139,7 +1139,7 @@ def make_OM_view_ice(prop, logger):
             try:
                 make_bar_plots(df1, df2, prop, cast, logger)
                 make_overview_map(df1, df2, prop, cast, logger)
-                make_daily_error_gif(df1, prop, cast, logger)
+                #make_daily_error_gif(df1, prop, cast, logger)
                 make_summary_table(df_ofs, prop, cast, logger)
                 export_kpi_json(df_ofs, prop, cast, logger)
                 logger.info('Finished O&M ice plots! Good bye.')
