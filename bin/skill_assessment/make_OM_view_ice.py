@@ -244,7 +244,8 @@ def make_overview_map(df1, df2, prop, cast, logger):
 
 def make_daily_error_gif(df1, prop, cast, logger):
     '''
-    Creates an animated GIF of daily error (Model - Obs) maps.
+    Creates an animated GIF of daily error (Model - Obs) maps,
+    only if the total time range is 10 days or less.
     '''
     logger.info(f'Creating daily error GIF for {cast}...')
 
@@ -272,6 +273,15 @@ def make_daily_error_gif(df1, prop, cast, logger):
 
     if not sorted_dates:
         logger.warning('No parsed dates found. Skipping GIF.')
+        return
+
+    # Check if range is > 10 days
+    first_dt = datetime.strptime(sorted_dates[0], '%m-%d-%Y-%HZ')
+    last_dt = datetime.strptime(sorted_dates[-1], '%m-%d-%Y-%HZ')
+    delta = last_dt - first_dt
+
+    if delta.days > 10:
+        logger.info(f'Time range is {delta.days} days (>10). Skipping GIF generation.')
         return
 
     ll_lon, ll_lat = -92.5, 41.0
@@ -1139,7 +1149,7 @@ def make_OM_view_ice(prop, logger):
             try:
                 make_bar_plots(df1, df2, prop, cast, logger)
                 make_overview_map(df1, df2, prop, cast, logger)
-                #make_daily_error_gif(df1, prop, cast, logger)
+                make_daily_error_gif(df1, prop, cast, logger)
                 make_summary_table(df_ofs, prop, cast, logger)
                 export_kpi_json(df_ofs, prop, cast, logger)
                 logger.info('Finished O&M ice plots! Good bye.')

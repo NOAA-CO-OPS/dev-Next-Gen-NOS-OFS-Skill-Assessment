@@ -386,7 +386,7 @@
             <div class="card full-width">
                 <h2>
                     Summary Statistics
-                    <span class="tooltip">?<span class="tooltiptext">Top-level metrics aggregated across the OFS and selected time period. CSI measures spatial accuracy, and is the proportion of observed and modeled ice that overlaps; a score of 1 means perfect overlap.</span></span>
+                    <span class="tooltip">?<span class="tooltiptext">Top-level metrics aggregated across the OFS and selected time period. CSI measures spatial accuracy, and is the percent of observed and modeled ice that overlaps; a score of 100 means perfect overlap.</span></span>
                 </h2>
                 <div class="iframe-container" style="height: 220px;">
                     <div class="spinner"></div>
@@ -398,7 +398,7 @@
             <div class="card full-width plot-card">
                 <h2>
                     System-Wide Time Series
-                    <span class="tooltip">?<span class="tooltiptext">Evolution of mean ice concentration and skill metrics through time. CSI measures spatial accuracy, and is the proportion of observed and modeled ice that overlaps; a score of 1 means perfect overlap. </span></span>
+                    <span class="tooltip">?<span class="tooltiptext">Evolution of mean ice concentration and skill metrics through time. CSI measures spatial accuracy, and is the percent of observed and modeled ice that overlaps; a score of 100 means perfect overlap. </span></span>
                 </h2>
                 <div class="iframe-container" style="height: 550px;">
                     <div class="spinner"></div>
@@ -436,7 +436,7 @@
                 <img loading="lazy" id="map-rmse" alt="RMSE Map" onclick="openModal(this.src)">
             </div>
             <div class="card">
-                <h2>CSI <span class="tooltip">?<span class="tooltiptext">Critical Success Index spatial distribution. Values closer to 1 indicate higher accuracy.</span></span></h2>
+                <h2>CSI <span class="tooltip">?<span class="tooltiptext">Critical Success Index spatial distribution. Values closer to 100 indicate higher accuracy.</span></span></h2>
                 <img loading="lazy" id="map-csi" alt="CSI Map" onclick="openModal(this.src)">
             </div>
             <div class="card">
@@ -543,13 +543,13 @@
                 }
             });
 
-            // Hide GIF card on daily view
+            // Only show GIF card on weekly view
             const gifCard = document.getElementById('gif-card');
             if (gifCard) {
-                if (currentTimeframe === 'daily') {
-                    gifCard.style.display = 'none';
-                } else {
+                if (currentTimeframe === 'weekly') {
                     gifCard.style.display = 'block';
+                } else {
+                    gifCard.style.display = 'none';
                 }
             }
         }
