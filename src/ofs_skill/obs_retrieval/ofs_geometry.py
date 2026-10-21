@@ -104,6 +104,38 @@ def get_response_2(
     return (min(yy_list), max(yy_list), min(xx_list), max(xx_list), ofs_mask)
 
 
+def get_largest_exterior(
+    first: dict
+) -> tuple[float, float, float, float, list[tuple[float, float]]]:
+    """
+    Extract the largest polygon exterior ring from a shapefile shape.
+
+    Only exterior rings are candidates; holes never are. get_response_1 and
+    get_response_2 pick the ring with the most points among exteriors AND
+    holes, which selects a land hole for a global mesh extent such as
+    stofs_2d_glo (its 241,976-point Americas hole outnumbers the exterior's
+    67,797 points). ofs_geometry uses it for stofs_2d_glo only.
+
+    Args:
+        first: GeoInterface dictionary (Polygon or MultiPolygon) from shapefile
+
+    Returns:
+        Tuple of (min_lat, max_lat, min_lon, max_lon, polygon_coords)
+    """
+    if first['type'] == 'Polygon':
+        exteriors = [first['coordinates'][0]]
+    elif first['type'] == 'MultiPolygon':
+        exteriors = [polygon[0] for polygon in first['coordinates']]
+    else:
+        raise ValueError(f"Unsupported geometry type: {first['type']}")
+
+    ofs_mask = [tuple(point) for point in max(exteriors, key=len)]
+    xx_list = [point[0] for point in ofs_mask]
+    yy_list = [point[1] for point in ofs_mask]
+
+    return (min(yy_list), max(yy_list), min(xx_list), max(xx_list), ofs_mask)
+
+
 def ofs_geometry(
     ofs: str,
     path: str,
@@ -160,7 +192,13 @@ def ofs_geometry(
         # at the end we grab the index of the largest polygon with:
         # [i_1[size.index(max(size))]] [i_2[size.index(max(size))]]
 
-        response_1 = get_response_1(first)
+        # The global STOFS-2D-Global extent is one polygon whose holes are
+        # land; its largest ring is a hole, so select among exteriors only.
+        # Other OFS keep the original selection below.
+        response_1 = (
+            get_largest_exterior(first) if ofs.lower() == 'stofs_2d_glo'
+            else get_response_1(first)
+        )
         if response_1 is not None:
             lat_1, lat_2, lon_1, lon_2, ofs_mask = (
                 response_1[0],
