@@ -163,7 +163,7 @@ CO-OPS/NOAA org policy may block third-party coverage hosts (e.g. Coveralls), so
 
 - `pytest-cov` writes `coverage.xml` every run (never restored from cache)
 - Ubuntu / Python 3.11 uploads it as the `coverage-xml` artifact
-- CI fails if coverage is below `[tool.coverage.report] fail_under` in `pyproject.toml` (initial floor **39**, matching the ~40% baseline)
+- CI fails if coverage is below `[tool.coverage.report] fail_under` in `pyproject.toml` (current floor **45**)
 - PRs that **lower** `fail_under` vs the base branch fail — ratchet up only, with maintainer approval to lower
 - Optional local summary: `python scripts/coverage_summary.py coverage.xml --fail-under-from-pyproject`
 
