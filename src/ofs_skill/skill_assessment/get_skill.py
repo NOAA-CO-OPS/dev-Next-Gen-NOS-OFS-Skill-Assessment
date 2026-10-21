@@ -1533,6 +1533,8 @@ def get_skill(prop, logger):
                         slot_16_name: skill_cols[16],
                         slot_17_name: skill_cols[17],
                         'target_error_range': skill_cols[18],
+                        'ws': skill_cols[19],
+                        'nse': skill_cols[20],
                         'datum': tabledatum,
                         'Y': skill_result['Y'],
                         'X': skill_result['X'],

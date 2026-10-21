@@ -37,6 +37,25 @@ def _circular_mean_deg(angles_deg) -> float:
     return float(np.rad2deg(np.arctan2(sin_mean, cos_mean)))
 
 
+def _willmott_skill_score(model, observed) -> float:
+    """Calculate Willmott's index of agreement for paired values."""
+    model = np.asarray(model, dtype=float)
+    observed = np.asarray(observed, dtype=float)
+    valid = np.isfinite(model) & np.isfinite(observed)
+    if not valid.any():
+        return float('nan')
+
+    model = model[valid]
+    observed = observed[valid]
+    observed_mean = np.mean(observed)
+    denominator = np.sum(
+        (np.abs(model - observed_mean) + np.abs(observed - observed_mean))**2
+    )
+    if denominator == 0:
+        return float('nan')
+    return float(1 - np.sum((model - observed)**2) / denominator)
+
+
 def _circular_correlation_deg(obs_deg, ofs_deg) -> float:
     """Jammalamadaka-Sarma circular correlation for paired angle series (degrees).
 
@@ -140,6 +159,10 @@ def skill_scalar(
         # RMSE -- fixed 8/13/24
         rmse = nos_metrics.rmse(ofs, obs)
         rmse = np.around(rmse, decimals=2)
+
+        # Wilmott and Nash-Sutcliffe skill scores
+        ws = np.around(_willmott_skill_score(ofs, obs), decimals=2)
+        nse = np.around(nos_metrics.nash_sutcliffe_efficiency(ofs, obs), decimals=2)
 
         # Pearson's R
         r_value = nos_metrics.pearson_r(ofs, obs)
@@ -261,7 +284,9 @@ def skill_scalar(
             wof,
             wofpf,
             stdev,
-            X1]
+            X1,
+            ws,
+            nse]
 
 
 def skill_vector(
@@ -321,6 +346,9 @@ def skill_vector(
         rmse = nos_metrics.rmse(ofs, obs)
         rmse = np.around(rmse, decimals=2)
 
+        # Wilmott skill and Nash-Sutcliffe efficiency scores
+        ws = np.around(_willmott_skill_score(ofs, obs), decimals=2)
+        nse = np.around(nos_metrics.nash_sutcliffe_efficiency(ofs, obs), decimals=2)
         # Pearson's R
         r_value = nos_metrics.pearson_r(ofs, obs)
         if math.isnan(r_value):
@@ -416,7 +444,9 @@ def skill_vector(
             wof,
             wofpf,
             stdev,
-            X1]
+            X1,
+            ws,
+            nse]
 
 def skill_vector_dir(
     df_paired: pd.DataFrame,
@@ -479,6 +509,10 @@ def skill_vector_dir(
         # Circular RMSE from signed angular differences
         rmse = float(np.sqrt(np.nanmean(np.asarray(dir_bias, dtype=float)**2)))
         rmse = np.around(rmse, decimals=2)
+
+        # WS and NSE are linear metrics and are not well-defined for circular directional arrays...
+        ws = np.nan
+        nse = np.nan
 
         # Jammalamadaka-Sarma circular correlation on raw 0-360° series
         r_value = _circular_correlation_deg(obs_dir, ofs_dir)
@@ -573,7 +607,9 @@ def skill_vector_dir(
             wof,
             wofpf,
             stdev,
-            X1]
+            X1,
+            ws,
+            nse]
 
 def skill_extrema(
     df_paired: pd.DataFrame,
@@ -620,6 +656,9 @@ def skill_extrema(
     pof = nos_metrics.positive_outlier_freq(bias, X1)
     nof = nos_metrics.negative_outlier_freq(bias, X1)
 
+    ws = np.around(nos_metrics.willmott_skill_score(ofs, obs), decimals=2)
+    nse = np.around(nos_metrics.nash_sutcliffe_efficiency(ofs, obs), decimals=2)
+
     # Timing stats. Guard all-NaN to avoid `RuntimeWarning: Mean of empty slice`
     # (nanmean of all-NaN is a legitimate NaN result, but the warning is noisy).
     tcf = nos_metrics.timing_central_frequency(timing_err, T1)
@@ -652,4 +691,6 @@ def skill_extrema(
         criteria.get('tcf'),            # slot 16 (wofpf): TCF pass/fail
         np.around(tcf, 2),              # slot 17 (stdev): TCF (%)
         X1,                             # slot 18: amplitude threshold
+        ws,                             # slot 19: Willmott skill score
+        nse                             # slot 20: Nash-Sutcliffe efficiency
     ]

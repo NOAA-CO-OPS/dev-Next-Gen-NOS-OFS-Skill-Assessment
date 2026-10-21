@@ -96,6 +96,37 @@ def standard_deviation(errors):
     """
     return float(np.nanstd(errors))
 
+def nash_sutcliffe_efficiency(predicted, observed):
+    """Nash-Sutcliffe Efficiency (NSE) (NaN-safe)."""
+    pred = np.asarray(predicted, dtype=float)
+    obs = np.asarray(observed, dtype=float)
+    mask = ~np.isnan(pred) & ~np.isnan(obs)
+    if not mask.any():
+        return float('nan')
+    pred, obs = pred[mask], obs[mask]
+
+    obs_mean = np.mean(obs)
+    numerator = np.sum((obs - pred) ** 2)
+    denominator = np.sum((obs - obs_mean) ** 2)
+    if denominator == 0:
+        return float('nan')
+    return float(1 - (numerator / denominator))
+
+def willmott_skill_score(predicted, observed):
+    """Willmott Skill Score (WS) (NaN-safe)."""
+    pred = np.asarray(predicted, dtype=float)
+    obs = np.asarray(observed, dtype=float)
+    mask = ~np.isnan(pred) & ~np.isnan(obs)
+    if not mask.any():
+        return float('nan')
+    pred, obs = pred[mask], obs[mask]
+
+    obs_mean = np.mean(obs)
+    numerator = np.sum((pred - obs) ** 2)
+    denominator = np.sum((np.abs(pred - obs_mean) + np.abs(obs - obs_mean)) ** 2)
+    if denominator == 0:
+        return float('nan')
+    return float(1 - (numerator / denominator))
 
 def central_frequency(errors, threshold):
     """Percentage of errors within [-threshold, +threshold] (inclusive, NOS convention).
