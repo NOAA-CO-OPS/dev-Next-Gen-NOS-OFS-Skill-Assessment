@@ -164,6 +164,9 @@ def skill_scalar(
         ws = np.around(_willmott_skill_score(ofs, obs), decimals=2)
         nse = np.around(nos_metrics.nash_sutcliffe_efficiency(ofs, obs), decimals=2)
 
+        # Mean aboslute error
+        mae = np.around(nos_metrics.mean_absolute_error(ofs, obs), decimals=2)
+
         # Pearson's R
         r_value = nos_metrics.pearson_r(ofs, obs)
         if math.isnan(r_value):
@@ -286,7 +289,8 @@ def skill_scalar(
             stdev,
             X1,
             ws,
-            nse]
+            nse,
+            mae]
 
 
 def skill_vector(
@@ -349,6 +353,10 @@ def skill_vector(
         # Wilmott skill and Nash-Sutcliffe efficiency scores
         ws = np.around(_willmott_skill_score(ofs, obs), decimals=2)
         nse = np.around(nos_metrics.nash_sutcliffe_efficiency(ofs, obs), decimals=2)
+
+        # Mean aboslute error
+        mae = np.around(nos_metrics.mean_absolute_error(ofs, obs), decimals=2)
+
         # Pearson's R
         r_value = nos_metrics.pearson_r(ofs, obs)
         if math.isnan(r_value):
@@ -446,7 +454,8 @@ def skill_vector(
             stdev,
             X1,
             ws,
-            nse]
+            nse,
+            mae]
 
 def skill_vector_dir(
     df_paired: pd.DataFrame,
@@ -491,7 +500,7 @@ def skill_vector_dir(
         Skill metrics in the same 19-slot layout as ``skill_scalar`` /
         ``skill_vector``:
         [rmse, r_value, bias, bias_perc, bias_dir, cf, cfpf, pof, pofpf,
-         nof, nofpf, mdpo, mdpopf, mdno, mdnopf, wof, wofpf, stdev, X1].
+         nof, nofpf, mdpo, mdpopf, mdno, mdnopf, wof, wofpf, stdev, X1, mae].
     """
     # Get target error range (degrees)
     X1, X2 = nos_metrics.get_error_threshold(
@@ -513,6 +522,9 @@ def skill_vector_dir(
         # WS and NSE are linear metrics and are not well-defined for circular directional arrays...
         ws = np.nan
         nse = np.nan
+
+        # Mean absolute error (MAE) from signed angular differences
+        mae = np.around(float(np.nanmean(np.abs(np.asarray(dir_bias, dtype=float)))), decimals=2)
 
         # Jammalamadaka-Sarma circular correlation on raw 0-360° series
         r_value = _circular_correlation_deg(obs_dir, ofs_dir)
@@ -609,7 +621,8 @@ def skill_vector_dir(
             stdev,
             X1,
             ws,
-            nse]
+            nse,
+            mae]
 
 def skill_extrema(
     df_paired: pd.DataFrame,
@@ -659,6 +672,9 @@ def skill_extrema(
     ws = np.around(nos_metrics.willmott_skill_score(ofs, obs), decimals=2)
     nse = np.around(nos_metrics.nash_sutcliffe_efficiency(ofs, obs), decimals=2)
 
+    # Mean aboslute error
+    mae = np.around(nos_metrics.mean_absolute_error(ofs, obs), decimals=2)
+
     # Timing stats. Guard all-NaN to avoid `RuntimeWarning: Mean of empty slice`
     # (nanmean of all-NaN is a legitimate NaN result, but the warning is noisy).
     tcf = nos_metrics.timing_central_frequency(timing_err, T1)
@@ -692,5 +708,6 @@ def skill_extrema(
         np.around(tcf, 2),              # slot 17 (stdev): TCF (%)
         X1,                             # slot 18: amplitude threshold
         ws,                             # slot 19: Willmott skill score
-        nse                             # slot 20: Nash-Sutcliffe efficiency
+        nse,                            # slot 20: Nash-Sutcliffe efficiency
+        mae                             # slot 21: Mean absolute error
     ]

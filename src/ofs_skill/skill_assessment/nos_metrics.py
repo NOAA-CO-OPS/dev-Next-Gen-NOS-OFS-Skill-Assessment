@@ -58,6 +58,11 @@ def rmse(predicted, observed):
     """
     return float(np.sqrt(np.nanmean((np.asarray(predicted) - np.asarray(observed))**2)))
 
+def mean_absolute_error(predicted, observed):
+    """Mean absolute error (NaN-safe)."""
+    pred = np.asarray(predicted, dtype=float)
+    obs = np.asarray(observed, dtype=float)
+    return float(np.nanmean(np.abs(pred - obs)))
 
 def pearson_r(predicted, observed):
     """Pearson correlation coefficient.

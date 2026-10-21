@@ -1535,6 +1535,7 @@ def get_skill(prop, logger):
                         'target_error_range': skill_cols[18],
                         'ws': skill_cols[19],
                         'nse': skill_cols[20],
+                        'mae': skill_cols[21],
                         'datum': tabledatum,
                         'Y': skill_result['Y'],
                         'X': skill_result['X'],

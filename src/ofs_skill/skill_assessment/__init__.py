@@ -43,6 +43,7 @@ from ofs_skill.skill_assessment.nos_metrics import (
     get_error_threshold,
     max_duration_negative_outliers,
     max_duration_positive_outliers,
+    mean_absolute_error,
     mean_bias,
     nash_sutcliffe_efficiency,
     negative_outlier_freq,
@@ -85,5 +86,6 @@ __all__ = [
     'check_nos_criteria',
     'get_error_threshold',
     'nash_sutcliffe_efficiency',
-    'willmott_skill_score'
+    'willmott_skill_score',
+    'mean_absolute_error'
 ]
