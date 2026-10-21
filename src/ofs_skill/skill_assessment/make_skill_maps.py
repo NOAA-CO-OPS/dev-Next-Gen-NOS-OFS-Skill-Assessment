@@ -64,6 +64,8 @@ def make_skill_maps(
             'Worst case outlier freq pass/fail': list(zip(*output['skill']))[16],
             'Mean bias standard dev ': list(zip(*output['skill']))[17],
             'Target RMSE ': list(zip(*output['skill']))[18],
+            'Willmott Skill Score ': list(zip(*output['skill']))[19],
+            'Nash-Sutcliffe Efficiency ': list(zip(*output['skill']))[20],
         }
     )
 
@@ -90,6 +92,8 @@ def make_skill_maps(
                         'Worst case outlier freq pass/fail': 'str',
                         'Mean bias standard dev ': 'float',
                         'Target RMSE ': 'float',
+                        'Willmott Skill Score ': 'float',
+                        'Nash-Sutcliffe Efficiency ': 'float',
                         })
         if df.empty:
             logger.error('DataFrame is empty, cannot make skill maps!')
@@ -172,6 +176,18 @@ def make_skill_maps(
     plottitle_rmse = f'{title_head} RMSE{unit_sfx} statistics,<br>{daterange}'
     plottitle_cf = f'{title_head} central frequency (%),<br>{daterange}'
     plottitle_mb = f'{title_head} mean bias{unit_sfx},<br>{daterange}'
+    plottitle_ws = f'{title_head} Willmott Skill Score,<br>{daterange}'
+    plottitle_nse = f'{title_head} Nash-Sutcliffe Efficiency,<br>{daterange}'
+
+    # Common color scale logic for bounded [0, 1] scores
+    color_scale_score = [
+        [0.0, '#e35336'],  # 0 or below (Poor - Red)
+        [0.5, '#ffe066'],  # 0.5 (Neutral - Yellow)
+        [1.0, '#5aa17f']   # 1.0 (Perfect - Green)
+    ]
+
+    tick_values_score = [0.0, 0.5, 1.0]
+    tick_labels_score = ['0.0 (or less)', '0.5', '1.0 (Perfect)']
 
     # ========================================================
     #                     CALCULATE RMSE LOGIC
@@ -267,19 +283,33 @@ def make_skill_maps(
     cols_rmse = [
         'RMSE ', 'Target RMSE ', 'Mean bias ', 'Central freq ',
         'CF pass/fail ', 'R ', 'Positive outlier freq ',
-        'PO freq pass/fail ', 'Negative outlier freq ', 'NO freq pass/fail '
+        'PO freq pass/fail ', 'Negative outlier freq ', 'NO freq pass/fail ',
+        'Willmott Skill Score ', 'Nash-Sutcliffe Efficiency '
     ]
 
     cols_cf = [
         'Central freq ', 'CF pass/fail ', 'RMSE ', 'Target RMSE ',
         'Mean bias ', 'R ', 'Positive outlier freq ',
-        'PO freq pass/fail ', 'Negative outlier freq ', 'NO freq pass/fail '
+        'PO freq pass/fail ', 'Negative outlier freq ', 'NO freq pass/fail ',
+        'Willmott Skill Score ', 'Nash-Sutcliffe Efficiency '
     ]
 
     cols_mb = [
         'Mean bias ', 'RMSE ', 'Target RMSE ', 'Central freq ',
         'CF pass/fail ', 'R ', 'Positive outlier freq ',
-        'PO freq pass/fail ', 'Negative outlier freq ', 'NO freq pass/fail '
+        'PO freq pass/fail ', 'Negative outlier freq ', 'NO freq pass/fail ',
+        'Willmott Skill Score ', 'Nash-Sutcliffe Efficiency '
+    ]
+
+    df['Constant size'] = 10  # Arbitrary uniform size for score views
+
+    cols_ws = [
+        'Willmott Skill Score ', 'Nash-Sutcliffe Efficiency ', 'RMSE ',
+        'Target RMSE ', 'Mean bias ', 'Central freq ', 'CF pass/fail ', 'R '
+    ]
+    cols_nse = [
+        'Nash-Sutcliffe Efficiency ', 'Willmott Skill Score ', 'RMSE ',
+        'Target RMSE ', 'Mean bias ', 'Central freq ', 'CF pass/fail ', 'R '
     ]
 
     # Unit suffixes for the hover rows, keyed on the raw dataframe column
@@ -308,14 +338,14 @@ def make_skill_maps(
     def build_view(color_col, size_col, custom_cols, coloraxis_id):
         fig_tmp = px.scatter_mapbox(
             df, lat='Y ', lon='X ', color=color_col, hover_name='ID ',
-            custom_data=custom_cols, size=size_col,
+            custom_data=custom_cols, size=size_col, mapbox_style='white-bg'
         )
         trace = fig_tmp.data[0]
         trace.marker.coloraxis = coloraxis_id
         trace.hovertemplate = build_hovertemplate(custom_cols)
 
         outline = px.scatter_mapbox(
-            df, lat='Y ', lon='X ', hover_name='ID ', size=size_col,
+            df, lat='Y ', lon='X ', hover_name='ID ', size=size_col, mapbox_style='white-bg'
         ).data[0]
         outline.marker.color = 'black'
         outline.marker.size = trace.marker.size * 1.1
@@ -327,9 +357,17 @@ def make_skill_maps(
     rmse_trace, rmse_outline = build_view('RMSE ', 'RMSE ', cols_rmse, 'coloraxis')
     cf_trace, cf_outline = build_view('Central freq ', 'Central freq ', cols_cf, 'coloraxis2')
     mb_trace, mb_outline = build_view('Mean bias ', 'Abs mean bias ', cols_mb, 'coloraxis3')
+    ws_trace, ws_outline = build_view('Willmott Skill Score ', 'Constant size', cols_ws, 'coloraxis4')
+    nse_trace, nse_outline = build_view('Nash-Sutcliffe Efficiency ', 'Constant size', cols_nse, 'coloraxis5')
 
     # 5. Assemble Final Figure
-    fig = go.Figure()
+    # Let Plotly Express build the perfect free-tile layout, then steal it.
+    base_fig = px.scatter_mapbox(
+        df, lat='Y ', lon='X ',
+        mapbox_style='white-bg',
+        zoom=zoom_level, center=dict(lat=center_lat, lon=center_lon)
+    )
+    fig = go.Figure(layout=base_fig.layout)
 
     # Traces 0 & 1: RMSE (Visible by default)
     fig.add_trace(rmse_outline)
@@ -347,6 +385,18 @@ def make_skill_maps(
     fig.add_trace(mb_outline)
     fig.add_trace(mb_trace)
 
+    # Traces 6 & 7: WS (Hidden by default)
+    ws_outline.visible = False
+    ws_trace.visible = False
+    fig.add_trace(ws_outline)
+    fig.add_trace(ws_trace)
+
+    # Traces 8 & 9: NSE (Hidden by default)
+    nse_outline.visible = False
+    nse_trace.visible = False
+    fig.add_trace(nse_outline)
+    fig.add_trace(nse_trace)
+
     # Marker clustering is disabled here: skill maps show every station
     # individually (jitter above separates co-located points). Set
     # enabled=True if dense maps ever need clustering.
@@ -354,8 +404,19 @@ def make_skill_maps(
 
     # 5. Layout & Dropdown Menus
     fig.update_layout(
-        mapbox_style='carto-positron',
-        mapbox=dict(zoom=zoom_level, center=dict(lat=center_lat, lon=center_lon)),
+        mapbox=dict(
+            style='white-bg',
+            layers=[
+                dict(
+                    sourcetype='raster',
+                    source=['https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}'],
+                    below='traces'
+                )
+            ],
+            zoom=zoom_level,
+            center=dict(lat=center_lat, lon=center_lon)
+        ),
+        margin=dict(t=140, b=40, l=40, r=40),
         height=map_height,
         width=map_width,
         title=dict(text=plottitle_rmse, font=dict(color='black', size=22), x=0.5),
@@ -403,7 +464,34 @@ def make_skill_maps(
                 len=0.6
             )
         ),
-
+        # WS Colorbar (Hidden by default)
+        coloraxis4=dict(
+            colorscale=color_scale_score,
+            cmin=0.0, cmax=1.0,
+            showscale=False,
+            colorbar=dict(
+                title=dict(text='Willmott Skill Score', font=dict(color='black')),
+                tickfont=dict(color='black'),
+                tickvals=tick_values_score,
+                ticktext=tick_labels_score,
+                thickness=20,
+                len=0.6
+            )
+        ),
+        # NSE Colorbar (Hidden by default)
+        coloraxis5=dict(
+            colorscale=color_scale_score,
+            cmin=0.0, cmax=1.0,
+            showscale=False,
+            colorbar=dict(
+                title=dict(text='Nash-Sutcliffe Efficiency', font=dict(color='black')),
+                tickfont=dict(color='black'),
+                tickvals=tick_values_score,
+                ticktext=tick_labels_score,
+                thickness=20,
+                len=0.6
+            )
+        ),
         annotations=[
             dict(
                 text='<i>Select mapped statistics from dropdown:</i>',
@@ -418,7 +506,7 @@ def make_skill_maps(
             )
         ],
 
-        # The Dropdown Menu
+# The Dropdown Menu
         updatemenus=[
             dict(
                 type='dropdown',
@@ -432,33 +520,65 @@ def make_skill_maps(
                         label='RMSE view',
                         method='update',
                         args=[
-                            {'visible': [True, True, False, False, False, False]},
+                            {'visible': [True, True, False, False, False, False, False, False, False, False]},
                             {'title.text': plottitle_rmse,
                              'coloraxis.showscale': True,
                              'coloraxis2.showscale': False,
-                             'coloraxis3.showscale': False}
+                             'coloraxis3.showscale': False,
+                             'coloraxis4.showscale': False,
+                             'coloraxis5.showscale': False}
                         ]
                     ),
                     dict(
                         label='Central Frequency view',
                         method='update',
                         args=[
-                            {'visible': [False, False, True, True, False, False]},
+                            {'visible': [False, False, True, True, False, False, False, False, False, False]},
                             {'title.text': plottitle_cf,
                              'coloraxis.showscale': False,
                              'coloraxis2.showscale': True,
-                             'coloraxis3.showscale': False}
+                             'coloraxis3.showscale': False,
+                             'coloraxis4.showscale': False,
+                             'coloraxis5.showscale': False}
                         ]
                     ),
                     dict(
                         label='Mean Bias view',
                         method='update',
                         args=[
-                            {'visible': [False, False, False, False, True, True]},
+                            {'visible': [False, False, False, False, True, True, False, False, False, False]},
                             {'title.text': plottitle_mb,
                              'coloraxis.showscale': False,
                              'coloraxis2.showscale': False,
-                             'coloraxis3.showscale': True}
+                             'coloraxis3.showscale': True,
+                             'coloraxis4.showscale': False,
+                             'coloraxis5.showscale': False}
+                        ]
+                    ),
+                    dict(
+                        label='Willmott Skill Score view',
+                        method='update',
+                        args=[
+                            {'visible': [False, False, False, False, False, False, True, True, False, False]},
+                            {'title.text': plottitle_ws,
+                             'coloraxis.showscale': False,
+                             'coloraxis2.showscale': False,
+                             'coloraxis3.showscale': False,
+                             'coloraxis4.showscale': True,
+                             'coloraxis5.showscale': False}
+                        ]
+                    ),
+                    dict(
+                        label='Nash-Sutcliffe Efficiency view',
+                        method='update',
+                        args=[
+                            {'visible': [False, False, False, False, False, False, False, False, True, True]},
+                            {'title.text': plottitle_nse,
+                             'coloraxis.showscale': False,
+                             'coloraxis2.showscale': False,
+                             'coloraxis3.showscale': False,
+                             'coloraxis4.showscale': False,
+                             'coloraxis5.showscale': True}
                         ]
                     )
                 ])
