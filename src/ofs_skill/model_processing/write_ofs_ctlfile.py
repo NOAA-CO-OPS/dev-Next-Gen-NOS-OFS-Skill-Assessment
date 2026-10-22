@@ -575,7 +575,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
     station_match_max_dist = utils.get_station_match_max_dist(
         logger, config_file=_conf
     )
-    # Time-step stride for the ADCIRC permanently-dry node scan in
+    # Time-step stride for the ADCIRC dry node scan in
     # index_nearest_node (fields runs only).
     adcirc_dry_check_stride = utils.get_adcirc_dry_check_stride(
         logger, config_file=_conf

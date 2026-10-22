@@ -709,7 +709,7 @@ def get_station_match_max_dist(logger=None, config_file=None):
 
 
 def get_adcirc_dry_check_stride(logger=None, config_file=None):
-    """Read the ADCIRC permanently-dry scan stride from ``[settings]``.
+    """Read the ADCIRC dry node scan stride from ``[settings]``.
 
     Returns the ``adcirc_dry_check_stride`` value (an integer >= 1) from the
     ``[settings]`` section of the config, falling back to the package

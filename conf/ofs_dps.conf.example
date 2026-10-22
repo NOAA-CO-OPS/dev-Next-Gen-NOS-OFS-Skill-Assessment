@@ -284,14 +284,15 @@ horizon_extra_plots=False
 station_match_max_dist_km=4.0
 
 # STOFS-2D-Global (ADCIRC) fields runs only. Before matching stations to
-# model nodes, nodes that are dry (zeta = -99999) at every time step are
-# found and excluded. This scan reads the full zeta field at each checked
-# time step, so for long runs it can be slow; its estimated duration is
-# written to the log when it starts.
+# model nodes, nodes that are dry (zeta = -99999) at any time step are
+# found and excluded, so only nodes that are wet for the whole record are
+# matched. This scan reads the full zeta field at each checked time step,
+# so for long runs it can be slow; its estimated duration is written to the
+# log when it starts.
 # 1 = check every time step (default; exact).
 # N > 1 = check every N-th time step: about N times faster, but less
-# accurate -- a node with infrequent wet periods that fall between the
-# checked steps is identified as always dry and is not used for matching.
+# accurate -- a node whose dry periods fall only between the checked steps
+# is identified as always wet and can be used for matching.
 adcirc_dry_check_stride=1
 
 # NetCDF engine selection for reading model files. Three modes:
