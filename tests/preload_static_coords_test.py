@@ -73,6 +73,22 @@ def test_preload_fvcom_tolerates_missing_z(caplog):
         assert name in summary
 
 
+def test_preload_adcirc_loads_x_y(caplog):
+    """STOFS-2D-Global fields files name node coordinates x/y, not lon/lat."""
+    n_node = 6
+    ds = xr.Dataset(
+        {'zeta': (('time', 'node'), np.zeros((2, n_node)))},
+        coords={'x': ('node', np.linspace(-80, -70, n_node)),
+                'y': ('node', np.linspace(30, 40, n_node))},
+    )
+    with caplog.at_level(logging.INFO, logger='preload_static_coords_test'):
+        _preload_static_coords(ds, 'adcirc', _logger())
+
+    summary = next(r.getMessage() for r in caplog.records
+                   if 'Pre-loaded' in r.getMessage())
+    assert "'x'" in summary and "'y'" in summary
+
+
 def test_preload_unknown_source_no_error(caplog):
     """Unknown model_source should log 0 loaded coords and not raise."""
     ds = _fvcom_dataset()

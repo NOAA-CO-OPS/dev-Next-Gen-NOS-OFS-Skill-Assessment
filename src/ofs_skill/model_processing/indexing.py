@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from typing import Any
 
 import numpy as np
@@ -40,6 +41,16 @@ _TIME_CONCAT_DIM_CANDIDATES = ('time', 'ocean_time')
 # ``station_match_max_dist_km`` config key by ``write_ofs_ctlfile`` and passed
 # in via ``max_dist_km``.
 STATION_MATCH_MAX_DIST_KM = 4.0
+
+# ADCIRC (STOFS-2D-Global) writes dry/land nodes in zeta as this value. zeta
+# carries no _FillValue attribute (only a global one), so xarray does not
+# decode it to NaN.
+ADCIRC_FILL_VALUE = -99999.0
+
+# Default time-step stride for the ADCIRC permanently-dry node scan
+# (1 = check every step). The effective value comes from the [settings]
+# adcirc_dry_check_stride config key, read by write_ofs_ctlfile.
+ADCIRC_DRY_CHECK_STRIDE = 1
 
 # Kilometres per degree of latitude (constant everywhere: R * pi / 180 with
 # R = 6371 km). Used to size the candidate pre-filter box from the km cutoff.
@@ -121,13 +132,148 @@ def _static_coord_1d(model_netcdf: Any, name: str) -> np.ndarray:
     return arr
 
 
+def _lonlat_to_unit_xyz(lon: np.ndarray, lat: np.ndarray) -> np.ndarray:
+    """Convert degrees lon/lat to 3-D points on the unit sphere, shape (n, 3).
+
+    Euclidean (chord) distance between these points is a monotonic function
+    of great-circle distance, so nearest-by-chord is nearest-by-great-circle,
+    and longitude wrapping (+-180 vs 0..360) needs no special handling.
+    """
+    lon_r = np.radians(np.asarray(lon, dtype=np.float64))
+    lat_r = np.radians(np.asarray(lat, dtype=np.float64))
+    cos_lat = np.cos(lat_r)
+    return np.column_stack(
+        (cos_lat * np.cos(lon_r), cos_lat * np.sin(lon_r), np.sin(lat_r)))
+
+
+def _all_fill(zeta: Any, steps: np.ndarray) -> np.ndarray:
+    """True for nodes whose zeta is ``ADCIRC_FILL_VALUE`` at every given step."""
+    if hasattr(zeta, 'dims'):
+        time_dim = zeta.dims[0]
+        dry = (zeta.isel({time_dim: steps}) == ADCIRC_FILL_VALUE).all(dim=time_dim)
+        return np.asarray(dry.values, dtype=bool)
+    return np.all(np.asarray(zeta)[steps] == ADCIRC_FILL_VALUE, axis=0)
+
+
+def _adcirc_permanently_dry(
+    model_netcdf: Any, stride: int, logger: logging.Logger
+) -> np.ndarray | None:
+    """Boolean mask of ADCIRC nodes whose zeta is the fill value at every step.
+
+    ADCIRC writes dry/land nodes as ``ADCIRC_FILL_VALUE`` with no
+    ``_FillValue`` attribute on ``zeta``, so they are not decoded to NaN.
+    Every ``stride``-th time step is checked (1 = all steps). The cost is
+    one full read of zeta per checked step, so the scan time scales with the
+    number of loaded time steps divided by ``stride``. Returns None when the
+    dataset has no ``zeta``.
+    """
+    if 'zeta' not in model_netcdf:
+        logger.warning('ADCIRC dataset has no zeta; dry nodes not excluded.')
+        return None
+    zeta = model_netcdf['zeta']
+    n_time = int(zeta.shape[0])
+    steps = np.arange(0, n_time, stride)
+
+    # Time the first step and extrapolate, so a slow scan is announced
+    # before it runs. The first read includes file-open overhead, so the
+    # estimate is rough.
+    t_start = time.perf_counter()
+    dry = _all_fill(zeta, steps[:1])
+    per_step = time.perf_counter() - t_start
+    logger.info(
+        'ADCIRC permanently-dry node scan: checking %d of %d time steps '
+        '(adcirc_dry_check_stride=%d); estimated time %.0f s (from %.2f s '
+        'for the first step). If this is too slow, set '
+        'adcirc_dry_check_stride > 1 in the [settings] section of the '
+        'config file (faster, but less accurate).',
+        steps.size, n_time, stride, per_step * steps.size, per_step,
+    )
+    if steps.size > 1:
+        dry &= _all_fill(zeta, steps[1:])
+    logger.info(
+        'ADCIRC permanently-dry node scan finished in %.1f s: %d of %d nodes '
+        'are the fill value at every checked step.',
+        time.perf_counter() - t_start, int(dry.sum()), dry.size,
+    )
+    return dry
+
+
+def _adcirc_nearest_nodes(
+    ctl_file_extract: list[list[str]],
+    model_netcdf: Any,
+    name_var: str,
+    max_dist_km: float | None,
+    dry_check_stride: int | None,
+    logger: logging.Logger,
+) -> list[Any]:
+    """Nearest wet ADCIRC node to each station, within ``max_dist_km``.
+
+    Nodes whose zeta is the fill value at every checked time step
+    (permanently dry; every ``dry_check_stride``-th step, default all) are
+    excluded. The search is a KD-tree on unit-sphere coordinates, which
+    is exact for great-circle distance and continuous across the
+    antimeridian. Stations with no qualifying node within the cutoff get
+    ``NaN``, which write_ofs_ctlfile skips.
+    """
+    from scipy.spatial import cKDTree  # pylint: disable=import-outside-toplevel
+
+    max_dist = (
+        float(max_dist_km) if max_dist_km is not None
+        else STATION_MATCH_MAX_DIST_KM
+    )
+    stride = (int(dry_check_stride) if dry_check_stride is not None
+              else ADCIRC_DRY_CHECK_STRIDE)
+    if stride < 1:
+        raise ValueError(f'dry_check_stride must be >= 1, got {stride}')
+    x_np = _static_coord_1d(model_netcdf, 'x')
+    y_np = _static_coord_1d(model_netcdf, 'y')
+
+    dry = _adcirc_permanently_dry(model_netcdf, stride, logger)
+    candidates = (np.flatnonzero(~dry) if dry is not None
+                  else np.arange(x_np.size))
+    logger.info(
+        '[%s] ADCIRC nearest-node: %d of %d nodes eligible (%d permanently '
+        'dry excluded); cutoff %.2f km',
+        name_var, candidates.size, x_np.size, x_np.size - candidates.size,
+        max_dist,
+    )
+    if candidates.size == 0:
+        return [np.nan] * len(ctl_file_extract)
+
+    tree = cKDTree(_lonlat_to_unit_xyz(x_np[candidates], y_np[candidates]))
+    obs_lat = np.array([float(row[0]) for row in ctl_file_extract])
+    obs_lon = np.array([float(row[1]) for row in ctl_file_extract])
+    _, nearest = tree.query(_lonlat_to_unit_xyz(obs_lon, obs_lat), k=1)
+
+    index_min_dist: list[Any] = []
+    for obs_p, cand in enumerate(nearest):
+        node = int(candidates[cand])
+        dist_km = calculate_station_distance(
+            obs_lat[obs_p], obs_lon[obs_p], float(y_np[node]), float(x_np[node]))
+        if dist_km <= max_dist:
+            index_min_dist.append(node)
+            logger.info(
+                'Nearest node found: station %s of %s, node %d at %.3f km',
+                obs_p + 1, len(ctl_file_extract), node, dist_km)
+        else:
+            index_min_dist.append(np.nan)
+            logger.info(
+                'No node within %.2f km for station %s of %s at (%.4f, %.4f); '
+                'nearest wet node %d is %.3f km away',
+                max_dist, obs_p + 1, len(ctl_file_extract),
+                obs_lat[obs_p], obs_lon[obs_p], node, dist_km)
+    return index_min_dist
+
+
 def index_nearest_node(
     ctl_file_extract: list[list[str]],
     model_netcdf: dict[str, Any],
     model_source: str,
     name_var: str,
     ofs: str,
-    logger: logging.Logger
+    logger: logging.Logger,
+    max_dist_km: float | None = None,
+    dry_check_stride: int | None = None,
 ) -> list[int]:
     """
     Find the closest model node to each observation station.
@@ -146,18 +292,34 @@ def index_nearest_node(
         - FVCOM: 'lonc', 'latc', 'lon', 'lat'
         - ROMS: 'lon_rho', 'lat_rho', 'mask_rho'
         - SCHISM: 'lon', 'lat'
-        - ADCIRC: 'lon', 'lat'
+        - ADCIRC: 'x', 'y' (and 'zeta', used to exclude permanently dry nodes)
     model_source : str
         Model type: 'fvcom', 'roms', 'schism', or 'adcirc'
     name_var : str
         Variable name: 'wl', 'temp', 'salt', or 'cu'
     logger : logging.Logger
         Logger for tracking progress
+    max_dist_km : float or None, optional
+        Maximum great-circle distance (km) between a station and its matched
+        node. Currently applied only by the ADCIRC branch, where ``None``
+        means the module default ``STATION_MATCH_MAX_DIST_KM``. Sourced from
+        the ``[settings] station_match_max_dist_km`` config key by
+        ``write_ofs_ctlfile``. Other model sources ignore it.
+    dry_check_stride : int or None, optional
+        ADCIRC only. Nodes whose zeta is the fill value at every checked time
+        step are treated as permanently dry and never matched. 1 (the
+        default, ``ADCIRC_DRY_CHECK_STRIDE``) checks every loaded time step;
+        N > 1 checks every N-th step, which is about N times faster but less
+        accurate: a node with infrequent wet periods that fall between the
+        checked steps is treated as permanently dry. Sourced from the
+        ``[settings] adcirc_dry_check_stride`` config key by
+        ``write_ofs_ctlfile``. Other model sources ignore it.
 
     Returns
     -------
     List[int]
         List of model node indices, one for each observation station
+        (``NaN`` where no node qualifies)
 
     Notes
     -----
@@ -166,6 +328,8 @@ def index_nearest_node(
     - Handles longitude wrapping for global models
     - For ROMS, handles land masking
     - Uses haversine formula via calculate_station_distance()
+    - For ADCIRC, see ``_adcirc_nearest_nodes`` (KD-tree on the unit sphere,
+      permanently dry nodes excluded, ``max_dist_km`` cutoff)
 
     Examples
     --------
@@ -518,7 +682,9 @@ def index_nearest_node(
                 logger.info('Nearest element found: station %s of %s', obs_p + 1, len(ctl_file_extract))
 
     elif model_source == 'adcirc':
-        raise NotImplementedError('ADCIRC indexing not yet implemented.')
+        index_min_dist = _adcirc_nearest_nodes(
+            ctl_file_extract, model_netcdf, name_var, max_dist_km,
+            dry_check_stride, logger)
 
     else:
         raise ValueError(f'Unknown model source: {model_source}')
