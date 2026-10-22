@@ -141,6 +141,28 @@ def test_index_nearest_depth_water_level_is_layer_0(tmp_path):
     assert np.isnan(layers[2]) and np.isnan(depths[2])
 
 
+@pytest.mark.parametrize('batch', [False, True], ids=['per_station', 'batch'])
+def test_stations_run_does_not_call_fill_mask(tmp_path, monkeypatch, batch):
+    # The fill mask is fields-only: a stofs_2d_glo stations run must not call
+    # it, so stations extraction is unchanged from main.
+    model, prop, _ = _setup(tmp_path, [S_ONE])
+    prop.ofsfiletype = 'stations'
+    node = ONE_STEP_DRY_NODE
+    ofs_ctlfile = ([], [node], [0], [0.0], [S_ONE[0]])
+    calls = []
+    monkeypatch.setattr(get_node_ofs, '_mask_adcirc_fill',
+                        lambda *a, **k: calls.append(a) or a[0])
+    precomputed = None
+    if batch:
+        zeta = model['zeta'].values[:, [node]].astype(float)
+        precomputed = {'model_time': model['time'].values, 'scalar_data': zeta}
+    series, datum_offset = get_node_ofs.format_waterlevel(
+        prop, model, ofs_ctlfile, 'zeta', 0, _LOGGER, precomputed=precomputed)
+    assert calls == []
+    assert datum_offset == 0
+    assert len(series) == model.sizes['time']
+
+
 def _values(formatted_series):
     return np.array([float(line.split()[-1]) for line in formatted_series])
 

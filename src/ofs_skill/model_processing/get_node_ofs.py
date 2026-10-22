@@ -163,9 +163,10 @@ def _mask_schism_sentinels(arr, kind, station_id, ofs, log):
 def _mask_adcirc_fill(arr, station_id, ofs, log):
     """Mask the ADCIRC dry-node fill value (``ADCIRC_FILL_VALUE``) as NaN.
 
-    STOFS-2D-Global zeta stores dry steps as -99999.0 with no ``_FillValue``
-    attribute, so they reach extraction as numbers. Must run before the
-    datum shift, which would move the fill off its exact value.
+    STOFS-2D-Global fields zeta stores dry steps as -99999.0 with no
+    ``_FillValue`` attribute, so they reach extraction as numbers. Must run
+    before the datum shift, which would move the fill off its exact value.
+    Applied to fields runs only; stations runs are left unchanged.
     """
     arr = np.asarray(arr, dtype=float).copy()
     fill = arr == ADCIRC_FILL_VALUE
@@ -1417,8 +1418,9 @@ def format_waterlevel(prop, model, ofs_ctlfile, model_var, i, logger, precompute
                 sign = 1 if 'stofs' in prop.ofs else -1
                 model_obs = model_obs + sign * datum_offset
         elif prop.model_source == 'adcirc':
-            model_obs = _mask_adcirc_fill(
-                model_obs, ofs_ctlfile[4][i], prop.ofs, logger)
+            if prop.ofsfiletype == 'fields':
+                model_obs = _mask_adcirc_fill(
+                    model_obs, ofs_ctlfile[4][i], prop.ofs, logger)
             # adcirc carries the upper guard too — do not fold it into the
             # generic branch below.
             if datum_offset > -999 and datum_offset < 999:
@@ -1476,8 +1478,9 @@ def format_waterlevel(prop, model, ofs_ctlfile, model_var, i, logger, precompute
     elif prop.model_source == 'adcirc':
         model_time = np.array(model['time'])
         model_obs = np.array(model[model_var][:, int(ofs_ctlfile[1][i])])
-        model_obs = _mask_adcirc_fill(
-            model_obs, ofs_ctlfile[4][i], prop.ofs, logger)
+        if prop.ofsfiletype == 'fields':
+            model_obs = _mask_adcirc_fill(
+                model_obs, ofs_ctlfile[4][i], prop.ofs, logger)
         if datum_offset > -999 and datum_offset < 999:
             model_obs = model_obs - datum_offset
 
