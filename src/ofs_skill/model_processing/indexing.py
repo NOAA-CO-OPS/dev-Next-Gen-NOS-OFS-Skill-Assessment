@@ -155,6 +155,25 @@ def _any_fill(zeta: Any, steps: np.ndarray) -> np.ndarray:
     return np.any(np.asarray(zeta)[steps] == ADCIRC_FILL_VALUE, axis=0)
 
 
+def _unique_time_steps(model_netcdf: Any, zeta: Any) -> np.ndarray:
+    """Positions of the first occurrence of each time value along zeta's time dim.
+
+    With a single fields file, intake lists the file twice and does not drop
+    the duplicate times for fields runs, so every step appears twice. The
+    duplicate steps are not read again. Without a time coordinate, every
+    position is returned.
+    """
+    n_time = int(zeta.shape[0])
+    time_dim = zeta.dims[0] if hasattr(zeta, 'dims') else None
+    if time_dim is None or time_dim not in model_netcdf:
+        return np.arange(n_time)
+    times = np.asarray(model_netcdf[time_dim].values)
+    if times.shape != (n_time,):
+        return np.arange(n_time)
+    _, first = np.unique(times, return_index=True)
+    return np.sort(first)
+
+
 def _adcirc_ever_dry(
     model_netcdf: Any, stride: int, logger: logging.Logger
 ) -> np.ndarray | None:
@@ -163,18 +182,27 @@ def _adcirc_ever_dry(
     ADCIRC writes dry/land nodes as ``ADCIRC_FILL_VALUE`` with no
     ``_FillValue`` attribute on ``zeta``, so they are not decoded to NaN.
     Only nodes that are wet for the whole record are used for matching, so
-    a node is flagged if it is dry at any checked step. Every
-    ``stride``-th time step is checked (1 = all steps). The cost is
+    a node is flagged if it is dry at any checked step. Each unique time
+    value is read once (repeated time values are skipped), and every
+    ``stride``-th unique step is checked (1 = all steps). The cost is
     one full read of zeta per checked step, so the scan time scales with the
-    number of loaded time steps divided by ``stride``. Returns None when the
-    dataset has no ``zeta``.
+    number of unique loaded time steps divided by ``stride``. Returns None
+    when the dataset has no ``zeta``.
     """
     if 'zeta' not in model_netcdf:
         logger.warning('ADCIRC dataset has no zeta; dry nodes not excluded.')
         return None
     zeta = model_netcdf['zeta']
-    n_time = int(zeta.shape[0])
-    steps = np.arange(0, n_time, stride)
+    n_loaded = int(zeta.shape[0])
+    unique_steps = _unique_time_steps(model_netcdf, zeta)
+    n_time = unique_steps.size
+    if n_time < n_loaded:
+        logger.info(
+            'ADCIRC dry node scan: %d of %d loaded time steps repeat an '
+            'earlier time value and are not read again.',
+            n_loaded - n_time, n_loaded,
+        )
+    steps = unique_steps[::stride]
 
     # Time the first step and extrapolate, so a slow scan is announced
     # before it runs. The first read includes file-open overhead, so the
@@ -211,10 +239,11 @@ def _adcirc_nearest_nodes(
     """Nearest always-wet ADCIRC node to each station, within ``max_dist_km``.
 
     Nodes whose zeta is the fill value at any checked time step (every
-    ``dry_check_stride``-th step, default all) are excluded. The search is a KD-tree on unit-sphere coordinates, which
-    is exact for great-circle distance and continuous across the
-    antimeridian. Stations with no qualifying node within the cutoff get
-    ``NaN``, which write_ofs_ctlfile skips.
+    ``dry_check_stride``-th step, default all) are excluded. The search
+    is a KD-tree on unit-sphere coordinates, which is exact for
+    great-circle distance and continuous across the antimeridian.
+    Stations with no qualifying node within the cutoff get ``NaN``, which
+    write_ofs_ctlfile skips.
     """
     from scipy.spatial import cKDTree  # pylint: disable=import-outside-toplevel
 

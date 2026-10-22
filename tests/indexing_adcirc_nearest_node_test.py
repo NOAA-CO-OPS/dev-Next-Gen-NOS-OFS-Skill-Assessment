@@ -125,6 +125,30 @@ def test_stride_trades_accuracy_for_speed(caplog):
                               _LOGGER, dry_check_stride=4) == [5]
 
 
+def test_duplicated_timestamps_are_read_once(caplog):
+    # intake lists a single fields file twice, so every time value appears
+    # twice on the time axis. The second copy here marks node 2 dry at every
+    # step: if the repeated steps were read, node 2 would be excluded and
+    # station A would get NaN (node 0 is ~8.5 km away). Reading each unique
+    # time once keeps node 2.
+    first = _dataset(n_time=4)
+    repeat = first.copy(deep=True)
+    repeat['zeta'][:, 2] = ADCIRC_FILL_VALUE
+    ds = xr.concat([first, repeat], dim='time')
+    assert ds.sizes['time'] == 8
+    ctl = _ctl((40.0, -70.0))
+    with caplog.at_level(logging.INFO, logger=_LOGGER.name):
+        assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
+                                  _LOGGER) == [2]
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any('4 of 8 loaded time steps repeat' in m for m in msgs)
+    assert any('checking 4 of 4 time steps' in m for m in msgs)
+    # The stride applies to the unique steps: stride 2 checks times 0 and 2,
+    # which skips node 5's dry step (time 1).
+    assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
+                              _LOGGER, dry_check_stride=2) == [5]
+
+
 def test_stride_must_be_positive():
     with pytest.raises(ValueError, match='dry_check_stride'):
         index_nearest_node(_ctl((40.0, -70.0)), _dataset(), 'adcirc', 'wl',
