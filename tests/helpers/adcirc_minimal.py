@@ -72,14 +72,12 @@ def build_adcirc_minimal_dataset(tmp_path: Path) -> xr.Dataset:
     return opened
 
 
-def write_adcirc_config(tmp_path: Path, max_dist_km: float = 4.0,
-                        dry_check_stride: int = 1) -> Path:
-    """Minimal ofs_dps.conf plus the [settings] keys the ADCIRC path reads."""
+def write_adcirc_config(tmp_path: Path, max_dist_km: float = 4.0) -> Path:
+    """Minimal ofs_dps.conf plus the [settings] key the ADCIRC path reads."""
     from tests.helpers.api_mocks import write_minimal_ofs_config
 
     cfg_path = write_minimal_ofs_config(tmp_path)
     with open(cfg_path, 'a', encoding='utf-8') as f:
         f.write('\n[settings]\n'
-                f'station_match_max_dist_km={max_dist_km}\n'
-                f'adcirc_dry_check_stride={dry_check_stride}\n')
+                f'station_match_max_dist_km={max_dist_km}\n')
     return cfg_path

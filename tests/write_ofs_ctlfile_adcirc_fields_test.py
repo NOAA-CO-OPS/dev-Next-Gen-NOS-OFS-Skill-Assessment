@@ -29,6 +29,7 @@ import pytest
 
 from ofs_skill.model_processing.indexing import index_nearest_depth
 from ofs_skill.model_processing.write_ofs_ctlfile import write_ofs_ctlfile
+from ofs_skill.utils.file_headers import MODEL_CTL_HEADER
 from tests.helpers.adcirc_minimal import (
     ADCIRC_FILL,
     ADCIRC_NODES,
@@ -62,10 +63,9 @@ S_ONE = _node_station('9000004', ONE_STEP_DRY_NODE)    # node dry at one step
 S_FAR = _node_station('9000005', 4, dlat=0.1)          # ~11 km: beyond 4 km
 
 
-def _setup(tmp_path, stations, dry_check_stride=1):
+def _setup(tmp_path, stations):
     model = build_adcirc_minimal_dataset(tmp_path)
-    cfg = write_adcirc_config(tmp_path, max_dist_km=4.0,
-                              dry_check_stride=dry_check_stride)
+    cfg = write_adcirc_config(tmp_path, max_dist_km=4.0)
     control_dir = tmp_path / 'control_files'
     control_dir.mkdir()
     write_obs_station_ctl(control_dir, OFS, 'wl', stations)
@@ -94,7 +94,7 @@ def _ctl_rows(path):
 @pytest.mark.integration
 def test_ctl_file_written_in_adcirc_format(tmp_path):
     # Tests 1 and 2. S_ONE is absent here because its node is dry at one
-    # step and the default stride checks every step (dry-rule dependent).
+    # step and every time step is checked (dry-rule dependent).
     stations = [S_A, S_DRY, S_B, S_ONE, S_FAR]
     model, prop, out_path = _setup(tmp_path, stations)
     write_ofs_ctlfile(prop, model, _LOGGER)
@@ -171,11 +171,15 @@ def _values(formatted_series):
 @pytest.mark.parametrize('batch', [False, True], ids=['per_station', 'batch'])
 @pytest.mark.parametrize('offset', [None, 0.25], ids=['msl_0', 'patched_0.25'])
 def test_fill_step_is_nan_and_others_shifted(tmp_path, monkeypatch, batch, offset):
-    # Test 5. adcirc_dry_check_stride=2 checks steps 0, 2, 4, so node 3
-    # (dry at step 1 only) is matched (dry-rule dependent) and its -99999.0
-    # step reaches extraction.
-    model, prop, _ = _setup(tmp_path, [S_A, S_ONE], dry_check_stride=2)
-    write_ofs_ctlfile(prop, model, _LOGGER)
+    # Test 5. The dry scan excludes node 3 (dry at step 1 only), so the
+    # writer never pairs a station with it. Write the model ctl by hand, in
+    # the writer's format, to drive a -99999.0 step through extraction.
+    model, prop, ctl_path = _setup(tmp_path, [S_A, S_ONE])
+    x = model['x'].values
+    y = model['y'].values
+    ctl_path.write_text(MODEL_CTL_HEADER + ''.join(
+        f'{node} 0 {float(y[node]):.3f}  {float(x[node]):.3f}  {sid}  0.0\n'
+        for sid, node in ((S_A[0], 0), (S_ONE[0], ONE_STEP_DRY_NODE))))
     ofs_ctlfile = get_node_ofs.ofs_ctlfile_extract(prop, 'wl', model, _LOGGER)
     assert ofs_ctlfile is not None
     i = ofs_ctlfile[4].index(S_ONE[0])

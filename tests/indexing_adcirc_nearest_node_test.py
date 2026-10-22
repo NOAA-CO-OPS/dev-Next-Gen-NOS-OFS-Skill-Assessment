@@ -5,9 +5,9 @@ index_nearest_node's ADCIRC branch:
 - matches on 'x'/'y' (node,) coordinates with a unit-sphere KD-tree, so it is
   exact for great-circle distance and continuous across the antimeridian;
 - excludes nodes whose zeta is the ADCIRC fill value (-99999) at any
-  checked time step, so only nodes wet for the whole record are matched
-  (the file has no _FillValue attribute, so these are not NaN after
-  decoding); every dry_check_stride-th step is checked, default every step;
+  time step, so only nodes wet for the whole record are matched (the file
+  has no _FillValue attribute, so these are not NaN after decoding); every
+  unique time step is checked;
 - returns NaN for stations with no eligible node within max_dist_km
   (default STATION_MATCH_MAX_DIST_KM).
 """
@@ -21,13 +21,11 @@ import xarray as xr
 
 from ofs_skill.model_processing.get_node_ofs import _mask_adcirc_fill
 from ofs_skill.model_processing.indexing import (
-    ADCIRC_DRY_CHECK_STRIDE,
     ADCIRC_FILL_VALUE,
     STATION_MATCH_MAX_DIST_KM,
     index_nearest_node,
 )
 from ofs_skill.model_processing.station_distance import calculate_station_distance
-from ofs_skill.obs_retrieval.utils import get_adcirc_dry_check_stride
 
 _LOGGER = logging.getLogger('indexing_adcirc_nearest_node_test')
 
@@ -94,7 +92,7 @@ def _assert_return_contract(result, n_stations, n_nodes):
         assert not (type(v) is int and v == -1)
 
 
-# dry-rule test: depends on "exclude nodes dry at any checked step".
+# dry-rule test: depends on "exclude nodes dry at any time step".
 def test_dry_nodes_are_skipped():
     # Station A at (-70.0, 40.0): node 1 (0.09 km) is permanently dry and
     # node 5 (0.85 km) is dry at one step, so both are excluded and the
@@ -137,30 +135,18 @@ def test_mixed_stations_keep_order():
     assert result[2] == 3
 
 
-# dry-rule test: depends on "exclude nodes dry at any checked step".
-def test_stride_trades_accuracy_for_speed(caplog):
-    # Node 5 is the fill value at step 1 only (of 4). Stride 1 checks step 1,
-    # so node 5 is excluded and the match is node 2. Strides 2 (steps 0, 2)
-    # and 4 (step 0) skip step 1, so node 5 is treated as always wet and,
-    # being nearer, is matched.
-    ds = _dataset(n_time=4)
-    ctl = _ctl((40.0, -70.0))
+def test_dry_scan_logs_step_count_and_estimate(caplog):
     with caplog.at_level(logging.INFO, logger=_LOGGER.name):
-        assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
-                                  _LOGGER, dry_check_stride=1) == [2]
+        index_nearest_node(_ctl((40.0, -70.0)), _dataset(n_time=4), 'adcirc',
+                           'wl', 'stofs_2d_glo', _LOGGER)
     start_msgs = [r.getMessage() for r in caplog.records
                   if 'dry node scan: checking' in r.getMessage()]
-    assert start_msgs and 'checking 4 of 4 time steps' in start_msgs[0]
+    assert len(start_msgs) == 1
+    assert 'checking 4 unique time steps' in start_msgs[0]
     assert 'estimated time' in start_msgs[0]
-    assert 'adcirc_dry_check_stride > 1' in start_msgs[0]
-
-    assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
-                              _LOGGER, dry_check_stride=2) == [5]
-    assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
-                              _LOGGER, dry_check_stride=4) == [5]
 
 
-# dry-rule test: depends on "exclude nodes dry at any checked step".
+# dry-rule test: depends on "exclude nodes dry at any time step".
 def test_duplicated_timestamps_are_read_once(caplog):
     # intake lists a single fields file twice, so every time value appears
     # twice on the time axis. The second copy here marks node 2 dry at every
@@ -178,11 +164,7 @@ def test_duplicated_timestamps_are_read_once(caplog):
                                   _LOGGER) == [2]
     msgs = [r.getMessage() for r in caplog.records]
     assert any('4 of 8 loaded time steps repeat' in m for m in msgs)
-    assert any('checking 4 of 4 time steps' in m for m in msgs)
-    # The stride applies to the unique steps: stride 2 checks times 0 and 2,
-    # which skips node 5's dry step (time 1).
-    assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
-                              _LOGGER, dry_check_stride=2) == [5]
+    assert any('checking 4 unique time steps' in m for m in msgs)
 
 
 # 1. Time-replicated coordinates.
@@ -299,39 +281,7 @@ def test_identical_duplicated_timestamps_match_deduplicated(caplog):
     assert np.isnan(result[1]) and np.isnan(expected[1])
     start = [r.getMessage() for r in caplog.records
              if 'dry node scan: checking' in r.getMessage()]
-    assert len(start) == 1 and 'checking 4 of 4 time steps' in start[0]
-
-
-# 8. Stride larger than the record. contract test; dry-rule test.
-def test_stride_larger_than_record_checks_step_0_only(caplog):
-    # Node 5 is dry at step 1 only; checking step 0 alone leaves it eligible.
-    with caplog.at_level(logging.INFO, logger=_LOGGER.name):
-        result = index_nearest_node(
-            _ctl((40.0, -70.0)), _dataset(n_time=4), 'adcirc', 'wl',
-            'stofs_2d_glo', _LOGGER, dry_check_stride=10)
-    assert result == [5]
-    start = [r.getMessage() for r in caplog.records
-             if 'dry node scan: checking' in r.getMessage()]
-    assert len(start) == 1 and 'checking 1 of 4 time steps' in start[0]
-
-
-def test_stride_must_be_positive():
-    with pytest.raises(ValueError, match='dry_check_stride'):
-        index_nearest_node(_ctl((40.0, -70.0)), _dataset(), 'adcirc', 'wl',
-                           'stofs_2d_glo', _LOGGER, dry_check_stride=0)
-
-
-@pytest.mark.parametrize('body, expected', [
-    ('[settings]\nadcirc_dry_check_stride=3\n', 3),
-    ('[settings]\nstatic_plots=False\n', ADCIRC_DRY_CHECK_STRIDE),
-    ('[settings]\nadcirc_dry_check_stride=\n', ADCIRC_DRY_CHECK_STRIDE),
-    ('[settings]\nadcirc_dry_check_stride=0\n', ADCIRC_DRY_CHECK_STRIDE),
-    ('[settings]\nadcirc_dry_check_stride=2.5\n', ADCIRC_DRY_CHECK_STRIDE),
-])
-def test_dry_check_stride_config(tmp_path, body, expected):
-    cfg = tmp_path / 'ofs_dps.conf'
-    cfg.write_text(body)
-    assert get_adcirc_dry_check_stride(_LOGGER, config_file=str(cfg)) == expected
+    assert len(start) == 1 and 'checking 4 unique time steps' in start[0]
 
 
 def test_mask_adcirc_fill():

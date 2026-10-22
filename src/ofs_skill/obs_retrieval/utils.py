@@ -708,60 +708,6 @@ def get_station_match_max_dist(logger=None, config_file=None):
     return parsed
 
 
-def get_adcirc_dry_check_stride(logger=None, config_file=None):
-    """Read the ADCIRC dry node scan stride from ``[settings]``.
-
-    Returns the ``adcirc_dry_check_stride`` value (an integer >= 1) from the
-    ``[settings]`` section of the config, falling back to the package
-    default (1, every time step) when the key is absent, blank, or invalid.
-    See ``index_nearest_node`` for what the stride trades off.
-
-    Parameters
-    ----------
-    logger : logging.Logger or None
-        Logger instance. If None, a module-level logger is used.
-    config_file : str or Path or None
-        Optional path to an ofs_dps.conf-style file (typically
-        ``getattr(prop, 'config_file', None)``). When None, falls back to the
-        repo default config.
-
-    Returns
-    -------
-    int
-        The stride (>= 1).
-    """
-    # Imported here for the same reason as in get_station_match_max_dist.
-    from ofs_skill.model_processing.indexing import (  # pylint: disable=import-outside-toplevel
-        ADCIRC_DRY_CHECK_STRIDE,
-    )
-
-    default = ADCIRC_DRY_CHECK_STRIDE
-
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
-    raw = Utils(config_file=config_file).read_config_section(
-        'settings', logger)
-    val = (raw or {}).get('adcirc_dry_check_stride', '').strip()
-    if not val:
-        return default
-    try:
-        parsed = int(val)
-    except ValueError:
-        logger.warning(
-            'adcirc_dry_check_stride=%r is not an integer; using default %d',
-            val, default,
-        )
-        return default
-    if parsed < 1:
-        logger.warning(
-            'adcirc_dry_check_stride=%r must be >= 1; using default %d',
-            parsed, default,
-        )
-        return default
-    return parsed
-
-
 def parse_arguments_to_list(
     argument: str | list[str],
     logger: logging.Logger

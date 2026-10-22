@@ -575,11 +575,6 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
     station_match_max_dist = utils.get_station_match_max_dist(
         logger, config_file=_conf
     )
-    # Time-step stride for the ADCIRC dry node scan in
-    # index_nearest_node (fields runs only).
-    adcirc_dry_check_stride = utils.get_adcirc_dry_check_stride(
-        logger, config_file=_conf
-    )
 
     prop.model_path = os.path.join(
         dir_params['model_historical_dir'], prop.ofs, dir_params['netcdf_dir']
@@ -679,7 +674,6 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                             prop.ofs,
                             logger,
                             max_dist_km=station_match_max_dist,
-                            dry_check_stride=adcirc_dry_check_stride,
                         )
                 elif prop.ofsfiletype == 'stations':
                     list_of_nearest_node = \

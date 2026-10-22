@@ -47,11 +47,6 @@ STATION_MATCH_MAX_DIST_KM = 4.0
 # decode it to NaN.
 ADCIRC_FILL_VALUE = -99999.0
 
-# Default time-step stride for the ADCIRC dry node scan
-# (1 = check every step). The effective value comes from the [settings]
-# adcirc_dry_check_stride config key, read by write_ofs_ctlfile.
-ADCIRC_DRY_CHECK_STRIDE = 1
-
 # Kilometres per degree of latitude (constant everywhere: R * pi / 180 with
 # R = 6371 km). Used to size the candidate pre-filter box from the km cutoff.
 _KM_PER_DEG_LAT = 111.195
@@ -175,34 +170,36 @@ def _unique_time_steps(model_netcdf: Any, zeta: Any) -> np.ndarray:
 
 
 def _adcirc_ever_dry(
-    model_netcdf: Any, stride: int, logger: logging.Logger
+    model_netcdf: Any, logger: logging.Logger
 ) -> np.ndarray | None:
     """Boolean mask of ADCIRC nodes whose zeta is the fill value at any step.
 
     ADCIRC writes dry/land nodes as ``ADCIRC_FILL_VALUE`` with no
     ``_FillValue`` attribute on ``zeta``, so they are not decoded to NaN.
     Only nodes that are wet for the whole record are used for matching, so
-    a node is flagged if it is dry at any checked step. Each unique time
-    value is read once (repeated time values are skipped), and every
-    ``stride``-th unique step is checked (1 = all steps). The cost is
-    one full read of zeta per checked step, so the scan time scales with the
-    number of unique loaded time steps divided by ``stride``. Returns None
-    when the dataset has no ``zeta``.
+    a node is flagged if it is dry at any step. Every unique time value is
+    read once (repeated time values are skipped). The cost is one full read
+    of zeta per unique loaded time step. Returns None when the dataset has
+    no ``zeta``.
     """
+    # Every unique step is checked. If this proves too slow for long runs,
+    # a possible remedy is a stride parameter set in the conf file
+    # ([settings]) that checks only every N-th unique step: about N times
+    # faster, but a node whose dry steps all fall between the checked steps
+    # would be treated as always wet and could be matched.
     if 'zeta' not in model_netcdf:
         logger.warning('ADCIRC dataset has no zeta; dry nodes not excluded.')
         return None
     zeta = model_netcdf['zeta']
     n_loaded = int(zeta.shape[0])
     unique_steps = _unique_time_steps(model_netcdf, zeta)
-    n_time = unique_steps.size
-    if n_time < n_loaded:
+    steps = unique_steps
+    if steps.size < n_loaded:
         logger.info(
             'ADCIRC dry node scan: %d of %d loaded time steps repeat an '
             'earlier time value and are not read again.',
-            n_loaded - n_time, n_loaded,
+            n_loaded - steps.size, n_loaded,
         )
-    steps = unique_steps[::stride]
 
     # Time the first step and extrapolate, so a slow scan is announced
     # before it runs. The first read includes file-open overhead, so the
@@ -211,18 +208,15 @@ def _adcirc_ever_dry(
     dry = _any_fill(zeta, steps[:1])
     per_step = time.perf_counter() - t_start
     logger.info(
-        'ADCIRC dry node scan: checking %d of %d time steps '
-        '(adcirc_dry_check_stride=%d); estimated time %.0f s (from %.2f s '
-        'for the first step). If this is too slow, set '
-        'adcirc_dry_check_stride > 1 in the [settings] section of the '
-        'config file (faster, but less accurate).',
-        steps.size, n_time, stride, per_step * steps.size, per_step,
+        'ADCIRC dry node scan: checking %d unique time steps; estimated '
+        'time %.0f s (from %.2f s for the first step).',
+        steps.size, per_step * steps.size, per_step,
     )
     if steps.size > 1:
         dry |= _any_fill(zeta, steps[1:])
     logger.info(
         'ADCIRC dry node scan finished in %.1f s: %d of %d nodes '
-        'are the fill value at one or more checked steps.',
+        'are the fill value at one or more time steps.',
         time.perf_counter() - t_start, int(dry.sum()), dry.size,
     )
     return dry
@@ -233,14 +227,12 @@ def _adcirc_nearest_nodes(
     model_netcdf: Any,
     name_var: str,
     max_dist_km: float | None,
-    dry_check_stride: int | None,
     logger: logging.Logger,
 ) -> list[Any]:
     """Nearest always-wet ADCIRC node to each station, within ``max_dist_km``.
 
-    Nodes whose zeta is the fill value at any checked time step (every
-    ``dry_check_stride``-th step, default all) are excluded. The search
-    is a KD-tree on unit-sphere coordinates, which is exact for
+    Nodes whose zeta is the fill value at any time step are excluded. The
+    search is a KD-tree on unit-sphere coordinates, which is exact for
     great-circle distance and continuous across the antimeridian.
     Stations with no qualifying node within the cutoff get ``NaN``, which
     write_ofs_ctlfile skips.
@@ -251,19 +243,15 @@ def _adcirc_nearest_nodes(
         float(max_dist_km) if max_dist_km is not None
         else STATION_MATCH_MAX_DIST_KM
     )
-    stride = (int(dry_check_stride) if dry_check_stride is not None
-              else ADCIRC_DRY_CHECK_STRIDE)
-    if stride < 1:
-        raise ValueError(f'dry_check_stride must be >= 1, got {stride}')
     x_np = _static_coord_1d(model_netcdf, 'x')
     y_np = _static_coord_1d(model_netcdf, 'y')
 
-    dry = _adcirc_ever_dry(model_netcdf, stride, logger)
+    dry = _adcirc_ever_dry(model_netcdf, logger)
     candidates = (np.flatnonzero(~dry) if dry is not None
                   else np.arange(x_np.size))
     logger.info(
         '[%s] ADCIRC nearest-node: %d of %d nodes eligible (%d dry at one or '
-        'more checked steps excluded); cutoff %.2f km',
+        'more time steps excluded); cutoff %.2f km',
         name_var, candidates.size, x_np.size, x_np.size - candidates.size,
         max_dist,
     )
@@ -303,7 +291,6 @@ def index_nearest_node(
     ofs: str,
     logger: logging.Logger,
     max_dist_km: float | None = None,
-    dry_check_stride: int | None = None,
 ) -> list[int]:
     """
     Find the closest model node to each observation station.
@@ -336,16 +323,9 @@ def index_nearest_node(
         means the module default ``STATION_MATCH_MAX_DIST_KM``. Sourced from
         the ``[settings] station_match_max_dist_km`` config key by
         ``write_ofs_ctlfile``. Other model sources ignore it.
-    dry_check_stride : int or None, optional
-        ADCIRC only. Only nodes that are wet for the whole record are
-        matched: a node whose zeta is the fill value at any checked time
-        step is excluded. 1 (the default, ``ADCIRC_DRY_CHECK_STRIDE``)
-        checks every loaded time step; N > 1 checks every N-th step, which
-        is about N times faster but less accurate: a node whose dry periods
-        fall only between the checked steps is treated as always wet and can
-        be matched. Sourced from the
-        ``[settings] adcirc_dry_check_stride`` config key by
-        ``write_ofs_ctlfile``. Other model sources ignore it.
+        For ADCIRC, only nodes that are wet for the whole record are
+        matched: a node whose zeta is the fill value at any unique loaded
+        time step is excluded.
 
     Returns
     -------
@@ -715,8 +695,7 @@ def index_nearest_node(
 
     elif model_source == 'adcirc':
         index_min_dist = _adcirc_nearest_nodes(
-            ctl_file_extract, model_netcdf, name_var, max_dist_km,
-            dry_check_stride, logger)
+            ctl_file_extract, model_netcdf, name_var, max_dist_km, logger)
 
     else:
         raise ValueError(f'Unknown model source: {model_source}')
