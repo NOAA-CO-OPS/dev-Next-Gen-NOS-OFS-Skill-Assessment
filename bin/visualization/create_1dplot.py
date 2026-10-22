@@ -84,6 +84,7 @@ import pandas as pd
 from ofs_skill.model_processing import (
     check_model_files,
     get_fcst_dates,
+    get_model_source,
     model_properties,
     parse_ofs_ctlfile,
     read_vdatum_from_bucket,
@@ -152,6 +153,39 @@ def validate_msl_datum(ofs, datum, logger):
             f'Abort!'
         )
         logger.error(error_message)
+        sys.exit(-1)
+
+
+def restrict_adcirc_variables(prop, logger):
+    """Keep only the variables ADCIRC (STOFS-2D-Global) runs can produce.
+
+    ADCIRC writes no water temperature or salinity, and its depth-averaged
+    currents are not supported by this pipeline yet. Without this, the
+    default variable list retrieves observations for all four variables
+    and then writes no model output for three of them. Other model
+    sources are left unchanged. Exits if water_level is not requested.
+    """
+    try:
+        model_source = get_model_source(prop.ofs)
+    except ValueError:
+        return
+    if model_source != 'adcirc':
+        return
+    dropped_ts = [v for v in prop.var_list
+                  if v in ('water_temperature', 'salinity')]
+    if dropped_ts:
+        logger.warning(
+            'ADCIRC (%s) has no water temperature or salinity output; '
+            'removing %s from the variable list.', prop.ofs, dropped_ts)
+    if 'currents' in prop.var_list:
+        logger.warning(
+            'ADCIRC (%s) currents are not yet supported in this pipeline; '
+            'removing currents from the variable list.', prop.ofs)
+    prop.var_list = [v for v in prop.var_list if v == 'water_level']
+    if not prop.var_list:
+        logger.error(
+            'water_level is the only variable available for ADCIRC (%s), '
+            'and it was not requested. Abort!', prop.ofs)
         sys.exit(-1)
 
 
@@ -1166,12 +1200,6 @@ def create_1dplot(prop, logger):
         )
         logger.error(error_message)
         sys.exit(-1)
-    if prop.ofs == 'stofs_2d_glo':
-        logger.warning(
-            'IMPORTANT NOTE: STOFS-2D-Global currently uses a '
-            'copy of the GOMOFS extent file for testing purposes. '
-            'This may cause issues with some workflows!'
-        )
 
     # Datum validations!
     # Gate MSL before the generic datum checks so a run on an OFS with
@@ -1310,6 +1338,7 @@ def create_1dplot(prop, logger):
             correct_var_list,
         )
         sys.exit()
+    restrict_adcirc_variables(prop, logger)
     # If using 'list' for station providers, add all providers
     if 'list' in prop.stationowner:
         prop.stationowner = 'co-ops,ndbc,usgs,chs,list'

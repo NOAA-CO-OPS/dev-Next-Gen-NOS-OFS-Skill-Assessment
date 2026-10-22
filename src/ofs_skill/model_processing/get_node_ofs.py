@@ -1687,7 +1687,7 @@ def parameter_validation(prop, dir_params, logger):
             correct_var_list,
         )
         sys.exit()
-    if prop.ofs == 'stofs_2d_glo':
+    if prop.model_source == 'adcirc':
         if set(prop.var_list) != {'water_level'}:
             logger.warning(
                 '"water_level" is the only available variable for STOFS-2D-Global: '
