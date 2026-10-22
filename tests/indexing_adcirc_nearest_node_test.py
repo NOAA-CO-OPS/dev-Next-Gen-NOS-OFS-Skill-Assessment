@@ -44,16 +44,33 @@ _NODES = [
 ]
 
 
-def _dataset(n_time=4):
-    x = np.array([p[0] for p in _NODES])
-    y = np.array([p[1] for p in _NODES])
-    zeta = np.tile(np.linspace(0.1, 0.6, len(_NODES)), (n_time, 1)).astype('f4')
-    zeta[:, 1] = ADCIRC_FILL_VALUE
-    zeta[1, 5] = ADCIRC_FILL_VALUE
+def _dataset(n_time=4, nodes=None, xy_layout='node'):
+    """Synthetic fields dataset mirroring the real file's types.
+
+    x/y are float64 in -180..180; zeta is float32 (time, node) with dry
+    values exactly ADCIRC_FILL_VALUE (no _FillValue, no NaN). With the
+    default ``nodes`` (_NODES), node 1 is dry at every step and node 5 at
+    step 1; other node lists are wet everywhere. ``xy_layout='time_node'``
+    replicates x/y along time, the legacy data_vars='all' intake layout.
+    """
+    default_nodes = nodes is None
+    nodes = _NODES if default_nodes else nodes
+    x = np.array([p[0] for p in nodes], dtype='f8')
+    y = np.array([p[1] for p in nodes], dtype='f8')
+    zeta = np.tile(np.linspace(0.1, 0.6, len(nodes)), (n_time, 1)).astype('f4')
+    if default_nodes:
+        zeta[:, 1] = ADCIRC_FILL_VALUE
+        zeta[1, 5] = ADCIRC_FILL_VALUE
+    if xy_layout == 'node':
+        xy = {'x': ('node', x), 'y': ('node', y)}
+    elif xy_layout == 'time_node':
+        xy = {'x': (('time', 'node'), np.tile(x, (n_time, 1))),
+              'y': (('time', 'node'), np.tile(y, (n_time, 1)))}
+    else:
+        raise ValueError(xy_layout)
     return xr.Dataset(
         {'zeta': (('time', 'node'), zeta)},
-        coords={'x': ('node', x), 'y': ('node', y),
-                'time': np.arange(n_time)},
+        coords={**xy, 'time': np.arange(n_time)},
     )
 
 
@@ -61,6 +78,23 @@ def _ctl(*lat_lon):
     return [[str(lat), str(lon), '0.0'] for lat, lon in lat_lon]
 
 
+# Stations of test_mixed_stations_keep_order: A (node 2), one beyond the
+# cutoff (NaN), one across the antimeridian (node 3).
+_MIXED = ((40.0, -70.0), (11.0, -60.0), (-17.0, 179.995))
+
+
+def _assert_return_contract(result, n_stations, n_nodes):
+    """One entry per station; each a Python int node index or a float NaN."""
+    assert len(result) == n_stations
+    for v in result:
+        if type(v) is int:
+            assert v in range(n_nodes)
+        else:
+            assert type(v) is float and np.isnan(v), (type(v), v)
+        assert not (type(v) is int and v == -1)
+
+
+# dry-rule test: depends on "exclude nodes dry at any checked step".
 def test_dry_nodes_are_skipped():
     # Station A at (-70.0, 40.0): node 1 (0.09 km) is permanently dry and
     # node 5 (0.85 km) is dry at one step, so both are excluded and the
@@ -103,6 +137,7 @@ def test_mixed_stations_keep_order():
     assert result[2] == 3
 
 
+# dry-rule test: depends on "exclude nodes dry at any checked step".
 def test_stride_trades_accuracy_for_speed(caplog):
     # Node 5 is the fill value at step 1 only (of 4). Stride 1 checks step 1,
     # so node 5 is excluded and the match is node 2. Strides 2 (steps 0, 2)
@@ -125,6 +160,7 @@ def test_stride_trades_accuracy_for_speed(caplog):
                               _LOGGER, dry_check_stride=4) == [5]
 
 
+# dry-rule test: depends on "exclude nodes dry at any checked step".
 def test_duplicated_timestamps_are_read_once(caplog):
     # intake lists a single fields file twice, so every time value appears
     # twice on the time axis. The second copy here marks node 2 dry at every
@@ -147,6 +183,136 @@ def test_duplicated_timestamps_are_read_once(caplog):
     # which skips node 5's dry step (time 1).
     assert index_nearest_node(ctl, ds, 'adcirc', 'wl', 'stofs_2d_glo',
                               _LOGGER, dry_check_stride=2) == [5]
+
+
+# 1. Time-replicated coordinates.
+@pytest.mark.parametrize('xy_layout', ['node', 'time_node'])
+def test_xy_layouts_give_same_result(xy_layout):
+    result = index_nearest_node(
+        _ctl(*_MIXED), _dataset(xy_layout=xy_layout), 'adcirc', 'wl',
+        'stofs_2d_glo', _LOGGER)
+    reference = index_nearest_node(
+        _ctl(*_MIXED), _dataset(xy_layout='node'), 'adcirc', 'wl',
+        'stofs_2d_glo', _LOGGER)
+    assert result[0] == reference[0] == 2
+    assert np.isnan(result[1]) and np.isnan(reference[1])
+    assert result[2] == reference[2] == 3
+
+
+# 2. Every node dry. contract test.
+def test_every_node_dry_returns_all_nan():
+    ds = _dataset()
+    ds['zeta'][:] = ADCIRC_FILL_VALUE
+    result = index_nearest_node(
+        _ctl(*_MIXED), ds, 'adcirc', 'wl', 'stofs_2d_glo', _LOGGER)
+    assert len(result) == len(_MIXED)
+    assert all(isinstance(v, float) and np.isnan(v) for v in result)
+    assert -1 not in result
+
+
+# 3. No zeta variable.
+def test_no_zeta_warns_and_uses_all_nodes(caplog):
+    ds = _dataset().drop_vars('zeta')
+    with caplog.at_level(logging.WARNING, logger=_LOGGER.name):
+        result = index_nearest_node(
+            _ctl((40.0, -70.0)), ds, 'adcirc', 'wl', 'stofs_2d_glo', _LOGGER)
+    assert any(r.levelno == logging.WARNING and 'no zeta' in r.getMessage()
+               for r in caplog.records)
+    # Node 1 (dry when zeta is present) is the nearest node and is eligible.
+    assert result == [1]
+
+
+def _contract_case(name):
+    if name == 'time_node_layout':
+        return _dataset(xy_layout='time_node')
+    ds = _dataset()
+    if name == 'all_dry':
+        ds['zeta'][:] = ADCIRC_FILL_VALUE
+    elif name == 'no_zeta':
+        ds = ds.drop_vars('zeta')
+    return ds
+
+
+# 4. Return contract. contract test.
+@pytest.mark.parametrize(
+    'case', ['node_layout', 'time_node_layout', 'all_dry', 'no_zeta'])
+def test_return_contract(case):
+    stations = _MIXED + ((40.0, -70.0),)
+    result = index_nearest_node(
+        _ctl(*stations), _contract_case(case), 'adcirc', 'wl', 'stofs_2d_glo',
+        _LOGGER)
+    _assert_return_contract(result, len(stations), len(_NODES))
+
+
+def _point_at_distance(lat, lon, km, northward):
+    """Station due north/south of (lat, lon) at ``km`` (6371 km sphere)."""
+    dlat = np.degrees(km / 6371.0)
+    return (lat + dlat if northward else lat - dlat), lon
+
+
+# 5. Cutoff boundary.
+def test_cutoff_boundary():
+    lat4, lon4 = _NODES[4][1], _NODES[4][0]
+    inside = _point_at_distance(lat4, lon4, STATION_MATCH_MAX_DIST_KM - 0.1, True)
+    outside = _point_at_distance(lat4, lon4, STATION_MATCH_MAX_DIST_KM + 0.1, False)
+    km_in = calculate_station_distance(*inside, lat4, lon4)
+    km_out = calculate_station_distance(*outside, lat4, lon4)
+    assert 3.85 < km_in < STATION_MATCH_MAX_DIST_KM < km_out < 4.15
+    result = index_nearest_node(
+        _ctl(inside, outside), _dataset(), 'adcirc', 'wl', 'stofs_2d_glo',
+        _LOGGER)
+    assert result[0] == 4
+    assert np.isnan(result[1])
+
+
+# 6. High latitude. contract test.
+def test_high_latitude_uses_great_circle_distance():
+    # At 85N a degree of longitude is ~9.7 km but a degree of latitude is
+    # ~111 km. Nodes 0 and 1 are at 85N, 10 deg of longitude apart; node 2 is
+    # 0.6 deg north of the station. In degrees node 2 is nearest (0.6 vs 4),
+    # but on the sphere node 0 is (~39 km vs ~67 km).
+    nodes = [(0.0, 85.0), (10.0, 85.0), (4.0, 85.6)]
+    station = (85.0, 4.0)
+    km = [calculate_station_distance(*station, la, lo) for lo, la in nodes]
+    deg = [np.hypot(lo - station[1], la - station[0]) for lo, la in nodes]
+    gc_nearest, deg_nearest = int(np.argmin(km)), int(np.argmin(deg))
+    assert (gc_nearest, deg_nearest) == (0, 2)
+    assert gc_nearest != deg_nearest
+    result = index_nearest_node(
+        _ctl(station), _dataset(nodes=nodes), 'adcirc', 'wl', 'stofs_2d_glo',
+        _LOGGER, max_dist_km=100.0)
+    assert result == [gc_nearest]
+
+
+# 7. Duplicated timestamps. contract test; dry-rule test.
+def test_identical_duplicated_timestamps_match_deduplicated(caplog):
+    # Single-file intake repeats every step with identical values.
+    dedup = _dataset(n_time=4)
+    doubled = xr.concat([dedup, dedup], dim='time')
+    assert doubled.sizes['time'] == 8
+    expected = index_nearest_node(
+        _ctl(*_MIXED), dedup, 'adcirc', 'wl', 'stofs_2d_glo', _LOGGER)
+    with caplog.at_level(logging.INFO, logger=_LOGGER.name):
+        result = index_nearest_node(
+            _ctl(*_MIXED), doubled, 'adcirc', 'wl', 'stofs_2d_glo', _LOGGER)
+    assert result[0] == expected[0] and result[2] == expected[2]
+    assert np.isnan(result[1]) and np.isnan(expected[1])
+    start = [r.getMessage() for r in caplog.records
+             if 'dry node scan: checking' in r.getMessage()]
+    assert len(start) == 1 and 'checking 4 of 4 time steps' in start[0]
+
+
+# 8. Stride larger than the record. contract test; dry-rule test.
+def test_stride_larger_than_record_checks_step_0_only(caplog):
+    # Node 5 is dry at step 1 only; checking step 0 alone leaves it eligible.
+    with caplog.at_level(logging.INFO, logger=_LOGGER.name):
+        result = index_nearest_node(
+            _ctl((40.0, -70.0)), _dataset(n_time=4), 'adcirc', 'wl',
+            'stofs_2d_glo', _LOGGER, dry_check_stride=10)
+    assert result == [5]
+    start = [r.getMessage() for r in caplog.records
+             if 'dry node scan: checking' in r.getMessage()]
+    assert len(start) == 1 and 'checking 1 of 4 time steps' in start[0]
 
 
 def test_stride_must_be_positive():
