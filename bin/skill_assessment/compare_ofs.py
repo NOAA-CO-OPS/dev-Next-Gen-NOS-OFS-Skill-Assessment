@@ -1615,6 +1615,7 @@ def main(args):
         shp2=ofs2,
         home_path=args.home_path,
         stationowner=args.station_owner,
+        config_file=args.config,
         logger=logger,
     )
 
