@@ -47,7 +47,9 @@ jobs:
           # Move Daily Outputs to a dedicated folder
           mkdir -p output_daily
           cp -r data/visuals/om_files_ice/* output_daily/
-          cp data/visuals/visual_ice_stats/* output_daily/
+          cp -r data/visuals/visual_ice_stats/* output_daily/
+          cp -r data/visuals/visual_ice_time_series/* output_daily/
+          find data -name "inventory_all_ice_*.csv" -exec cp {} output_daily/ \;
           rm -rf data/visuals/om_files_ice/*
 
       - name: Restore Weekly and Seasonal Data (Daily Runs)
@@ -79,7 +81,9 @@ jobs:
           # Move Weekly Outputs to a dedicated folder
           mkdir -p output_weekly
           cp -r data/visuals/om_files_ice/* output_weekly/
-          cp data/visuals/visual_ice_stats/* output_weekly/
+          cp -r data/visuals/visual_ice_stats/* output_weekly/
+          cp -r data/visuals/visual_ice_time_series/* output_weekly/
+          find data -name "inventory_all_ice_*.csv" -exec cp {} output_weekly/ \;
           rm -rf data/visuals/om_files_ice/*
 
       - name: Calculate Season-to-Date & Run Season Scenario
@@ -100,7 +104,9 @@ jobs:
           # Move Season Outputs to a dedicated folder
           mkdir -p output_season
           cp -r data/visuals/om_files_ice/* output_season/
-          cp data/visuals/visual_ice_stats/* output_season/
+          cp -r data/visuals/visual_ice_stats/* output_season/
+          cp -r data/visuals/visual_ice_time_series/* output_season/
+          find data -name "inventory_all_ice_*.csv" -exec cp {} output_season/ \;
 
       - name: Save Weekly and Seasonal Data Cache
         if: github.event.schedule == '0 2 * * 1'
@@ -118,7 +124,7 @@ jobs:
           mkdir -p public/season
 
           # Copy dashboard template and logo to root
-          cp index_2.html public/index.html
+          cp index.html public/index.html
           cp readme_files/noaa_logo.png public/noaa_logo.png || echo "Logo not found"
 
           # Inject current UTC timestamp into HTML

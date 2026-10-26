@@ -3,6 +3,8 @@
 <head>
     <script src="https://unpkg.com/@panzoom/panzoom@4.5.1/dist/panzoom.min.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GLOFS Ice Skill Assessment Dashboard</title>
@@ -121,11 +123,11 @@
             max-width: 250px;
             border-top: 4px solid #ccc;
         }
-        #card-csi { border-top-color: #e00061; }    /* Cerulean */
-        #card-rmse { border-top-color: #7367c1; }   /* Purple */
+        #card-csi { border-top-color: #00A9E0; }    /* Cerulean */
+        #card-rmse { border-top-color: #6C4786; }   /* Purple */
         #card-obs { border-top-color: #17becf; }    /* Teal */
-        #card-mod { border-top-color: #f1913e; }    /* Orange */
-        #card-clim { border-top-color: #31b57e; }   /* Green */
+        #card-mod { border-top-color: #ff7f0e; }    /* Orange */
+        #card-clim { border-top-color: #2ca02c; }   /* Green */
 
         .kpi-card h3 {
             margin: 0;
@@ -330,6 +332,9 @@
             .kpi-card .kpi-value {
                 font-size: 1.8rem;
             }
+            .interactive-map-container {
+                flex-direction: column !important;
+            }
         }
     </style>
 </head>
@@ -453,6 +458,24 @@
                 <h2>Daily Error Evolution <span class="tooltip">?<span class="tooltiptext">Animated GIF showing the daily spatial evolution of the mean error.</span></span></h2>
                 <img loading="lazy" id="map-gif" alt="Daily Error GIF" onclick="openModal(this.src)">
             </div>
+            <!-- 5. INTERACTIVE MAP SUMMARY (MOVED TO BOTTOM & RESIZED) -->
+            <div class="card full-width plot-card" id="interactive-map-card">
+                <h2>
+                    Interactive Station Data
+                    <span class="tooltip">?<span class="tooltiptext">Click a point on the map to load the 1D ice concentration time-series for that specific station.</span></span>
+                </h2>
+                <div class="interactive-map-container" style="display: flex; gap: 20px; height: 500px;">
+                    <div id="interactive-map" style="flex: 1; border-radius: 8px; z-index: 1;"></div>
+
+                    <!-- Plot Container with hidden overflow and scaled iframe -->
+                    <div style="flex: 1.5; border: 1px solid #d1d8e0; border-radius: 8px; position: relative; overflow: hidden; background-color: #fff;">
+                        <iframe id="station-plot-frame" scrolling="no" style="width: 115%; height: 115%; transform: scale(0.87); transform-origin: 0 0; border: none;"></iframe>
+                        <div id="plot-placeholder" style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #666; font-size: 14px; z-index: 2; text-align: center; width: 100%;">
+                            Click a station on the map to view data
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -500,6 +523,8 @@
         // Default State
         let currentTimeframe = 'weekly';
         let currentLake = 'all';
+        let stationMap = null;
+        let mapMarkers = [];
 
         function setTimeframe(timeframe) {
             currentTimeframe = timeframe;
@@ -509,6 +534,7 @@
             }
             updateUI();
             renderDashboard();
+            loadStationMap();
         }
 
         function setLake(lake) {
@@ -560,6 +586,111 @@
             }
         }
 
+        function loadStationMap() {
+            // If we are on the daily view, hide the container completely and return
+            const mapCard = document.getElementById('interactive-map-card');
+            if(currentTimeframe === 'daily') {
+                if(mapCard) mapCard.style.display = 'none';
+                return;
+            }
+
+            // Ensure the container is visible on Weekly/Seasonal views
+            if(mapCard) mapCard.style.display = 'block';
+
+            // If the map exists but was hidden, Leaflet often breaks. We must recreate it.
+            if (stationMap) {
+                stationMap.remove();
+                stationMap = null;
+            }
+
+            // Initialize fresh map
+            stationMap = L.map('interactive-map').setView([45.0, -82.5], 5);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(stationMap);
+
+            mapMarkers = [];
+
+            // Reset the iframe UI
+            document.getElementById('plot-placeholder').style.display = 'block';
+            document.getElementById('station-plot-frame').src = '';
+
+            // The names of the Great Lakes OFS models
+            const lakes = ['leofs', 'lmhofs', 'loofs', 'lsofs'];
+
+            // Define specific colors for each lake
+            const lakeColors = {
+                'leofs': '#e377c2',  // Pink
+                'lmhofs': '#17becf', // Teal
+                'loofs': '#ff7f0e',  // Orange
+                'lsofs': '#9467bd'   // Purple
+            };
+
+            lakes.forEach(lake => {
+                fetch(`${currentTimeframe}/inventory_all_ice_${lake}.csv?t=${new Date().getTime()}`)
+                    .then(response => {
+                        if(!response.ok) throw new Error(`Inventory CSV not found for ${lake}`);
+                        return response.text();
+                    })
+                    .then(csvText => {
+                        // Split into rows and grab header positions
+                        const rows = csvText.split('\n').filter(row => row.trim() !== '');
+                        const headers = rows[0].split(',');
+
+                        const idIdx = headers.indexOf('ID');
+                        const nameIdx = headers.indexOf('Name');
+                        const latIdx = headers.indexOf('Y');
+                        const lonIdx = headers.indexOf('X');
+
+                        for(let i = 1; i < rows.length; i++) {
+
+                            let cols = [];
+                            let curr = '';
+                            let inQuotes = false;
+                            for (let char of rows[i]) {
+                                if (char === '"') inQuotes = !inQuotes;
+                                else if (char === ',' && !inQuotes) { cols.push(curr); curr = ''; }
+                                else curr += char;
+                            }
+                            cols.push(curr);
+
+                            if(cols.length > Math.max(idIdx, nameIdx, latIdx, lonIdx)) {
+                                const id = cols[idIdx].trim();
+                                const name = cols[nameIdx].trim().replace(/^"|"$/g, '');
+                                const lat = parseFloat(cols[latIdx]);
+                                const lon = parseFloat(cols[lonIdx]);
+
+                                if(!isNaN(lat) && !isNaN(lon)) {
+                                    // Use distinct colored circle markers for each lake
+                                    const marker = L.circleMarker([lat, lon], {
+                                        radius: 6,
+                                        fillColor: lakeColors[lake] || '#00A9E0',
+                                        color: '#002868', // NOAA Navy border
+                                        weight: 1.5,
+                                        opacity: 1,
+                                        fillOpacity: 0.85
+                                    }).addTo(stationMap);
+
+                                    marker.bindTooltip(name);
+
+                                    // Construct the exact HTML filename output by the python script
+                                    const plotFile = `${lake}_${id}_ice_concentration_timeseries_nowcast_fields.html`;
+
+                                    // Set the iframe URL when clicked
+                                    marker.on('click', () => {
+                                        document.getElementById('plot-placeholder').style.display = 'none';
+                                        document.getElementById('station-plot-frame').src = `${currentTimeframe}/${plotFile}`;
+                                    });
+
+                                    mapMarkers.push(marker);
+                                }
+                            }
+                        }
+                    })
+                    .catch(error => console.log('Interactive map data note:', error));
+            });
+        }
+
         function renderDashboard() {
             const viewAll = document.getElementById('view-all');
             const viewSingle = document.getElementById('view-single');
@@ -598,6 +729,11 @@
                 document.getElementById('map-csi').src = `${currentTimeframe}/map_ice_nowcast_continuous_csi.png`;
                 document.getElementById('map-diff').src = `${currentTimeframe}/map_ice_nowcast_continuous_diff.png`;
                 document.getElementById('map-gif').src = `${currentTimeframe}/animated_ice_nowcast_daily_diff.gif`;
+
+                // Refresh the map layout if it exists so it doesn't render grey tiles
+                if (stationMap) {
+                    setTimeout(() => stationMap.invalidateSize(), 100);
+                }
 
             } else {
                 viewAll.classList.remove('active');
@@ -650,6 +786,7 @@
         // Initial setup
         updateUI();
         renderDashboard();
+        loadStationMap();
     </script>
 
     <!-- Lightbox Modal Container -->
