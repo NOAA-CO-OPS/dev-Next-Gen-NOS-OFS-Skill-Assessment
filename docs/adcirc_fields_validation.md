@@ -25,7 +25,9 @@ All four runs completed (exit 0).
   up with the stations series at zero lag (214 of 215 stations).
 - **Main open issue:** fields and stations output disagree by a near-constant
   offset at 35 stations (nowcast) and 28 (forecast_a). At most flagged stations
-  the stations product is closer to the observations. The cause is not known.
+  the stations product is closer to the observations. The cause is not known;
+  see [Fields vs stations offset: what is known, what is not, next
+  step](#fields-vs-stations-offset-what-is-known-what-is-not-next-step).
 
 ## Runs
 
@@ -239,10 +241,12 @@ the two runs' skill tables side by side are in Appendices D and F.
   of 32 nowcast cases and 20 of 24 forecast_a cases. Example: Valdez nowcast
   skill bias is +0.84 m for fields and 0.00 m for stations.
 - **Cause not known.** The fields `zeta` is labelled "Corrected Water Level
-  (original zeta + bias_correction)" and the points `zeta` "water surface
-  elevation above geoid" (`docs/adcirc_fields_file_notes.md`). The pipeline
-  applies no datum shift to either for MSL (`Datum offset … : 0` in every
-  extraction line).
+  (original zeta + bias_correction)" (`docs/adcirc_fields_file_notes.md`). The
+  points `zeta` is labelled "water surface elevation above geoid"; that label
+  was read from the points file during the laptop run on 2026-10-22 and is not
+  in the file notes. The pipeline applies no datum shift to either for MSL
+  (`Datum offset … : 0` in every extraction line). See [Fields vs stations
+  offset](#fields-vs-stations-offset-what-is-known-what-is-not-next-step).
 - **Dry rule not the cause:** only 2 nowcast flags (8447930, 8775792) and no
   forecast_a flag are among the stations moved by the dry rule.
 - **Station 8771972 (lag 3 h):** its best lag is +3 h in both windows
@@ -308,6 +312,102 @@ the repo as `adcirc_fields_validation_laptop_2026-10-22.md`.
 The only differences are which stations made it into the skill tables. That
 depends on which tidal-prediction requests succeeded during the CO-OPS 403
 periods, and on the datum `ValueError` (section 1).
+
+## Fields vs stations offset: what is known, what is not, next step
+
+**Observed.** Fields and stations output differ by a near-constant offset at
+35 (nowcast) and 28 (forecast_a) of 215 stations, up to +0.84 m (nowcast) and
++0.91 m (forecast_a) at Valdez 9454240.
+
+- **Where:** strongest in Alaska.
+- **Stable across windows:** the per-station biases of the two windows
+  correlate at 0.983.
+- **Which product matches the observations:** the stations product is closer
+  at most flagged stations (29 of 32 nowcast, 20 of 24 forecast_a).
+
+### Known
+
+- **The offset is in the model values as read, not added by the pipeline.**
+  Both modes use the same extraction with zero datum offset, and the cluster
+  series match the laptop series exactly (section h).
+- **Node location does not explain it.** Obs-to-node distances are
+  0.009–1.714 km. Offsets reach −0.35 m where the fields node and the points
+  station coincide: Yorktown 8637689, node and points station at
+  37.227, −76.479.
+- **The dry rule does not explain it.** Only 2 nowcast flags are among the
+  stations it moved (section d).
+- **In the nowcast, the points product tracks the observations and the fields
+  product carries the offset.** The stations product's skill bias is within
+  ±0.01 m at 30 of the 35 flagged stations.
+- **Both products are bias corrected (SCN 26-51).** NWS Service Change Notice
+  26-51 for STOFS v3.1
+  ([PDF](https://www.weather.gov/media/notification/pdf_2026/SCN26-51_STOFS.v3.1_Updated.aaa.pdf))
+  says that STOFS-2D-Global "corrects the station water level forecast
+  guidance biases by removing the bias between the observed water levels at
+  NOS/CO-OPS stations and most recent 5 days of nowcast water levels. This
+  bias correction at stations is then propagated across the entire global grid
+  using a graph diffusion approach. The result is that both station and
+  gridded output is bias corrected."
+  - **Uncorrected files:** the same notice lists
+    `stofs_2d_glo.tCCz.points.cwl.noanomaly.nc` and
+    `stofs_2d_glo.tCCz.fields.cwl.noanomaly.nc`.
+  - **What the pipeline reads:** `points.cwl.nc` and `fields.cwl.nc`
+    (`src/ofs_skill/model_processing/list_of_files.py:446-448`, `:492`).
+  - **Version:** the fields file's `title` attribute is
+    `STOFS_2D_GLOBAL.V3.1.0` (`docs/adcirc_fields_file_notes.md`).
+
+### Not known
+
+- Whether the two products' corrections differ at these stations, and by how
+  much.
+- What the fields correction term is at the flagged nodes.
+- What correction, if any, is in the points `zeta`.
+- Why Alaska is affected most.
+
+### Working hypothesis (not confirmed)
+
+The offset comes from the two products being corrected differently: directly
+at the stations, and by diffusion on the grid. It does not come from this
+branch's code. This has not been checked against the model files.
+
+### Next step: a small cluster check (not yet run)
+
+- **Files:** NODD cycle `stofs_2d_glo.20261018`, t00z, the 6 nowcast steps,
+  from four files:
+  - `fields.cwl.nc`;
+  - `fields.cwl.noanomaly.nc`;
+  - `points.cwl.nc`;
+  - `points.cwl.noanomaly.nc`.
+- **Locations:** read `zeta` slices only, at these 0-based indices.
+
+  | Station | Fields node | Points index |
+  |---|---|---|
+  | Valdez 9454240 | 533836 | 188 |
+  | Juneau 9452210 | 435831 | 183 |
+  | Yorktown 8637689 | 11228916 | 46 |
+  | Aransas Pass 8775241 | 9089180 | 716 |
+  | Nawiliwili 1611400 | 2115047 | 201 |
+  | Honolulu 1612340 | 2196805 | 202 |
+
+- **Per station, compute:**
+  - fields correction = `fields.cwl` − `fields.noanomaly`;
+  - points correction = `points.cwl` − `points.noanomaly`;
+  - raw difference = `fields.noanomaly` − `points.noanomaly`;
+  - published offset = `fields.cwl` − `points.cwl`.
+- **Also record** every `zeta` attribute and every global attribute of all
+  four files.
+- **How to read the result:**
+
+  | Corrections | Raw difference | Conclusion |
+  |---|---|---|
+  | differ | ≈ 0 | the offset comes from the bias corrections |
+  | match | ≠ 0 | the offset is in the model output itself |
+  | any other combination | | something else |
+
+- **Alternative:** ask the STOFS-2D-Global developers. The fields file's
+  `contact` attribute is `Yuji.Funaoshi@noaa.gov`
+  (`docs/adcirc_fields_file_notes.md`). SCN 26-51 lists Greg Seroka
+  (gregory.seroka@noaa.gov) for questions about science changes.
 
 ## Control-file reuse across runs (code reading, not run)
 
