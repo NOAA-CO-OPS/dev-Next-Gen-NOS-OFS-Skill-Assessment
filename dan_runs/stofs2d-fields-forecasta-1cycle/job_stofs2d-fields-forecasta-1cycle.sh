@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=4
 #SBATCH --job-name=stofs2d-fields-forecasta-1cycle
 #SBATCH --output=job_stofs2d-fields-forecasta-1cycle.out
 #SBATCH --error=job_stofs2d-fields-forecasta-1cycle.err

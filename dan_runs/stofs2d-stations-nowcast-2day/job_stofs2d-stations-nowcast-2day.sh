@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --cpus-per-task=64
+#SBATCH --cpus-per-task=4
 #SBATCH --job-name=stofs2d-stations-nowcast-2day
 #SBATCH --output=job_stofs2d-stations-nowcast-2day.out
 #SBATCH --error=job_stofs2d-stations-nowcast-2day.err
