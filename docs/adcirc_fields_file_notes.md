@@ -4,6 +4,17 @@ These notes record what one real STOFS-2D-Global fields file contains. They are 
 
 - Inspected 2026-10-21, against repo commit `b3744b815ce7e86e86e68452b5f4becc918d5e0b`.
 - No source code was changed.
+- **Snapshot of the code before ADCIRC fields support.** Statements about the
+  code describe that commit. Since then:
+  - `index_nearest_node` supports STOFS-2D-Global fields runs, for water level
+    only;
+  - nodes whose `zeta` is −99999.0 at any time step in the loaded window are
+    excluded;
+  - the `station_match_max_dist_km` cutoff applies;
+  - the "only available as station output files" guard has been removed.
+
+  The validation of that support is in
+  [adcirc_fields_validation.md](adcirc_fields_validation.md).
 
 ## File inspected
 
