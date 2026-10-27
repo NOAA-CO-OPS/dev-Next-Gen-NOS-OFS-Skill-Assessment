@@ -311,8 +311,19 @@ def convert(vd_from, vd_to, lat, lon, z, *, epoch=None,
             'vdatum.convert online=True exhausted; falling back to '
             'online=False (cached grids only)%s',
             f' for station {station_id}' if station_id else '')
-        return vdatum.convert(vd_from, vd_to, lat, lon, z,
-                              online=False, epoch=epoch)
+
+        # Capture the result instead of returning immediately
+        result = vdatum.convert(vd_from, vd_to, lat, lon, z,
+                                online=False, epoch=epoch)
+
+        # Log success if no exception was raised
+        log.info(
+            'Successfully loaded local vertical datum grids for %s->%s%s.',
+            vd_from, vd_to,
+            f' station {station_id}' if station_id else ''
+        )
+
+        return result
     except pyproj.exceptions.ProjError as exc:
         short_exc = str(exc).split('\n')[-1].strip()
         log.error(
