@@ -54,7 +54,7 @@ from pathlib import Path
 import pyproj
 import pyproj.datadir
 import pyproj.exceptions
-from coastalmodeling_vdatum import vdatum
+from coastalmodeling_vdatum import _path, vdatum
 
 _logger = logging.getLogger(__name__)
 
@@ -297,6 +297,16 @@ def convert(vd_from, vd_to, lat, lon, z, *, epoch=None,
 
     # One last attempt with online=False -- the grid may already be in
     # PROJ's user-writable cache from a prior successful fetch.
+# Save the original URLs and swap to bare filenames for local resolution
+    original_paths = {}
+    for attr in dir(_path):
+        val = getattr(_path, attr)
+        if isinstance(val, str) and '/' in val:
+            original_paths[attr] = val
+            setattr(_path, attr, val.split('/')[-1])
+
+    # One last attempt with online=False -- the grid may already be in
+    # PROJ's user-writable cache from a prior successful fetch.
     try:
         log.warning(
             'vdatum.convert online=True exhausted; falling back to '
@@ -313,6 +323,11 @@ def convert(vd_from, vd_to, lat, lon, z, *, epoch=None,
             grid_remediation(), exc,
         )
         raise exc from last_exc
+    finally:
+        # Restore the absolute URLs so subsequent online=True attempts
+        # on other stations or threads behave normally
+        for attr, val in original_paths.items():
+            setattr(_path, attr, val)
 
 
 # ---------------------------------------------------------------------------
