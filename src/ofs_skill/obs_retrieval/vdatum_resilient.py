@@ -285,26 +285,25 @@ def convert(vd_from, vd_to, lat, lon, z, *, epoch=None,
                 f'{vd_to!r}.') from exc
         except pyproj.exceptions.ProjError as exc:
             last_exc = exc
+            # Extract just the last line of the exception to drop the long pipeline
+            short_exc = str(exc).split('\n')[-1].strip()
+
             log.warning(
                 'vdatum.convert ProjError (attempt %d/%d) for %s->%s'
                 '%s: %s',
                 attempt + 1, _RETRY_ATTEMPTS, vd_from, vd_to,
                 f' station {station_id}' if station_id else '',
-                exc,
+                short_exc,
             )
             if attempt < _RETRY_ATTEMPTS - 1:
                 _sleep_with_backoff(attempt)
-
-    # One last attempt with online=False -- the grid may already be in
-    # PROJ's user-writable cache from a prior successful fetch.
-# Save the original URLs and swap to bare filenames for local resolution
+    # 1. Define original_paths and swap the URLs at the same indentation level as the try block
     original_paths = {}
     for attr in dir(_path):
         val = getattr(_path, attr)
         if isinstance(val, str) and '/' in val:
             original_paths[attr] = val
             setattr(_path, attr, val.split('/')[-1])
-
     # One last attempt with online=False -- the grid may already be in
     # PROJ's user-writable cache from a prior successful fetch.
     try:
@@ -315,12 +314,13 @@ def convert(vd_from, vd_to, lat, lon, z, *, epoch=None,
         return vdatum.convert(vd_from, vd_to, lat, lon, z,
                               online=False, epoch=epoch)
     except pyproj.exceptions.ProjError as exc:
+        short_exc = str(exc).split('\n')[-1].strip()
         log.error(
             'vdatum.convert permanently failed for %s->%s%s. Check that '
             'PROJ_NETWORK=ON. %s Underlying error: %s',
             vd_from, vd_to,
             f' station {station_id}' if station_id else '',
-            grid_remediation(), exc,
+            grid_remediation(), short_exc,
         )
         raise exc from last_exc
     finally:
