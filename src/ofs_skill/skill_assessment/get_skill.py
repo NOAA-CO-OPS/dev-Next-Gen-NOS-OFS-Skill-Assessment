@@ -48,6 +48,7 @@ from ofs_skill.utils.timeseries_coverage import (
     covers_run_window,
     created_this_run,
     dataset_time_bounds,
+    filename_key_time_bounds,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -911,6 +912,12 @@ def _ensure_obs_files(read_station_ctl_file, p, name_var, logger_):
                         continue
                 if verdict == COVERS:
                     logger_.info('%s found', obs_path)
+                elif created_this_run(obs_path):
+                    # A file this process fetched is not "left over from
+                    # an earlier run" no matter what it covers: the
+                    # provider has no more data, and re-deleting it would
+                    # only re-fetch the identical series.
+                    logger_.info('%s found (fetched this run)', obs_path)
                 else:
                     logger_.warning(
                         '%s does not cover the run window %s to %s '
@@ -1101,8 +1108,43 @@ def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
     anything short of complete success falls through to the full
     extraction below -- so continuation can only ever save time, not
     change the result.
+
+    The window checked against is clamped to what the model catalog
+    actually provides: when the validator dropped files at the front of
+    the window (a mid-window model-configuration change, an archive
+    gap), a fresh extraction can never reach the requested start, so
+    judging the file by the raw window deletes and re-extracts identical
+    data on every variable (issue #254). The bounds come from the loaded
+    dataset when there is one, else from the filename key the last
+    extraction of this cast wrote.
     """
     run_window = parse_run_window(p, logger_)
+    bounds = dataset_time_bounds(cached_model)
+    if (bounds is None and run_window is not None
+            and p.whichcast != 'forecast_a'):
+        # The key is written per ofs/whichcast and does not carry the
+        # forecast cycle, so for forecast_a it may describe another
+        # cycle's catalog; leave that cast unclamped until its model
+        # dataset is in hand.
+        key_path = os.path.join(
+            p.data_model_1d_node_path,
+            f'{p.ofs}_{p.whichcast}_filename_key.csv')
+        key_bounds = filename_key_time_bounds(key_path, run_window)
+        if key_bounds is not None:
+            # Only the start is taken from the key. Its end is just
+            # where the last run stopped, and a continuation run exists
+            # to extend past exactly that point; the dropped-head fact
+            # #254 is about lives at the start. The key is the previous
+            # run's record of the catalog, so a head restored to the
+            # archive since then is not noticed until the key is
+            # deleted or the model is loaded for another reason.
+            bounds = (key_bounds[0], run_window[1])
+            logger_.info(
+                'No model dataset loaded yet; the catalog start for %s '
+                'is taken from %s. Delete that file to re-read the '
+                'catalog from scratch.', name_var, key_path)
+    run_window = clamp_window_to_coverage(
+        run_window, bounds, logger=logger_, label=name_var)
     prd_paths = _prd_paths(read_ofs_ctl_file, p, name_var)
 
     prd_extra = {'whichcast': p.whichcast}
@@ -1123,16 +1165,26 @@ def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
             prd_path, prd_sig,
             ignore_keys=cache_manifest.CONTINUATION_WINDOW_KEYS)
         for prd_path in prd_paths if os.path.isfile(prd_path))
-    if (getattr(p, 'continue_run', False) and run_window is not None
-            and prd_paths and extendable
-            and _try_prd_continuation(prd_paths, p, logger_,
-                                      run_window, variable)):
+    tail_attempted = bool(
+        getattr(p, 'continue_run', False) and run_window is not None
+        and prd_paths and extendable)
+    if tail_attempted and _try_prd_continuation(
+            prd_paths, p, logger_, run_window, variable):
         return cached_model
 
     needs_model = False
     for prd_path in prd_paths:
         if os.path.isfile(prd_path):
+            # Never delete a file the current process extracted:
+            # regeneration would reproduce it byte-for-byte, at the
+            # cost of a full extraction pass per variable. The one
+            # exception is when a continuation was attempted above and
+            # did not succeed: a file a failed tail extraction touched
+            # is still short by construction and must be regenerated
+            # in full, as the continuation path promises.
             if (run_window is not None
+                    and not (created_this_run(prd_path)
+                             and not tail_attempted)
                     and not covers_run_window(
                         prd_path, run_window[0], run_window[1],
                         logger=logger_)):
@@ -1341,123 +1393,6 @@ def get_skill(prop, logger):
         prop.path, dir_params['data_dir'], dir_params['visual_dir'],
         dir_params['visual_maps'])
     os.makedirs(prop.plotly_maps, exist_ok=True)
-
-    # This outer loop is used to download all data for all variables
-    # Inside this loop there is another loop that will go over each line
-    # in the station ctl file and will try to download the data from TandC,
-    # USGS, and NDBC based on the station data source
-
-    def _ensure_obs_files(read_station_ctl_file, p, name_var, logger_):
-        """Check for missing or stale .obs files, download if needed.
-
-        Obs filenames do not encode the run window, and the obs module
-        skips stations whose .obs file already exists -- so a file left
-        over from an earlier run window would be reused verbatim. Delete
-        stale files first, then fetch once so all missing files are
-        recreated for the current window.
-        """
-        run_window = parse_run_window(p, logger_)
-        needs_fetch = False
-        for i in range(0, len(read_station_ctl_file[0])):
-            obs_path = os.path.join(p.data_observations_1d_station_path,
-                    str(read_station_ctl_file[0][i][0]+'_'+p.ofs+'_'+\
-                        name_var+'_station.obs'))
-            if os.path.isfile(obs_path):
-                if os.path.getsize(obs_path) > 0:
-                    # A file this process fetched is not "left over from
-                    # an earlier run" no matter what it covers — the
-                    # provider has no more data. Re-deleting it would
-                    # just re-fetch the identical series.
-                    if (run_window is not None
-                            and not created_this_run(obs_path)
-                            and not covers_run_window(
-                                obs_path, run_window[0], run_window[1],
-                                logger=logger_)):
-                        logger_.warning(
-                            '%s does not cover the run window %s to %s '
-                            'and is likely left over from an earlier '
-                            'run. Deleting it and re-fetching '
-                            'observations.',
-                            obs_path, run_window[0], run_window[1])
-                        if remove_stale_artifact(
-                                obs_path,
-                                p.data_observations_1d_station_path,
-                                logger_):
-                            needs_fetch = True
-                    else:
-                        logger_.info('%s found', obs_path)
-                else:
-                    logger_.error('%s is empty', obs_path)
-            else:
-                logger_.error(
-                    '%s is missing, calling Obs Module', obs_path)
-                needs_fetch = True
-        if needs_fetch:
-            get_station_observations(p, logger_)
-
-    def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
-                          cached_model=None):
-        """Check for missing or stale .prd files, extract if needed.
-        Returns the (possibly updated) cached model dataset.
-
-        Like the .obs files, .prd filenames do not encode the run
-        window, so files left over from an earlier run would be reused
-        verbatim. Delete stale files first, then extract once so all
-        missing files are recreated for the current window.
-
-        The window checked against is clamped to the model catalog's
-        actual time coverage when the dataset is in hand: if the archive
-        cannot reach the requested window edges (files dropped after a
-        mid-window model-configuration change, or archive gaps), a fresh
-        extraction can never satisfy the raw window and deletion would
-        loop forever re-extracting identical data.
-        """
-        run_window = parse_run_window(p, logger_)
-        run_window = clamp_window_to_coverage(
-            run_window, dataset_time_bounds(cached_model),
-            logger=logger_, label=name_var)
-        needs_model = False
-        for i in range(0, len(read_ofs_ctl_file[-1])):
-            if p.whichcast == 'forecast_a':
-                prd_path = (
-                    f'{p.data_model_1d_node_path}/'
-                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
-                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
-                    f'{p.forecast_hr}_{p.ofsfiletype}_model.prd'
-                )
-            else:
-                prd_path = (
-                    f'{p.data_model_1d_node_path}/'
-                    f'{read_ofs_ctl_file[-1][i]}_{p.ofs}_{name_var}_'
-                    f'{read_ofs_ctl_file[1][i]}_{p.whichcast}_'
-                    f'{p.ofsfiletype}_model.prd'
-                )
-            if os.path.isfile(prd_path):
-                # Never delete a file the current process extracted:
-                # regeneration would reproduce it byte-for-byte, at the
-                # cost of a full extraction pass per variable.
-                if (run_window is not None
-                        and not created_this_run(prd_path)
-                        and not covers_run_window(
-                            prd_path, run_window[0], run_window[1],
-                            logger=logger_)):
-                    logger_.warning(
-                        '%s does not cover the run window %s to %s and '
-                        'is likely left over from an earlier run. '
-                        'Deleting it and re-extracting model data.',
-                        prd_path, run_window[0], run_window[1])
-                    if remove_stale_artifact(
-                            prd_path, p.data_model_1d_node_path, logger_):
-                        needs_model = True
-            else:
-                logger_.info('%s is missing', prd_path)
-                needs_model = True
-        if needs_model:
-            logger_.info('Calling OFS module for %s', p.whichcast)
-            result = get_node_ofs(p, logger_, model_dataset=cached_model)
-            if result is not None:
-                cached_model = result
-        return cached_model
 
     parallel_cfg = get_parallel_config(
         logger,
