@@ -243,24 +243,124 @@ def continuation_start(path, start_dt, end_dt, overlap, *, logger=None,
         return None
     return max(start_dt, last - overlap)
 
-
 def created_this_run(path):
     """True if ``path``'s mtime says the current process wrote it.
 
-    A file this run produced is by definition not left over from an
-    earlier one, whatever window it covers. Callers that would otherwise
-    delete and rebuild it use this to avoid throwing away work they just
-    did -- which matters most when a per-variable loop revisits the same
-    directory several times in one run.
+    A file created by the running pipeline is by definition not "left
+    over from an earlier run", no matter what window it covers — the
+    archive simply cannot provide more. Staleness deletion must skip
+    such files, or a window the catalog cannot fully cover turns into a
+    delete/re-extract loop: each multi-hour extraction pass is thrown
+    away and repeated by the next variable's check.
 
-    Returns False when the file is missing or unreadable, so callers fall
-    through to their normal handling.
+    Returns False when the file is missing or unreadable, so callers
+    fall through to their normal handling.
     """
     try:
-        return (os.path.getmtime(path)
-                >= _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
+        return os.path.getmtime(path) >= (
+            _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
     except OSError:
         return False
+
+
+def dataset_time_bounds(dataset):
+    """Return (first, last) naive datetimes of a model dataset time axis.
+
+    Probes the axis names used across the supported model families
+    (``time`` for SCHISM/FVCOM, ``ocean_time`` for ROMS). Returns
+    ``None`` when ``dataset`` is ``None``, has no recognizable time
+    axis, or the axis cannot be converted — callers then skip clamping
+    and keep the requested window.
+    """
+    if dataset is None:
+        return None
+    try:
+        variables = dataset.variables
+    except AttributeError:
+        return None
+    for name in ('time', 'ocean_time'):
+        if name not in variables:
+            continue
+        try:
+            # Local import keeps this module import-light for CLI --help.
+            import pandas as pd  # pylint: disable=import-outside-toplevel
+            values = dataset[name].values
+            if getattr(values, 'size', 0) == 0:
+                return None
+            first = pd.Timestamp(values.min())
+            last = pd.Timestamp(values.max())
+            return (first.to_pydatetime().replace(tzinfo=None),
+                    last.to_pydatetime().replace(tzinfo=None))
+        except (TypeError, ValueError, AttributeError, ImportError):
+            return None
+    return None
+
+
+def filename_key_time_bounds(path, window):
+    """Return (first, last) datetimes recorded in a model filename key.
+
+    ``get_node_ofs`` writes ``{ofs}_{whichcast}_filename_key.csv`` with
+    the full time index of the dataset it extracted from, so on a rerun
+    whose model is not loaded yet the key is the one record of what the
+    catalog provided last time. Returns ``None`` when the file is
+    missing or unreadable, or when its span does not overlap ``window``
+    (a key left by a run over some other period says nothing about this
+    one, and must not narrow the check for it).
+
+    The key records what the catalog provided when it was written, not
+    what it provides now (model files restored to the archive since, or
+    a run over a user-chosen subset of files, are not reflected):
+    callers should treat its start as the earliest data a rerun can
+    expect, and its end as nothing more than where the last run stopped.
+    """
+    if window is None or not path or not os.path.isfile(path):
+        return None
+    try:
+        # Local import keeps this module import-light for CLI --help.
+        import pandas as pd  # pylint: disable=import-outside-toplevel
+        stamps = pd.to_datetime(
+            pd.read_csv(path, usecols=['DateTime'])['DateTime'],
+            errors='coerce').dropna()
+    except (OSError, ValueError, KeyError, ImportError):
+        return None
+    if stamps.empty:
+        return None
+    first = stamps.min().to_pydatetime().replace(tzinfo=None)
+    last = stamps.max().to_pydatetime().replace(tzinfo=None)
+    if first > window[1] or last < window[0]:
+        return None
+    return first, last
+
+
+def clamp_window_to_coverage(window, bounds, logger=None, label=None):
+    """Clamp a requested run window to what the model catalog provides.
+
+    ``covers_run_window`` compares artifacts against the requested
+    window; when the catalog itself cannot reach the window edges (files
+    dropped after a mid-window model-configuration change, or plain
+    archive gaps), a freshly extracted artifact is indistinguishable
+    from a stale one and regeneration can never converge. Clamping to
+    the catalog's actual first/last timestamps makes "covers everything
+    the catalog can provide" count as fresh — the same reasoning
+    ``covers_run_window`` already applies by clamping the end to *now*
+    for forecast windows.
+
+    ``window`` and ``bounds`` are ``(start, end)`` tuples or ``None``;
+    either being ``None`` returns ``window`` unchanged.
+    """
+    if window is None or bounds is None:
+        return window
+    start_dt, end_dt = window
+    new_start = max(start_dt, bounds[0])
+    new_end = min(end_dt, bounds[1])
+    if (new_start, new_end) != (start_dt, end_dt) and logger is not None:
+        logger.info(
+            'Model data%s covers %s to %s; clamping the staleness-check '
+            'window from (%s, %s) to (%s, %s) so artifacts are not '
+            'regenerated for data the catalog cannot provide.',
+            f' for {label}' if label else '', bounds[0], bounds[1],
+            start_dt, end_dt, new_start, new_end)
+    return new_start, new_end
 
 
 def is_within_directory(path, directory):
