@@ -87,6 +87,7 @@ from ofs_skill.model_processing import (
     model_properties,
     parse_ofs_ctlfile,
     read_vdatum_from_bucket,
+    validate_secofs_local_vdatum,
 )
 from ofs_skill.obs_retrieval import parse_arguments_to_list, utils
 from ofs_skill.obs_retrieval.station_ctl_file_extract import station_ctl_file_extract
@@ -1177,59 +1178,33 @@ def create_1dplot(prop, logger):
             'This may cause issues with some workflows!'
         )
 
-    # Datum validations!
-    # Gate MSL before the generic datum checks so a run on an OFS with
-    # no MSL support stops with a clear message instead of silently
-    # switching to another datum.
-    validate_msl_datum(prop.ofs, prop.datum, logger)
-    if prop.datum not in prop.datum_list:
-        logger.error('Entered datum is not valid!')
-        if prop.ofs == 'stofs_3d_pac' and prop.ofsfiletype == 'stations':
-            prop.datum = 'MSL'
-        elif prop.ofs == 'stofs_3d_atl' and prop.ofsfiletype == 'stations':
-            prop.datum = 'NAVD88'
-        elif 'stofs_3d' in prop.ofs and prop.ofsfiletype == 'fields':
-            prop.datum = 'XGEOID20B'
-        elif prop.ofs == 'stofs_2d_glo':
-            prop.datum = 'MSL'
-        elif 'l' not in prop.ofs[0]:
-            prop.datum = 'MLLW'
-        else:
-            prop.datum = 'LWD'
-        logger.warning('Switching to %s', prop.datum)
-    # Check vdatum file to see if the requested datum is available for this OFS
-    vdatums = read_vdatum_from_bucket(prop, logger)
-    try:
-        if 'l' not in prop.ofs[0]:
-            vdatums[f'{prop.datum.lower()}tomsl']
-        else:
-            if prop.datum.lower() != 'lwd':
-                vdatums[f'{prop.datum.lower()}tolwd']
-        logger.info('Specified datum %s available for model conversion!', prop.datum)
-    except KeyError:
-        if (
-            prop.ofs.lower() not in ['loofs', 'lmhofs', 'leofs', 'lsofs', 'loofs2']
-            and 'stofs' not in prop.ofs.lower()
-        ):
-            logger.warning(
-                'Datum %s is NOT available for %s! ' 'Switching to MLLW...', prop.datum, prop.ofs
+# Route SECOFS to its local validation check
+    if prop.ofs == 'secofs':
+        validate_secofs_local_vdatum(prop, logger)
+    elif prop.ofs not in ['loofs2'] and 'stofs' not in prop.ofs:
+        # Check vdatum file to see if the requested datum is available for this OFS
+        vdatums = read_vdatum_from_bucket(prop, logger)
+        if isinstance(vdatums, int) and vdatums == -9990:
+            logger.error(
+                'Neither S3 nor local fallback vdatum file could be loaded for %s! '
+                'Datum conversions cannot proceed. Abort!', prop.ofs
             )
-            prop.datum = 'MLLW'
-        else:
-            logger.warning(
-                'Datum %s is NOT available for %s! ' 'Switching to IGLD...', prop.datum, prop.ofs
-            )
-            prop.datum = 'IGLD85'
-    except TypeError:
-        if (vdatums == -9995) and prop.ofs.lower() in (
-            'stofs_2d_glo',
-            'stofs_3d_atl',
-            'stofs_3d_pac',
-        ):
-            # Name the OFS actually being run: this fires for all three
-            # STOFS products, so a hardcoded "STOFS-2D-Global" misreports
-            # two of them.
-            logger.info('No vdatum file for %s, as expected.', prop.ofs)
+            sys.exit(-1)
+
+        try:
+            if 'l' not in prop.ofs[0]:
+                vdatums[f'{prop.datum.lower()}tomsl']
+            else:
+                if prop.datum.lower() != 'lwd':
+                    vdatums[f'{prop.datum.lower()}tolwd']
+            logger.info('Specified datum %s available for model conversion!', prop.datum)
+        except KeyError:
+            if prop.ofs.lower() not in ['loofs', 'lmhofs', 'leofs', 'lsofs', 'loofs2']:
+                logger.warning('Datum %s is NOT available for %s! Switching to MLLW...', prop.datum, prop.ofs)
+                prop.datum = 'MLLW'
+            else:
+                logger.warning('Datum %s is NOT available for %s! Switching to IGLD...', prop.datum, prop.ofs)
+                prop.datum = 'IGLD85'
         else:
             logger.error(
                 'Failure checking for datum netcdf file on the NODD S3 '
