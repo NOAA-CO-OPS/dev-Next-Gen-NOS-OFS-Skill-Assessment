@@ -28,6 +28,7 @@ from ofs_skill.model_processing import do_horizon_skill_utils
 # Use new package imports - import directly from modules to avoid circular import
 from ofs_skill.model_processing.get_datum_offset import get_datum_offset as get_datum_offset_func
 from ofs_skill.model_processing.get_datum_offset import report_datums
+from ofs_skill.model_processing.indexing import ADCIRC_FILL_VALUE
 from ofs_skill.model_processing.intake_scisa import intake_model
 from ofs_skill.model_processing.list_of_files import list_of_dir
 from ofs_skill.model_processing.list_of_files import list_of_files as list_of_files_func
@@ -162,6 +163,24 @@ def _mask_schism_sentinels(arr, kind, station_id, ofs, log):
             n_pure,
         )
     arr[physical] = np.nan
+    return arr
+
+
+def _mask_adcirc_fill(arr, station_id, ofs, log):
+    """Mask the ADCIRC dry-node fill value (``ADCIRC_FILL_VALUE``) as NaN.
+
+    STOFS-2D-Global fields zeta stores dry steps as -99999.0 with no
+    ``_FillValue`` attribute, so they reach extraction as numbers. Must run
+    before the datum shift, which would move the fill off its exact value.
+    Applied to fields runs only; stations runs are left unchanged.
+    """
+    arr = np.asarray(arr, dtype=float).copy()
+    fill = arr == ADCIRC_FILL_VALUE
+    n_fill = int(fill.sum())
+    if n_fill:
+        arr[fill] = np.nan
+        log.info('%s station %s wl: %d dry-node fill (%.0f) values masked.',
+                 ofs, station_id, n_fill, ADCIRC_FILL_VALUE)
     return arr
 
 
@@ -379,7 +398,9 @@ def _preload_static_coords(model, model_source, logger):
             'SCHISM_hgrid_node_x',
             'SCHISM_hgrid_node_y',
         ],
-        'adcirc': ['lon', 'lat'],
+        # STOFS-2D-Global fields files carry node coordinates as x/y (no
+        # lon/lat); lon/lat stay listed in case other ADCIRC files use them.
+        'adcirc': ['x', 'y', 'lon', 'lat'],
     }
     names = candidate_coords.get(model_source, [])
     loaded = []
@@ -1403,6 +1424,9 @@ def format_waterlevel(prop, model, ofs_ctlfile, model_var, i, logger, precompute
                 sign = 1 if 'stofs' in prop.ofs else -1
                 model_obs = model_obs + sign * datum_offset
         elif prop.model_source == 'adcirc':
+            if prop.ofsfiletype == 'fields':
+                model_obs = _mask_adcirc_fill(
+                    model_obs, ofs_ctlfile[4][i], prop.ofs, logger)
             # adcirc carries the upper guard too — do not fold it into the
             # generic branch below.
             if datum_offset > -999 and datum_offset < 999:
@@ -1460,6 +1484,9 @@ def format_waterlevel(prop, model, ofs_ctlfile, model_var, i, logger, precompute
     elif prop.model_source == 'adcirc':
         model_time = np.array(model['time'])
         model_obs = np.array(model[model_var][:, int(ofs_ctlfile[1][i])])
+        if prop.ofsfiletype == 'fields':
+            model_obs = _mask_adcirc_fill(
+                model_obs, ofs_ctlfile[4][i], prop.ofs, logger)
         if datum_offset > -999 and datum_offset < 999:
             model_obs = model_obs - datum_offset
 
@@ -1632,13 +1659,6 @@ def parameter_validation(prop, dir_params, logger):
             'You chose %s. The options are "stations" or "fields".',
             prop.ofsfiletype,
         )
-    if (prop.ofs == 'stofs_2d_glo') and (prop.ofsfiletype == 'fields'):
-        logger.error(
-            'STOFS-2D-Global is only available as station output files. Please select "stations" for file type. Exiting...'
-        )
-        raise NotImplementedError(
-            'STOFS-2D-Global fields file processing is not currently implemented.'
-        )
     # Warn if using custom lat/lon inputs and stations files
     if prop.ofsfiletype == 'stations' and prop.user_input_location:
         logger.warning(
@@ -1673,7 +1693,7 @@ def parameter_validation(prop, dir_params, logger):
             correct_var_list,
         )
         sys.exit()
-    if prop.ofs == 'stofs_2d_glo':
+    if prop.model_source == 'adcirc':
         if set(prop.var_list) != {'water_level'}:
             logger.warning(
                 '"water_level" is the only available variable for STOFS-2D-Global: '

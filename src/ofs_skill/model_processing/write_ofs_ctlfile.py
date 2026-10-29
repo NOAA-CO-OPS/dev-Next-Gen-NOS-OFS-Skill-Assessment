@@ -570,7 +570,8 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
 
     # Station-matching distance cutoff (km), read once from [settings] so the
     # same value drives both the great-circle match test and the pre-filter
-    # box inside index_nearest_station.
+    # box inside index_nearest_station, and the ADCIRC fields cutoff in
+    # index_nearest_node.
     station_match_max_dist = utils.get_station_match_max_dist(
         logger, config_file=_conf
     )
@@ -676,6 +677,7 @@ def write_ofs_ctlfile(prop: Any, model: Any, logger: Logger) -> Any:
                             name_var,
                             prop.ofs,
                             logger,
+                            max_dist_km=station_match_max_dist,
                         )
                 elif prop.ofsfiletype == 'stations':
                     list_of_nearest_node = \
