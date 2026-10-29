@@ -27,7 +27,11 @@ from ofs_skill.model_processing import do_horizon_skill_utils
 
 # Use new package imports - import directly from modules to avoid circular import
 from ofs_skill.model_processing.get_datum_offset import get_datum_offset as get_datum_offset_func
-from ofs_skill.model_processing.get_datum_offset import report_datums
+from ofs_skill.model_processing.get_datum_offset import (
+    read_vdatum_from_bucket,
+    report_datums,
+    validate_secofs_local_vdatum,
+)
 from ofs_skill.model_processing.intake_scisa import intake_model
 from ofs_skill.model_processing.list_of_files import list_of_dir
 from ofs_skill.model_processing.list_of_files import list_of_files as list_of_files_func
@@ -1686,6 +1690,54 @@ def parameter_validation(prop, dir_params, logger):
             prop.var_list = ['water_level']
             # I think we can alter its state here, but maybe there's a reason not to?
 
+    # Run upfront datum validation if water level is requested
+    wl_requested = (
+        'water_level' in getattr(prop, 'var_list', [])
+        or getattr(prop, 'name_var', None) == 'wl'
+        or getattr(prop, 'var_name', None) == 'water_level'
+    )
+
+    if wl_requested:
+        if prop.ofs == 'secofs':
+            # Validates local_vdatum path and secofs_vdatums.nc presence upfront
+            validate_secofs_local_vdatum(prop, logger)
+        elif prop.ofs not in ['loofs2'] and 'stofs' not in prop.ofs:
+            # Probe S3 bucket with local fallback for non-SECOFS/non-STOFS models
+            vdatums = read_vdatum_from_bucket(prop, logger)
+            if isinstance(vdatums, int) and vdatums == -9990:
+                logger.warning(
+                    'No vdatum file could be loaded for %s (S3 and local fallback both failed). '
+                    'Model water levels will not receive a datum shift, but continuing extraction.',
+                    prop.ofs,
+                )
+            elif not isinstance(vdatums, int):
+                try:
+                    if 'l' not in prop.ofs[0]:
+                        _ = vdatums[f'{prop.datum.lower()}tomsl']
+                    else:
+                        if prop.datum.lower() != 'lwd':
+                            _ = vdatums[f'{prop.datum.lower()}tolwd']
+                    logger.info('Specified datum %s available for model conversion!', prop.datum)
+                except KeyError:
+                    if prop.ofs.lower() not in ['loofs', 'lmhofs', 'leofs', 'lsofs', 'loofs2']:
+                        logger.warning(
+                            'Datum %s is NOT available for %s! Switching to MLLW...',
+                            prop.datum,
+                            prop.ofs,
+                        )
+                        prop.datum = 'MLLW'
+                    else:
+                        logger.warning(
+                            'Datum %s is NOT available for %s! Switching to IGLD...',
+                            prop.datum,
+                            prop.ofs,
+                        )
+                        prop.datum = 'IGLD85'
+                finally:
+                    if hasattr(vdatums, 'close'):
+                        vdatums.close()
+        elif 'stofs' in prop.ofs:
+            logger.info('STOFS models convert dynamically; no grid vdatum file required.')
 
 def read_custom_filenames(filepath):
     """Read a custom model-file list, one path/URL per line.

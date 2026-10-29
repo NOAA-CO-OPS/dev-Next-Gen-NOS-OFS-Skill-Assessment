@@ -424,9 +424,11 @@ def read_vdatum_from_bucket(prop: Any, logger: Logger) -> xr.Dataset | int:
         try:
             vdatums = xr.open_dataset(s3.open(url, 'rb'))
             return vdatums
-        except FileNotFoundError:
-            logger.warning('vdatum file not found on S3 bucket, trying '
-                           'local fallback...')
+        except Exception as e_s3:
+            logger.warning(
+                'Could not load vdatum file from S3 bucket (%s), trying local fallback...',
+                e_s3,
+            )
             try:
                 _conf = getattr(prop, 'config_file', None)
                 dir_params = utils.Utils(
@@ -436,16 +438,17 @@ def read_vdatum_from_bucket(prop: Any, logger: Logger) -> xr.Dataset | int:
                 if not local_vdatum:
                     logger.warning(
                         'No local_vdatum path configured in ofs_dps.conf. '
-                        'Cannot fall back to local vdatum file.')
+                        'Cannot fall back to local vdatum file.'
+                    )
                     return -9990
                 vdatums = xr.open_dataset(local_vdatum)
                 logger.warning(
                     'Using local vdatum fallback: %s — verify this file '
-                    'is current with the S3 version.', local_vdatum)
+                    'is current with the S3 version.', local_vdatum
+                )
                 return vdatums
             except Exception as e_x:
-                logger.warning(
-                    'Local vdatum fallback failed: %s', e_x)
+                logger.warning('Local vdatum fallback failed: %s', e_x)
                 return -9990
         except Exception as e_x:
             logger.error('Error opening vdatums on the fly!')
