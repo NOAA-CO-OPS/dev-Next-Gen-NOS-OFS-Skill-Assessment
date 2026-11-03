@@ -247,6 +247,48 @@ def get_distance_angle(ofs_angle: float, obs_angle: float) -> float:
     return result * sign
 
 
+def _direction_bias(
+    ofs_dir: np.ndarray, obs_dir: np.ndarray
+) -> np.ndarray:
+    """Elementwise ``get_distance_angle`` over whole arrays.
+
+    Same wraparound handling and sign convention as
+    :func:`get_distance_angle`, evaluated with numpy instead of a
+    per-timestep Python loop. Results are bit-for-bit identical to the
+    scalar function, including the NaN, infinite, and signed-zero cases
+    that reach here when a direction is missing.
+
+    Parameters
+    ----------
+    ofs_dir : np.ndarray
+        Model directions in degrees.
+    obs_dir : np.ndarray
+        Observed directions in degrees.
+
+    Returns
+    -------
+    np.ndarray
+        Signed angular differences in degrees, one per input pair.
+    """
+    ofs_dir = np.asarray(ofs_dir, dtype=float)
+    obs_dir = np.asarray(obs_dir, dtype=float)
+    # Infinite or missing directions make the modulo below emit an
+    # invalid-value warning; the NaN it produces is the intended answer
+    # and matches the scalar path, so the warning is suppressed rather
+    # than propagated into the callers' broad exception handling.
+    with np.errstate(invalid='ignore'):
+        phi = np.abs(obs_dir - ofs_dir) % 360
+        diff = ofs_dir - obs_dir
+        sign = np.where(
+            ((diff >= 0) & (diff <= 180))
+            | ((diff <= -180) & (diff >= -360)),
+            1.0,
+            -1.0,
+        )
+        result = np.where(phi > 180, 360 - phi, phi)
+        return result * sign
+
+
 def paired_vector(
     obs_df: pd.DataFrame,
     ofs_df: pd.DataFrame,
@@ -404,10 +446,7 @@ def paired_vector(
     # This is the direction bias
     ofs_dir = paired['OFS_DIR'].to_numpy()
     obs_dir = paired['OBS_DIR'].to_numpy()
-    dir_bias = []
-    for j in range(len(paired)):
-        dir_bias.append(get_distance_angle(ofs_dir[j], obs_dir[j]))
-    paired['DIR_BIAS'] = dir_bias
+    paired['DIR_BIAS'] = _direction_bias(ofs_dir, obs_dir)
     # Finally, we write the file and return the results
     paired = paired.drop(columns=['index', 'DateTime', 'OBS_U', 'OBS_V',
                                     'OFS_U', 'OFS_V'])
