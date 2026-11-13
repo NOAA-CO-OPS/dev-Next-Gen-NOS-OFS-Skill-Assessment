@@ -42,9 +42,13 @@ from ofs_skill.utils.series_continuation import DEFAULT_CONTINUE_OVERLAP_HOURS
 from ofs_skill.utils.timeseries_coverage import (
     COVERS,
     PREFIX,
+    clamp_window_to_coverage,
     classify_coverage,
     continuation_start,
     covers_run_window,
+    created_this_run,
+    dataset_time_bounds,
+    filename_key_time_bounds,
     parse_run_window,
     remove_stale_artifact,
 )
@@ -908,6 +912,12 @@ def _ensure_obs_files(read_station_ctl_file, p, name_var, logger_):
                         continue
                 if verdict == COVERS:
                     logger_.info('%s found', obs_path)
+                elif created_this_run(obs_path):
+                    # A file this process fetched is not "left over from
+                    # an earlier run" no matter what it covers: the
+                    # provider has no more data, and re-deleting it would
+                    # only re-fetch the identical series.
+                    logger_.info('%s found (fetched this run)', obs_path)
                 else:
                     logger_.warning(
                         '%s does not cover the run window %s to %s '
@@ -1098,8 +1108,43 @@ def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
     anything short of complete success falls through to the full
     extraction below -- so continuation can only ever save time, not
     change the result.
+
+    The window checked against is clamped to what the model catalog
+    actually provides: when the validator dropped files at the front of
+    the window (a mid-window model-configuration change, an archive
+    gap), a fresh extraction can never reach the requested start, so
+    judging the file by the raw window deletes and re-extracts identical
+    data on every variable (issue #254). The bounds come from the loaded
+    dataset when there is one, else from the filename key the last
+    extraction of this cast wrote.
     """
     run_window = parse_run_window(p, logger_)
+    bounds = dataset_time_bounds(cached_model)
+    if (bounds is None and run_window is not None
+            and p.whichcast != 'forecast_a'):
+        # The key is written per ofs/whichcast and does not carry the
+        # forecast cycle, so for forecast_a it may describe another
+        # cycle's catalog; leave that cast unclamped until its model
+        # dataset is in hand.
+        key_path = os.path.join(
+            p.data_model_1d_node_path,
+            f'{p.ofs}_{p.whichcast}_filename_key.csv')
+        key_bounds = filename_key_time_bounds(key_path, run_window)
+        if key_bounds is not None:
+            # Only the start is taken from the key. Its end is just
+            # where the last run stopped, and a continuation run exists
+            # to extend past exactly that point; the dropped-head fact
+            # #254 is about lives at the start. The key is the previous
+            # run's record of the catalog, so a head restored to the
+            # archive since then is not noticed until the key is
+            # deleted or the model is loaded for another reason.
+            bounds = (key_bounds[0], run_window[1])
+            logger_.info(
+                'No model dataset loaded yet; the catalog start for %s '
+                'is taken from %s. Delete that file to re-read the '
+                'catalog from scratch.', name_var, key_path)
+    run_window = clamp_window_to_coverage(
+        run_window, bounds, logger=logger_, label=name_var)
     prd_paths = _prd_paths(read_ofs_ctl_file, p, name_var)
 
     prd_extra = {'whichcast': p.whichcast}
@@ -1120,16 +1165,26 @@ def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
             prd_path, prd_sig,
             ignore_keys=cache_manifest.CONTINUATION_WINDOW_KEYS)
         for prd_path in prd_paths if os.path.isfile(prd_path))
-    if (getattr(p, 'continue_run', False) and run_window is not None
-            and prd_paths and extendable
-            and _try_prd_continuation(prd_paths, p, logger_,
-                                      run_window, variable)):
+    tail_attempted = bool(
+        getattr(p, 'continue_run', False) and run_window is not None
+        and prd_paths and extendable)
+    if tail_attempted and _try_prd_continuation(
+            prd_paths, p, logger_, run_window, variable):
         return cached_model
 
     needs_model = False
     for prd_path in prd_paths:
         if os.path.isfile(prd_path):
+            # Never delete a file the current process extracted:
+            # regeneration would reproduce it byte-for-byte, at the
+            # cost of a full extraction pass per variable. The one
+            # exception is when a continuation was attempted above and
+            # did not succeed: a file a failed tail extraction touched
+            # is still short by construction and must be regenerated
+            # in full, as the continuation path promises.
             if (run_window is not None
+                    and not (created_this_run(prd_path)
+                             and not tail_attempted)
                     and not covers_run_window(
                         prd_path, run_window[0], run_window[1],
                         logger=logger_)):
@@ -1338,11 +1393,6 @@ def get_skill(prop, logger):
         prop.path, dir_params['data_dir'], dir_params['visual_dir'],
         dir_params['visual_maps'])
     os.makedirs(prop.plotly_maps, exist_ok=True)
-
-    # This outer loop is used to download all data for all variables
-    # Inside this loop there is another loop that will go over each line
-    # in the station ctl file and will try to download the data from TandC,
-    # USGS, and NDBC based on the station data source
 
     parallel_cfg = get_parallel_config(
         logger,
