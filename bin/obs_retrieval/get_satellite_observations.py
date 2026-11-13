@@ -1095,6 +1095,8 @@ def concat_sat(list_of_files, obs2d_dir, logger, prop1):
             nc_list,
             dim='time',
             data_vars='minimal',
+            compat='override',
+            coords='minimal'
         )
 
         logger.info('Concatenation complete!')
