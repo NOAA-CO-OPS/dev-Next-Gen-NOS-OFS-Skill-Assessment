@@ -30,7 +30,7 @@ cp conf/ofs_dps.conf.example conf/ofs_dps.conf
 #    ...then edit conf/ofs_dps.conf and set home=/path/to/working_directory
 
 # 2b. (Optional, recommended) Add a USGS API key to raise the USGS rate
-#     limit from 50 to 1000 requests/hour. Runs work without one, but 
+#     limit from 50 to 1000 requests/hour. Runs work without one, but
 #     USGS stations may be dropped if the request limit is exceeded.
 cp conf/api_keys.conf.example conf/api_keys.conf
 #    ...then set API_USGS_PAT in conf/api_keys.conf
