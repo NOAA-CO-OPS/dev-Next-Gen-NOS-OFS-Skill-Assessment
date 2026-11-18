@@ -27,8 +27,8 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from datetime import datetime
-from typing import TYPE_CHECKING
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -114,6 +114,82 @@ def get_markerstyles() -> list[str]:
     return ['circle', 'square', 'diamond', 'cross', 'x', 'triangle-up', 'pentagon']
 
 
+# First STOFS-2D-Global cycle (v2.1) with station bias correction.
+STOFS_2D_GLO_V2P1_FIRST_RUN = datetime(2024, 5, 14, 12, 0)
+
+
+def stofs_2d_glo_stations_bias_corrected(
+    prop: Any,
+    start_datetime: datetime,
+    end_datetime: datetime,
+) -> bool:
+    """
+    Decide whether STOFS-2D-Global stations output is bias-corrected.
+
+    Each cast is checked separately, because each cast takes a given
+    time from a different cycle (see ``fix_adcirc_dataset`` in
+    ``intake_scisa.py``). With C1 = ``STOFS_2D_GLO_V2P1_FIRST_RUN``:
+
+    - nowcast: time t comes from the cycle C with C - 6 h < t <= C,
+      so t is bias-corrected only if t > C1 - 6 h.
+    - forecast_b: time t comes from the cycle C with C < t <= C + 6 h,
+      so t is bias-corrected only if t > C1.
+    - forecast_a: one cycle, equal to the start date (create_1dplot
+      resets the start date to the forecast_a cycle), so the run is
+      bias-corrected only if that cycle is >= C1.
+
+    Args:
+        prop: Properties object. Uses ``whichcasts`` (list or
+            comma-separated string), falling back to ``whichcast``.
+        start_datetime: Start of the plotted date range.
+        end_datetime: End of the plotted date range.
+
+    Returns:
+        True if every time in every cast is bias-corrected; False if
+        no time in any cast is bias-corrected.
+
+    Raises:
+        ValueError: If the casts mix bias-corrected and uncorrected
+            times. Such runs should already have failed before
+            plotting.
+    """
+    casts = getattr(prop, 'whichcasts', None) or [prop.whichcast]
+    if isinstance(casts, str):
+        casts = casts.split(',')
+    casts = [c.strip().lower() for c in casts]
+
+    first_run = STOFS_2D_GLO_V2P1_FIRST_RUN
+    # STOFS-2D-Global runs 4 cycles per day, each with a 6 h nowcast.
+    nowcast_hours = 6
+    states: set[bool | None] = set()
+    for cast in casts:
+        if cast == 'forecast_a':
+            states.add(start_datetime >= first_run)
+            continue
+        if cast == 'nowcast':
+            threshold = first_run - timedelta(hours=nowcast_hours)
+        elif cast == 'forecast_b':
+            threshold = first_run
+        else:
+            continue
+        if start_datetime > threshold:
+            states.add(True)
+        elif end_datetime <= threshold:
+            states.add(False)
+        else:
+            states.add(None)
+
+    if None in states or len(states) > 1:
+        raise ValueError(
+            'STOFS-2D-Global plots will not be made, because the '
+            f'requested date range ({start_datetime} to {end_datetime}) '
+            f'and casts ({", ".join(casts)}) would mix time periods '
+            'without bias correction and with bias correction. '
+            'STOFS-2D-Global v2.1 bias correction starts with the '
+            f'{first_run:%Y-%m-%d %H}Z cycle.')
+    return states == {True}
+
+
 def get_title(
     prop,
     node: str,
@@ -196,10 +272,12 @@ def get_title(
     # For STOFS-2D-Global plots we add a bias correction annotation
     # (where applicable).
     if prop.ofs == 'stofs_2d_glo':
-        start_datetime = datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S')
-        v2p1_first_run = datetime(2024, 5, 14, 12, 0)
         if prop.ofsfiletype == 'stations':
-            if start_datetime >= v2p1_first_run:
+            if stofs_2d_glo_stations_bias_corrected(
+                prop,
+                datetime.strptime(start_date, '%Y-%m-%d %H:%M:%S'),
+                datetime.strptime(end_date, '%Y-%m-%d %H:%M:%S'),
+            ):
                 ofs_group = ofs_group + '&nbsp;(bias-corrected)'
         # Note as of 2026-06-18:
         # Later we might need to add annotation for fields file bias correction,
