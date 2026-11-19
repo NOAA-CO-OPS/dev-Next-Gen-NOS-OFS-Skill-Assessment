@@ -115,7 +115,7 @@ def station_dims_compatible(station_dims) -> tuple[bool, int | None]:
     return True, None
 
 
-def make_preprocess_with_filename(urlpaths):
+def make_preprocess_with_filename(urlpaths,prop=None):
     """Create a preprocess function that maps datasets to filenames.
 
     When files are opened through simplecache or other fsspec wrappers,
@@ -126,14 +126,14 @@ def make_preprocess_with_filename(urlpaths):
     call_count = [0]  # mutable counter for closure
 
     def preprocess_with_filename(ds):
-   
+
         # Do not assign 'filename' coordinate for STOFS models
         if prop.ofs in ('stofs_3d_atl', 'stofs_3d_pac'):
             # Drop filename if it already exists as a variable/coord in the raw netCDF
             if 'filename' in ds.variables or 'filename' in ds.coords:
                 ds = ds.drop_vars('filename', errors='ignore')
             return ds
-        
+
         filename = _extract_filename_from_encoding(ds)
         if not filename or filename == 'unknown':
             # Fall back to the original urlpath by call order
@@ -488,10 +488,10 @@ def intake_model(file_list: list[str], prop: Any, logger: Logger) -> xr.Dataset:
                     source = intake.open_netcdf(
                         urlpath=urlpaths,
                         xarray_kwargs={
-                            'combine': 'by_coords', 
-                            'compat': 'override',    
+                            'combine': 'by_coords',
+                            'compat': 'override',
                             'coords': 'minimal',
-                            'data_vars': 'minimal',  
+                            'data_vars': 'minimal',
                             'engine': open_engine,
                             'preprocess': preprocess_fn,
                             'drop_variables': drop_variables,
