@@ -747,9 +747,9 @@ def _describe_nodd_failure(exc, url):
     if status == 404:
         return (
             'NODD S3 answered, but nothing exists at that path (HTTP 404). '
-            'The service is up -- the URL is wrong. Check netcdf_dir in '
-            'conf/ofs_dps.conf (it should be "netcdf" for non-STOFS OFS; a '
-            'blank value drops a directory from the path), and check that '
+            'The service is up -- the URL is wrong. Check netcdf_dir or netcdf_dir_stofs in '
+            'conf/ofs_dps.conf (it should be "netcdf" for non-STOFS OFS, and blank for STOFS; an '
+            'incorrect value drops a directory from the path), and check that '
             'the requested dates are actually in the archive. '
             f'URL tried: {url}'
         )
