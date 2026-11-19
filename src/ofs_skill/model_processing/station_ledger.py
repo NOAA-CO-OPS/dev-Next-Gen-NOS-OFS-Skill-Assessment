@@ -343,9 +343,9 @@ def _read_existing_rows(path: str) -> list[dict[str, str]]:
 def _atomic_write(path: str, rows: list[dict[str, str]]) -> None:
     """Write ``rows`` to ``path`` via a same-directory temp file + rename.
 
-    The combined ledger is a read-modify-write shared by every variable,
-    whichcast, and (under ``parallel_forecast_cycles``) several worker
-    threads. Renaming a fully written temp file into place means a
+    The combined ledger is a read-modify-write shared by every variable
+    and whichcast, and by the worker threads of a parallel run.
+    Renaming a fully written temp file into place means a
     concurrent reader -- or a run interrupted mid-write -- never sees a
     truncated ledger.
 
