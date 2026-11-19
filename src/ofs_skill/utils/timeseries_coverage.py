@@ -112,22 +112,54 @@ def row_datetime(line):
 def read_first_last_timestamps(path):
     """Return (first, last) data-row timestamps of a cached artifact.
 
+    Only the rows at each end of the file are parsed. The whole file is
+    still decoded in one read, so a file with undecodable bytes anywhere
+    fails open exactly as it did when every line was parsed; what is
+    skipped is the per-row ``datetime`` construction for the interior,
+    which is what made this staleness check cost as much as parsing the
+    artifact it guards -- and it runs once per artifact, per cast.
+
+    The decoded text is held in memory for the duration of the call --
+    roughly twice the file size, so a year-long six-minute artifact
+    costs a few MB transiently. These are per-station text timeseries,
+    not gridded model output.
+
     Returns ``(None, None)`` when the file cannot be read or decoded, or
     contains no parseable data rows.
     """
-    first = None
-    last = None
     try:
         with open(path, encoding='utf-8') as file_handle:
-            for line in file_handle:
-                stamp = row_datetime(line)
-                if stamp is None:
-                    continue
-                if first is None:
-                    first = stamp
-                last = stamp
+            text = file_handle.read()
     except (OSError, UnicodeDecodeError):
         return None, None
+
+    # Walk in from the front until a row parses. Headers and any leading
+    # junk are skipped, matching the full scan this replaced.
+    first = None
+    limit = len(text)
+    start = 0
+    while start < limit:
+        end = text.find('\n', start)
+        if end == -1:
+            end = limit
+        first = row_datetime(text[start:end])
+        if first is not None:
+            break
+        start = end + 1
+    if first is None:
+        return None, None
+
+    # Then in from the back. The answer is the last *parseable* row, not
+    # the last line, so a trailing blank line or a row truncated by an
+    # interrupted write does not make the file look shorter than it is.
+    last = None
+    end = limit
+    while end > 0:
+        line_start = text.rfind('\n', 0, end)
+        last = row_datetime(text[line_start + 1:end])
+        if last is not None:
+            break
+        end = line_start
     return first, last
 
 
@@ -243,24 +275,124 @@ def continuation_start(path, start_dt, end_dt, overlap, *, logger=None,
         return None
     return max(start_dt, last - overlap)
 
-
 def created_this_run(path):
     """True if ``path``'s mtime says the current process wrote it.
 
-    A file this run produced is by definition not left over from an
-    earlier one, whatever window it covers. Callers that would otherwise
-    delete and rebuild it use this to avoid throwing away work they just
-    did -- which matters most when a per-variable loop revisits the same
-    directory several times in one run.
+    A file created by the running pipeline is by definition not "left
+    over from an earlier run", no matter what window it covers — the
+    archive simply cannot provide more. Staleness deletion must skip
+    such files, or a window the catalog cannot fully cover turns into a
+    delete/re-extract loop: each multi-hour extraction pass is thrown
+    away and repeated by the next variable's check.
 
-    Returns False when the file is missing or unreadable, so callers fall
-    through to their normal handling.
+    Returns False when the file is missing or unreadable, so callers
+    fall through to their normal handling.
     """
     try:
-        return (os.path.getmtime(path)
-                >= _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
+        return os.path.getmtime(path) >= (
+            _PROCESS_START_TS - _MTIME_SLACK_SECONDS)
     except OSError:
         return False
+
+
+def dataset_time_bounds(dataset):
+    """Return (first, last) naive datetimes of a model dataset time axis.
+
+    Probes the axis names used across the supported model families
+    (``time`` for SCHISM/FVCOM, ``ocean_time`` for ROMS). Returns
+    ``None`` when ``dataset`` is ``None``, has no recognizable time
+    axis, or the axis cannot be converted — callers then skip clamping
+    and keep the requested window.
+    """
+    if dataset is None:
+        return None
+    try:
+        variables = dataset.variables
+    except AttributeError:
+        return None
+    for name in ('time', 'ocean_time'):
+        if name not in variables:
+            continue
+        try:
+            # Local import keeps this module import-light for CLI --help.
+            import pandas as pd  # pylint: disable=import-outside-toplevel
+            values = dataset[name].values
+            if getattr(values, 'size', 0) == 0:
+                return None
+            first = pd.Timestamp(values.min())
+            last = pd.Timestamp(values.max())
+            return (first.to_pydatetime().replace(tzinfo=None),
+                    last.to_pydatetime().replace(tzinfo=None))
+        except (TypeError, ValueError, AttributeError, ImportError):
+            return None
+    return None
+
+
+def filename_key_time_bounds(path, window):
+    """Return (first, last) datetimes recorded in a model filename key.
+
+    ``get_node_ofs`` writes ``{ofs}_{whichcast}_filename_key.csv`` with
+    the full time index of the dataset it extracted from, so on a rerun
+    whose model is not loaded yet the key is the one record of what the
+    catalog provided last time. Returns ``None`` when the file is
+    missing or unreadable, or when its span does not overlap ``window``
+    (a key left by a run over some other period says nothing about this
+    one, and must not narrow the check for it).
+
+    The key records what the catalog provided when it was written, not
+    what it provides now (model files restored to the archive since, or
+    a run over a user-chosen subset of files, are not reflected):
+    callers should treat its start as the earliest data a rerun can
+    expect, and its end as nothing more than where the last run stopped.
+    """
+    if window is None or not path or not os.path.isfile(path):
+        return None
+    try:
+        # Local import keeps this module import-light for CLI --help.
+        import pandas as pd  # pylint: disable=import-outside-toplevel
+        stamps = pd.to_datetime(
+            pd.read_csv(path, usecols=['DateTime'])['DateTime'],
+            errors='coerce').dropna()
+    except (OSError, ValueError, KeyError, ImportError):
+        return None
+    if stamps.empty:
+        return None
+    first = stamps.min().to_pydatetime().replace(tzinfo=None)
+    last = stamps.max().to_pydatetime().replace(tzinfo=None)
+    if first > window[1] or last < window[0]:
+        return None
+    return first, last
+
+
+def clamp_window_to_coverage(window, bounds, logger=None, label=None):
+    """Clamp a requested run window to what the model catalog provides.
+
+    ``covers_run_window`` compares artifacts against the requested
+    window; when the catalog itself cannot reach the window edges (files
+    dropped after a mid-window model-configuration change, or plain
+    archive gaps), a freshly extracted artifact is indistinguishable
+    from a stale one and regeneration can never converge. Clamping to
+    the catalog's actual first/last timestamps makes "covers everything
+    the catalog can provide" count as fresh — the same reasoning
+    ``covers_run_window`` already applies by clamping the end to *now*
+    for forecast windows.
+
+    ``window`` and ``bounds`` are ``(start, end)`` tuples or ``None``;
+    either being ``None`` returns ``window`` unchanged.
+    """
+    if window is None or bounds is None:
+        return window
+    start_dt, end_dt = window
+    new_start = max(start_dt, bounds[0])
+    new_end = min(end_dt, bounds[1])
+    if (new_start, new_end) != (start_dt, end_dt) and logger is not None:
+        logger.info(
+            'Model data%s covers %s to %s; clamping the staleness-check '
+            'window from (%s, %s) to (%s, %s) so artifacts are not '
+            'regenerated for data the catalog cannot provide.',
+            f' for {label}' if label else '', bounds[0], bounds[1],
+            start_dt, end_dt, new_start, new_end)
+    return new_start, new_end
 
 
 def is_within_directory(path, directory):
