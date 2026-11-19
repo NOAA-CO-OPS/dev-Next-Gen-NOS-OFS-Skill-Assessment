@@ -31,6 +31,7 @@ from plotly.subplots import make_subplots
 
 import ofs_skill.visualization.make_static_plots as make_static_plots
 from ofs_skill.obs_retrieval.get_station_tidal_data import get_station_tidal_data
+from ofs_skill.utils import plot_units
 from ofs_skill.visualization.make_static_plots import combine_obs_across_casts
 from ofs_skill.visualization.plotting_functions import (
     find_max_data_gap,
@@ -157,13 +158,13 @@ def oned_scalar_plot(
         line_width = 0.25
 
     if name_var == 'wl':
-        plot_name = 'Water Level ' + f'at {prop.datum} (<i>meters<i>)'
+        plot_name = f'Water Level at {prop.datum}{plot_units.unit_suffix("wl", html=True)}'
         save_name = 'water_level'
     elif name_var == 'temp':
-        plot_name = 'Water Temperature (<i>\u00b0C<i>)'
+        plot_name = f'Water Temperature{plot_units.unit_suffix("temp", html=True)}'
         save_name = 'water_temperature'
     elif name_var == 'salt':
-        plot_name = 'Salinity (<i>PSU<i>)'
+        plot_name = f'Salinity{plot_units.unit_suffix("salt", html=True)}'
         save_name = 'salinity'
 
     '''

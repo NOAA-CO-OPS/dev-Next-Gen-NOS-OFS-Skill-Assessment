@@ -23,6 +23,8 @@ import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from ofs_skill.utils import plot_units
+
 from .plotting_functions import (
     find_max_data_gap,
     get_error_range,
@@ -75,11 +77,11 @@ def oned_scalar_plot_ice(now_fores_paired, name_var, station_id, node,
         connectgaps = True
 
     if name_var == 'wl':
-        plot_name = 'Water Level ' + f'at {prop.datum} (<i>meters<i>)'
+        plot_name = f'Water Level at {prop.datum}{plot_units.unit_suffix("wl", html=True)}'
     elif name_var == 'temp':
-        plot_name = 'Water Temperature (<i>\u00b0C<i>)'
+        plot_name = f'Water Temperature{plot_units.unit_suffix("temp", html=True)}'
     elif name_var == 'salt':
-        plot_name = 'Salinity (<i>PSU<i>)'
+        plot_name = f'Salinity{plot_units.unit_suffix("salt", html=True)}'
     elif name_var == 'ice_conc':
         plot_name = 'Ice Concentration (%)'
         # prop.whichcasts = [prop.whichcast]
