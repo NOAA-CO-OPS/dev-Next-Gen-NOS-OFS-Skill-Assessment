@@ -131,7 +131,7 @@ allow_nearby_tidal_stations=False
 # `--Station_Owner list`
 # If using `-so list` and the list below is blank, the skill
 # assessment will include all stations found in an OFS.
-station_ID_list=8551910 8571421
+station_ID_list=8571892 8571421
 
 
 [user_xy_inputs]
@@ -218,9 +218,6 @@ parallel_stations=False
 
 # Plotting parallelism: generate station plots in parallel
 parallel_plotting=False
-
-# Forecast cycle parallelism: process forecast_a cycles concurrently
-parallel_forecast_cycles=False
 
 # Obs variable parallelism: download obs for all variables concurrently
 parallel_obs_variables=False
