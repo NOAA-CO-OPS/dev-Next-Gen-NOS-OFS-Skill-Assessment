@@ -97,9 +97,18 @@ def _figure_title(prop, variable: str, name_var: str) -> str:
     if 'forecast_a' in getattr(prop, 'whichcasts', []) and \
             getattr(prop, 'forecast_hr', None):
         forecast_tag = f' ({prop.forecast_hr} cycle)'
+    # STOFS-2D-Global stations: flag bias-corrected (v2.1) output.
+    # Plain space, not &nbsp;: matplotlib would print the entity.
+    ofs_label = prop.ofs.upper()
+    if prop.ofs == 'stofs_2d_glo' and prop.ofsfiletype == 'stations':
+        if plotting_functions.stofs_2d_glo_stations_bias_corrected(
+                prop,
+                plotting_functions.parse_run_date(prop.start_date_full),
+                plotting_functions.parse_run_date(prop.end_date_full)):
+            ofs_label = ofs_label + ' (bias-corrected)'
     return (
         f'NOAA/NOS OFS Skill Assessment -- station summary\n'
-        f'OFS: {prop.ofs.upper()}    Variable: {variable}    '
+        f'OFS: {ofs_label}    Variable: {variable}    '
         f'Whichcast: {prop.whichcast}{forecast_tag}\n'
         f'From: {start}    To: {end}'
     )

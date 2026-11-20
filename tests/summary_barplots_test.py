@@ -294,3 +294,48 @@ def test_static_rmse_axis_label_has_no_html_tags(tmp_path):
 
     assert 'RMSE (meters)' in labels, labels
     assert all('<' not in label for label in labels), labels
+
+
+def _stofs_prop(tmp_path, start, end, whichcasts=('nowcast', 'forecast_b')):
+    prop = _make_prop(tmp_path, ofs='stofs_2d_glo', whichcast=whichcasts[0])
+    prop.whichcasts = list(whichcasts)
+    prop.start_date_full = start
+    prop.end_date_full = end
+    return prop
+
+
+def test_figure_title_stofs_bias_corrected_after_v2p1(tmp_path):
+    """STOFS-2D-Global stations after the 2024-05-14 12Z v2.1 cycle."""
+    prop = _stofs_prop(tmp_path, '2024-06-01T00:00:00Z',
+                       '2024-06-02T00:00:00Z')
+    title = summary_barplots._figure_title(prop, 'water_level', 'wl')
+    assert 'OFS: STOFS_2D_GLO (bias-corrected)    Variable:' in title
+    # Plain space, not an HTML entity: the PNG title is matplotlib text.
+    assert '&nbsp;' not in title
+
+
+def test_figure_title_stofs_not_bias_corrected_before_v2p1(tmp_path):
+    prop = _stofs_prop(tmp_path, '2024-04-01T00:00:00Z',
+                       '2024-04-02T00:00:00Z')
+    title = summary_barplots._figure_title(prop, 'water_level', 'wl')
+    assert 'OFS: STOFS_2D_GLO    Variable:' in title
+    assert 'bias-corrected' not in title
+
+
+def test_figure_title_stofs_accepts_compact_date_format(tmp_path):
+    """check_model_files can leave dates as YYYYMMDD-HH:MM:SS on prop."""
+    prop = _stofs_prop(tmp_path, '20240601-00:00:00', '20240602-00:00:00')
+    title = summary_barplots._figure_title(prop, 'water_level', 'wl')
+    assert 'OFS: STOFS_2D_GLO (bias-corrected)    Variable:' in title
+
+
+def test_figure_title_non_stofs_unchanged(tmp_path):
+    prop = _make_prop(tmp_path, ofs='cbofs')
+    prop.start_date_full = '2024-06-01T00:00:00Z'
+    prop.end_date_full = '2024-06-02T00:00:00Z'
+    title = summary_barplots._figure_title(prop, 'water_level', 'wl')
+    assert title == (
+        'NOAA/NOS OFS Skill Assessment -- station summary\n'
+        'OFS: CBOFS    Variable: water_level    Whichcast: nowcast\n'
+        'From: 2024-06-01 00:00:00    To: 2024-06-02 00:00:00'
+    )
