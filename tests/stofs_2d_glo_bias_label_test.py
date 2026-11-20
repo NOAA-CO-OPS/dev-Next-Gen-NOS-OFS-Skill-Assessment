@@ -91,3 +91,29 @@ class TestMixedRaises:
             pf.stofs_2d_glo_stations_bias_corrected(
                 _prop(['nowcast', 'forecast_b']), _dt('2024-05-14 07:00'),
                 _dt('2024-05-14 12:00'))
+
+
+class TestParseRunDate:
+    @pytest.mark.parametrize('text', [
+        '2024-06-01T12:30:45Z', '20240601-12:30:45'])
+    def test_accepted_formats(self, text):
+        assert pf.parse_run_date(text) == datetime(2024, 6, 1, 12, 30, 45)
+
+    @pytest.mark.parametrize('text, expected', [
+        ('2024-06-01T00:00Z', datetime(2024, 6, 1, 0, 0)),
+        ('2024-06-01', datetime(2024, 6, 1)),
+        ('2024-06-01T12:30:45', datetime(2024, 6, 1, 12, 30, 45)),
+        ('2024-06-01 12:30:45', datetime(2024, 6, 1, 12, 30, 45)),
+        # Aware times are converted to UTC before the zone is dropped.
+        ('2024-06-01T00:00+05:00', datetime(2024, 5, 31, 19, 0)),
+        ('2024-06-01T00:00+00:00', datetime(2024, 6, 1, 0, 0)),
+    ])
+    def test_isoformat_fallback(self, text, expected):
+        parsed = pf.parse_run_date(text)
+        assert parsed == expected
+        assert parsed.tzinfo is None
+
+    @pytest.mark.parametrize('text', ['not-a-date', '06/01/2024', ''])
+    def test_unparseable_raises(self, text):
+        with pytest.raises(ValueError, match='Unrecognized date format'):
+            pf.parse_run_date(text)

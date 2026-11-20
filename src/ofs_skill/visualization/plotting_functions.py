@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -116,6 +116,42 @@ def get_markerstyles() -> list[str]:
 
 # First STOFS-2D-Global cycle (v2.1) with station bias correction.
 STOFS_2D_GLO_V2P1_FIRST_RUN = datetime(2024, 5, 14, 12, 0)
+
+
+def parse_run_date(value: str) -> datetime:
+    """
+    Parse a run start or end date string.
+
+    Accepts ISO ``YYYY-MM-DDTHH:MM:SSZ`` and the ``YYYYMMDD-HH:MM:SS``
+    form that ``check_model_files`` leaves on ``prop.start_date_full`` /
+    ``prop.end_date_full`` when model files are missing (the same two
+    formats :func:`get_title` handles). Anything else is passed to
+    ``datetime.fromisoformat`` (e.g. ``2024-06-01T00:00Z`` or
+    ``2024-06-01``). A time-zone-aware result is converted to UTC and
+    made naive, so it can be compared with the naive UTC datetimes used
+    elsewhere.
+
+    Args:
+        value: Date string.
+
+    Returns:
+        Naive datetime.
+
+    Raises:
+        ValueError: If ``value`` cannot be parsed.
+    """
+    for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y%m%d-%H:%M:%S'):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as err:
+        raise ValueError(f'Unrecognized date format: {value!r}') from err
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed
 
 
 def stofs_2d_glo_stations_bias_corrected(

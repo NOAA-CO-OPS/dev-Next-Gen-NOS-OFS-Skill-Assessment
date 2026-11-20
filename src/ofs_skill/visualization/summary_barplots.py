@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import os
 from collections.abc import Sequence
-from datetime import datetime
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -87,22 +86,6 @@ def _cf_colors(values: Sequence[float | None],
     return out
 
 
-def _parse_run_date(value: str) -> datetime:
-    """Parse ``prop.start_date_full`` / ``prop.end_date_full``.
-
-    Accepts ISO ``YYYY-MM-DDTHH:MM:SSZ`` and the ``YYYYMMDD-HH:MM:SS``
-    form that ``check_model_files`` leaves on ``prop`` when model files
-    are missing (the same two formats ``plotting_functions.get_title``
-    handles).
-    """
-    for fmt in ('%Y-%m-%dT%H:%M:%SZ', '%Y%m%d-%H:%M:%S'):
-        try:
-            return datetime.strptime(value, fmt)
-        except ValueError:
-            continue
-    raise ValueError(f'Unrecognized date format: {value!r}')
-
-
 def _figure_title(prop, variable: str, name_var: str) -> str:
     """Title for the summary figure.  Doesn't reuse ``get_title_static``
     because that helper is per-station (queries CO-OPS metadata for a
@@ -120,8 +103,8 @@ def _figure_title(prop, variable: str, name_var: str) -> str:
     if prop.ofs == 'stofs_2d_glo' and prop.ofsfiletype == 'stations':
         if plotting_functions.stofs_2d_glo_stations_bias_corrected(
                 prop,
-                _parse_run_date(prop.start_date_full),
-                _parse_run_date(prop.end_date_full)):
+                plotting_functions.parse_run_date(prop.start_date_full),
+                plotting_functions.parse_run_date(prop.end_date_full)):
             ofs_label = ofs_label + ' (bias-corrected)'
     return (
         f'NOAA/NOS OFS Skill Assessment -- station summary\n'

@@ -21,13 +21,24 @@ import math
 import os
 import shutil
 import sys
+import types
 
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from ofs_skill.model_processing import check_model_files, model_properties
+from ofs_skill.model_processing.get_fcst_cycle import get_fcst_dates
 from ofs_skill.utils import cache_manifest
+from ofs_skill.visualization.plotting_functions import (
+    parse_run_date,
+    stofs_2d_glo_stations_bias_corrected,
+)
+
+# forecast_hr that run_skill_assessment passes to create_1dplot. The
+# STOFS-2D-Global bias-correction label uses it too, so both pick the
+# same forecast_a cycle.
+_FORECAST_HR = 'now'
 
 
 class MockProp:  # pylint: disable=too-few-public-methods
@@ -95,8 +106,62 @@ def fetch_error_range(short_var, base_path, logger):
     return defaults.get(short_var, 0.0)
 
 
-def _resolve_model_keys(ofs1, ofs2, filetype1, filetype2):
-    """Resolve legend names and column suffixes for model identifiers."""
+def _is_stofs_2d_glo_stations(ofs, filetype):
+    """True for STOFS-2D-Global stations output."""
+    return ofs == 'stofs_2d_glo' and filetype.lower() == 'stations'
+
+
+class _LabelDateError(ValueError):
+    """The run dates for the bias-correction label could not be read."""
+
+
+def _bias_label_dates(start_date, end_date, whichcasts, config_file, logger):
+    """Return the (start, end) datetimes for the bias-correction label.
+
+    These are the dates the single-model STOFS-2D-Global plots use. With
+    forecast_a in ``whichcasts``, create_1dplot replaces the run window
+    with the forecast_a cycle window from ``get_fcst_dates`` (called with
+    ``_FORECAST_HR``), and every cast is judged on that window. The same
+    call is made here, so the label also matches with ``--skip_1d_runs``.
+
+    Raises:
+        _LabelDateError: If a date cannot be read.
+    """
+    casts = [c.strip().lower() for c in whichcasts.split(',')]
+    try:
+        if 'forecast_a' in casts:
+            fcst_prop = model_properties.ModelProperties()
+            fcst_prop.ofs = 'stofs_2d_glo'
+            fcst_prop.start_date_full = start_date
+            fcst_prop.end_date_full = end_date
+            fcst_prop.forecast_hr = _FORECAST_HR
+            fcst_prop.config_file = config_file
+            start_date, end_date = get_fcst_dates(
+                fcst_prop, logger or logging.getLogger(__name__))
+        return parse_run_date(start_date), parse_run_date(end_date)
+    except ValueError as err:
+        raise _LabelDateError(str(err)) from err
+
+
+# pylint: disable=too-many-arguments,too-many-positional-arguments
+def _resolve_model_keys(
+    ofs1, ofs2, filetype1, filetype2, start_date, end_date, whichcasts,
+    config_file=None, logger=None,
+):
+    """Resolve legend names and column suffixes for model identifiers.
+
+    The keys are merge-column suffixes and do not depend on the dates.
+    The names are display labels. A STOFS-2D-Global stations model gets
+    ' (bias-corrected)' when every time in every requested cast is
+    bias-corrected. As in the single-model plots, this is decided once
+    for the run over all ``whichcasts``, not per cast, using the dates
+    from :func:`_bias_label_dates`.
+
+    Raises:
+        _LabelDateError: If the run dates cannot be read.
+        ValueError: If the casts mix bias-corrected and uncorrected
+            STOFS-2D-Global output.
+    """
     ofs1_key = ofs1
     ofs2_key = ofs2
     ofs1_name = ofs1.upper()
@@ -108,7 +173,44 @@ def _resolve_model_keys(ofs1, ofs2, filetype1, filetype2):
         ofs1_name = f'{ofs1.upper()} ({filetype1})'
         ofs2_name = f'{ofs2.upper()} ({filetype2})'
 
+    stofs1 = _is_stofs_2d_glo_stations(ofs1, filetype1)
+    stofs2 = _is_stofs_2d_glo_stations(ofs2, filetype2)
+    if (stofs1 or stofs2) and stofs_2d_glo_stations_bias_corrected(
+        types.SimpleNamespace(whichcasts=whichcasts),
+        *_bias_label_dates(
+            start_date, end_date, whichcasts, config_file, logger),
+    ):
+        if stofs1:
+            ofs1_name = f'{ofs1_name} (bias-corrected)'
+        if stofs2:
+            ofs2_name = f'{ofs2_name} (bias-corrected)'
+
     return ofs1_key, ofs2_key, ofs1_name, ofs2_name
+
+
+def _resolve_model_names_or_exit(
+    ofs1, ofs2, filetype1, filetype2, start_date, end_date, whichcasts,
+    config_file, logger,
+):
+    """Call :func:`_resolve_model_keys`; log and exit(1) if it fails.
+
+    No unlabeled fallback: plots that might carry the wrong
+    STOFS-2D-Global bias-correction label are not made.
+    """
+    try:
+        return _resolve_model_keys(
+            ofs1, ofs2, filetype1, filetype2, start_date, end_date,
+            whichcasts, config_file, logger)
+    except _LabelDateError as err:
+        logger.error(
+            'Comparison plots not made: unreadable start/end date for the '
+            'STOFS-2D-Global bias-correction label (start %s, end %s): %s',
+            start_date, end_date, err)
+    except ValueError as err:
+        logger.error(
+            'Comparison plots not made: the requested casts mix '
+            'bias-corrected and uncorrected STOFS-2D-Global output. %s', err)
+    sys.exit(1)
 
 
 def _extract_cu_depth_bins(found_ofs1, prefix, suffix):
@@ -133,15 +235,22 @@ def generate_comparisons(
     whichcasts,
     home_path,
     datum,
-    _start_date,
-    _end_date,
+    start_date,
+    end_date,
     filetype1,
     filetype2,
     dir_params,
     logger,
+    config_file=None,
 ):
     """Ingest paired datasets for overlapping stations and create interactive Plotly time series."""
     logger.info('--- Starting Comparison Plotting ---')
+
+    # Names and keys are the same for every station and cast.
+    ofs1_key, ofs2_key, ofs1_name, ofs2_name = _resolve_model_names_or_exit(
+        ofs1, ofs2, filetype1, filetype2, start_date, end_date, whichcasts,
+        config_file, logger,
+    )
 
     try:
         inventory = pd.read_csv(overlap_csv)
@@ -321,10 +430,6 @@ def generate_comparisons(
                             df1['OFS'] = df1['OFS_SPD'] * 1.943844
                             df2['OBS'] = df2['OBS_SPD'] * 1.943844
                             df2['OFS'] = df2['OFS_SPD'] * 1.943844
-
-                        ofs1_key, ofs2_key, ofs1_name, ofs2_name = _resolve_model_keys(
-                            ofs1, ofs2, filetype1, filetype2
-                        )
 
                         merged = pd.merge(
                             df1[['DateTime', 'OBS', 'OFS']],
@@ -751,8 +856,15 @@ def generate_stat_comparisons(
     dir_params,
     logger,
     make_bar_plots=False,
+    config_file=None,
 ):
     """Read skill stat CSVs and plot interactive 1-to-1 scatters and maps."""
+    # Outside the try below, which would log a ValueError and carry on.
+    ofs1_key, ofs2_key, ofs1_name, ofs2_name = _resolve_model_names_or_exit(
+        ofs1, ofs2, filetype1, filetype2, start_date, end_date, whichcasts,
+        config_file, logger,
+    )
+
     start_str = start_date.replace('T', ' ').replace('Z', '')
     end_str = end_date.replace('T', ' ').replace('Z', '')
 
@@ -811,10 +923,6 @@ def generate_stat_comparisons(
 
         df1['ID'] = df1['ID'].astype(str)
         df2['ID'] = df2['ID'].astype(str)
-
-        ofs1_key, ofs2_key, ofs1_name, ofs2_name = _resolve_model_keys(
-            ofs1, ofs2, filetype1, filetype2
-        )
 
         merged = pd.merge(
             df1,
@@ -1483,7 +1591,7 @@ def run_skill_assessment(ofs_name, filetype, args, logger, create_1dplot):
     prop.ofsfiletype = filetype
     prop.stationowner = args.station_owner
     prop.horizonskill = False
-    prop.forecast_hr = 'now'
+    prop.forecast_hr = _FORECAST_HR
     prop.var_list = args.var_selection
     prop.aux_vars = ''
     prop.filecheck = False
@@ -1642,6 +1750,7 @@ def main(args):
         args.filetype2,
         dir_params,
         logger,
+        config_file=args.config,
     )
 
     logger.info('=== Generating Stats Comparisons ===')
@@ -1658,6 +1767,7 @@ def main(args):
         dir_params,
         logger,
         make_bar_plots=args.make_bar_plots,
+        config_file=args.config,
     )
 
     logger.info('Program Complete!')
