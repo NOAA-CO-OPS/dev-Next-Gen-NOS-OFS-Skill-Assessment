@@ -226,7 +226,7 @@ def main(logger, _conf=None):
                     fig.update_yaxes(
                         mirror=True,
                         title_text=plotinfo['plot_name'][1],
-                        titlefont_family='Open Sans',
+                        title_font_family='Open Sans',
                         title_font_color='black',
                         tickfont_family='Open Sans',
                         tickfont_color='black',
@@ -237,7 +237,7 @@ def main(logger, _conf=None):
                 fig.update_yaxes(
                     mirror=True,
                     title_text=f'{plotinfo["plot_name"]}',
-                    titlefont_family='Open Sans',
+                    title_font_family='Open Sans',
                     title_font_color='black',
                     tickfont_family='Open Sans',
                     tickfont_color='black',
