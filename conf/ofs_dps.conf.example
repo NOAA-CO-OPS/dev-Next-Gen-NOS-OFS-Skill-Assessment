@@ -242,6 +242,15 @@ static_plots=False
 # .png 2D maps.
 make_plotly_2d_maps=False
 
+# Size of the chunking batches used in get_node_ofs.py to process
+# large numbers of netCDF datasets without exhausting system memory. The value
+# represents the number of files processed per chunk (e.g., 120 files
+# at 4 forecast cycles/day roughly equals 30 days). This is mostly
+# applicable to runs spanning >2 months. The defualt value (120 files)
+# represents the tested optimal chunk size that minimizes wall time.
+# However, your mileage may vary, as everyone's computing set-up is different.
+file_chunk_size=120
+
 # NODD S3 bucket usage for model files. Three modes:
 #   True  = prefer local model files; read from the NODD S3 bucket only
 #           when local files are missing (recommended default)

@@ -935,14 +935,19 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
         int_path = os.path.join(prop.data_skill_1d_pair_path, filename)
         _write_int_file(int_path, name_var, formatted_series[0])
         logger.info(f'{filename} is created successfully')
+
+        # NEW: Properly construct the extra dictionary for the .int signature stamp
+        int_extra = {'whichcast': getattr(prop, 'whichcast', None)}
+        if getattr(prop, 'whichcast', None) == 'forecast_a':
+            int_extra['forecast_hr'] = getattr(prop, 'forecast_hr', None)
+
         # Stamp the run signature on the paired file so a same-parameter
         # rerun reuses it and a changed-parameter run treats it as stale.
-        # Keyed on the long variable name to match the .prd/.obs writers.
         cache_manifest.record_artifact(
             int_path,
             cache_manifest.run_signature(
                 prop, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
-                extra={'whichcast': getattr(prop, 'whichcast', None)}),
+                extra=int_extra),
             prop.data_skill_1d_pair_path,
             logger)
 
@@ -1533,7 +1538,9 @@ def _ensure_prd_files(read_ofs_ctl_file, p, name_var, logger_,
                     cache_manifest.forget_artifact(
                         prd_path, p.data_model_1d_node_path, logger_)
                     needs_model = True
-            elif not cache_manifest.artifact_is_fresh(prd_path, prd_sig):
+
+            # NEW: Apply the created_this_run() guard to the manifest check
+            elif not (created_this_run(prd_path) and not tail_attempted) and not cache_manifest.artifact_is_fresh(prd_path, prd_sig):
                 # Covers the window but was built under different
                 # datum/station-owner/bins parameters -- re-extract.
                 logger_.warning(

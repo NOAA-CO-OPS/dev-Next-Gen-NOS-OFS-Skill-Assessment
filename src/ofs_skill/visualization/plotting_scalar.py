@@ -314,9 +314,44 @@ def oned_scalar_plot(
             data_times = obs_df.DateTime
             start_dt = data_times.min().to_pydatetime()
             end_dt = data_times.max().to_pydatetime()
-            tidal_data, tidal_info = get_station_tidal_data(
-                start_dt, end_dt, prop, station_id[0], logger
-            )
+
+            # NEW: Attempt to load previously saved tidal data
+            import os
+            tide_csv_path = os.path.join(prop.data_skill_1d_pair_path, f'{station_id[0]}_{prop.ofs}_tide.csv')
+            tidal_data = None
+
+            if os.path.isfile(tide_csv_path):
+                logger.info(f'Loading pre-fetched tidal data from {tide_csv_path}')
+                try:
+                    tide_load_df = pd.read_csv(tide_csv_path, parse_dates=['DateTime'])
+                    # Mask to current plot's time window
+                    mask = (tide_load_df['DateTime'] >= pd.to_datetime(start_dt)) & (tide_load_df['DateTime'] <= pd.to_datetime(end_dt))
+                    tidal_data = tide_load_df.loc[mask].copy()
+
+                    if not tidal_data.empty:
+                        # Reconstruct tidal_info from the first row
+                        tidal_info['tidal_station_id'] = tidal_data['tidal_station_id'].iloc[0] if 'tidal_station_id' in tidal_data else None
+                        tidal_info['tidal_station_name'] = tidal_data['tidal_station_name'].iloc[0] if 'tidal_station_name' in tidal_data else None
+                        tidal_info['tidal_station_distance'] = tidal_data['tidal_station_distance'].iloc[0] if 'tidal_station_distance' in tidal_data else None
+                        tidal_info['used_datum'] = tidal_data['used_datum'].iloc[0] if 'used_datum' in tidal_data else None
+
+                        # Drop metadata columns so tidal_data matches expected DataFrame format for plotting
+                        cols_to_drop = ['tidal_station_id', 'tidal_station_name', 'tidal_station_distance', 'used_datum']
+                        tidal_data = tidal_data.drop(columns=[c for c in cols_to_drop if c in tidal_data.columns])
+                    else:
+                        tidal_data = None
+                except Exception as ex:
+                    logger.debug(f'Failed to load cached tidal data: {ex}')
+                    tidal_data = None
+
+            # Fallback to API if not loaded from file
+            if tidal_data is None or len(tidal_data) == 0:
+                logger.info('Fetching tidal predictions from API...')
+                tidal_data, tidal_info_fetched = get_station_tidal_data(
+                    start_dt, end_dt, prop, station_id[0], logger
+                )
+                if tidal_info_fetched:
+                    tidal_info.update(tidal_info_fetched)
 
             if tidal_data is not None and len(tidal_data) > 0:
                 # Build hover text with source information including distance

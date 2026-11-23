@@ -188,12 +188,65 @@ def skill_scalar(
         wof = None
         tidal_data = None
         if name_var == 'wl' and prop.ofs[0] != 'l':
-            # tidal_info contains the 'used_datum' that successfully returned data
-            tidal_data, tidal_info = get_station_tidal_data(
-                df_paired['DateTime'].min().to_pydatetime(),
-                df_paired['DateTime'].max().to_pydatetime(),
-                prop, station_id, logger
-            )
+            import os
+
+            start_dt = df_paired['DateTime'].min().to_pydatetime()
+            end_dt = df_paired['DateTime'].max().to_pydatetime()
+            tide_csv_path = os.path.join(prop.data_skill_1d_pair_path, f'{station_id}_{prop.ofs}_tide.csv')
+
+            tidal_info = {
+                'tidal_station_id': None,
+                'tidal_station_name': None,
+                'tidal_station_distance': None,
+                'used_datum': None,
+            }
+
+            # Check if cache exists
+            if os.path.isfile(tide_csv_path):
+                logger.info(f'Loading pre-fetched tidal data from {tide_csv_path}')
+                try:
+                    tide_load_df = pd.read_csv(tide_csv_path, parse_dates=['DateTime'])
+                    # Mask to current plot's time window
+                    mask = (tide_load_df['DateTime'] >= pd.to_datetime(start_dt)) & (tide_load_df['DateTime'] <= pd.to_datetime(end_dt))
+                    tidal_data = tide_load_df.loc[mask].copy()
+
+                    if not tidal_data.empty:
+                        # Reconstruct tidal_info from the first row
+                        tidal_info['tidal_station_id'] = tidal_data['tidal_station_id'].iloc[0] if 'tidal_station_id' in tidal_data else None
+                        tidal_info['tidal_station_name'] = tidal_data['tidal_station_name'].iloc[0] if 'tidal_station_name' in tidal_data else None
+                        tidal_info['tidal_station_distance'] = tidal_data['tidal_station_distance'].iloc[0] if 'tidal_station_distance' in tidal_data else None
+                        tidal_info['used_datum'] = tidal_data['used_datum'].iloc[0] if 'used_datum' in tidal_data else None
+
+                        # Drop metadata columns so tidal_data matches expected DataFrame format for downstream merging
+                        cols_to_drop = ['tidal_station_id', 'tidal_station_name', 'tidal_station_distance', 'used_datum']
+                        tidal_data = tidal_data.drop(columns=[c for c in cols_to_drop if c in tidal_data.columns])
+                    else:
+                        tidal_data = None
+                except Exception as ex:
+                    logger.debug(f'Failed to load cached tidal data: {ex}')
+                    tidal_data = None
+
+            # Fallback to API if not loaded
+            if tidal_data is None or len(tidal_data) == 0:
+                logger.info('Fetching tidal predictions from API...')
+                tidal_data, tidal_info_fetched = get_station_tidal_data(
+                    start_dt, end_dt, prop, station_id, logger
+                )
+                if tidal_info_fetched:
+                    tidal_info.update(tidal_info_fetched)
+
+                # Save tidal data and metadata to CSV for reuse in plotting or later casts
+                if tidal_data is not None and len(tidal_data) > 0:
+                    try:
+                        tide_save_df = tidal_data.copy()
+                        tide_save_df['tidal_station_id'] = tidal_info.get('tidal_station_id')
+                        tide_save_df['tidal_station_name'] = tidal_info.get('tidal_station_name')
+                        tide_save_df['tidal_station_distance'] = tidal_info.get('tidal_station_distance')
+                        tide_save_df['used_datum'] = tidal_info.get('used_datum')
+                        tide_save_df.to_csv(tide_csv_path, index=False)
+                        logger.debug(f'Saved tidal data to {tide_csv_path} for reuse.')
+                    except Exception as ex:
+                        logger.warning(f'Could not save tidal data to {tide_csv_path}: {ex}')
 
             # Skip WOF if retrieved datum differs from requested model datum
             # This prevents bias in crossing logic caused by vertical reference offsets

@@ -23,8 +23,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ofs_skill.model_processing import do_horizon_skill_utils
-
 # Use new package imports - import directly from modules to avoid circular import
 from ofs_skill.model_processing.get_datum_offset import get_datum_offset as get_datum_offset_func
 from ofs_skill.model_processing.get_datum_offset import (
@@ -1816,6 +1814,8 @@ def _write_prd(path, formatted_series, name_var, prop_local, logger,
     not actually update would certify the *old* span under the new run's
     signature, and the next run would then reuse a short series.
     """
+    is_first_chunk = getattr(prop_local, 'is_first_chunk', True)
+
     if getattr(prop_local, 'continuation_prd_merge', False):
         if _datum_offset_applied(datum_offset) is False:
             logger.warning(
@@ -1834,12 +1834,13 @@ def _write_prd(path, formatted_series, name_var, prop_local, logger,
             'be re-extracted over the full window.', path)
         return False
 
-    with open(path, 'w', encoding='utf-8') as output:
-        if len(formatted_series) > 0:
+    mode = 'w' if is_first_chunk else 'a'
+    with open(path, mode, encoding='utf-8') as output:
+        if len(formatted_series) > 0 and is_first_chunk:
             output.write(series_header(name_var))
         for line in formatted_series:
             output.write(str(line) + '\n')
-    logger.info('%s created successfully', path)
+    logger.info('%s created/updated successfully', path)
     return True
 
 
@@ -2089,496 +2090,465 @@ def get_node_ofs(prop, logger, model_dataset=None):
                 )
                 raise SystemExit(1)
 
-        logging.info('About to start intake_scisa from get_node ...')
-        model = intake_model(list_files, prop, logger)
-        logging.info('Lazily loaded dataset complete for %s!', prop.whichcast)
+        prop.ctl_flag = 0  # Need flag to track control file production if
+        # user_input_location == True
 
-        if use_custom_files:
-            # Check if dates of loaded model data overlap with user-input dates
-            try:
-                date_overlap = has_date_overlap(
-                    datetime.strptime(start_date_internal.split('-')[0], '%Y%m%d'),
-                    datetime.strptime(end_date_internal.split('-')[0], '%Y%m%d'),
-                    model,
-                )
-                if not date_overlap:
-                    logger.error(
-                        'The date range of the loaded model files '
-                        'does not overlap with the start and end '
-                        'dates of the skill assessment run. Please '
-                        'either disable custom file name loading '
-                        'in the conf file, or check that the provided '
-                        'filenames are correct. Exiting...'
-                    )
-                    raise SystemExit(1)
-            except Exception as e:
-                logger.error(
-                    'Cannot verify if the dates in user-supplied '
-                    'custom model files overlap with the start and '
-                    'end dates of the skill assessment run. Program '
-                    'may crash further down the pipeline! Error: %s',
-                    e,
-                )
-
-    if not model:
-        logger.error('No model files or URLs to load in intake! Exiting...')
-        raise SystemExit(1)
-
-    # Write filenames to CSV
-    try:
-        time_name = 'time'
-        if prop.model_source == 'roms':
-            time_name = 'ocean_time'
-        # Format time step
-        time_step = str(get_time_step(prop, logger)) + 'min'
-        serieskey = model[[time_name, 'filename']].to_dataframe()
-        full_date_range = pd.date_range(
-            start=serieskey.index.min(), end=serieskey.index.max(), freq=time_step
-        )
-        serieskey = serieskey.reindex(full_date_range)
-        # Write 'key' that lists all model files used to construct
-        # time series
-        logger.info('Writing model time series filename key!')
-        filename = f'{prop.ofs}_{prop.whichcast}_filename_key.csv'
-        filepath = Path(os.path.join(prop.data_model_1d_node_path,
-                                     filename)).as_posix()
-        if (getattr(prop, 'continuation_prd_merge', False)
-                and os.path.isfile(filepath)):
-            # A continuation pass only loaded the tail's model files, so
-            # writing this key wholesale would drop every filename the
-            # earlier run recorded -- and the plot-side merge would then
-            # lose the hover text for the whole head of the series.
-            serieskey = _merge_filename_key(filepath, serieskey, logger)
-        serieskey.to_csv(filepath, index_label='DateTime')
-    except KeyError:
-        # Expected whenever a cached/pre-loaded dataset is reused: the
-        # filename bookkeeping variable is dropped during resampling,
-        # and the key CSV was already written on the first load. Not an
-        # error — at ERROR level this repeated on every extraction pass.
-        logger.info('No filename variable in the model dataset (typical '
-                    'for a cached/pre-loaded dataset); skipping the '
-                    'filename time series key.')
-    except Exception as ex:
-        logger.error('Error writing model time series filename ' 'key: %s', ex)
-
-    # Check for time gaps caused by missing model output files.
-    # If there is a gap, resample data to the correct time step and add nans
-    # to fill gap
-    isgap = find_time_gaps(prop, model, logger)
-    if isgap:  # Resample if time gap
-        logger.info('Preserving model time series gaps as nans...')
-        # xarray.resample requires a monotonic index; sort defensively in
-        # case upstream concat left the time axis out of order (forecast_b).
-        time_name = 'ocean_time' if prop.model_source == 'roms' else 'time'
-        time_vals = model[time_name].values
-        if time_vals.size > 1 and not np.all(np.diff(time_vals) > np.timedelta64(0)):
-            logger.warning('Time axis was non-monotonic before resample; sorting.')
-            model = model.sortby(time_name)
-        # Resample only the time-varying data vars. The default
-        # Dataset.resample(...).asfreq() touches every variable in the
-        # dataset, including static mesh vars (lon, lat, lonc, latc,
-        # siglay, h) that intake's nested-combine replicated along the
-        # time dim during multi-file concat. Materializing those across
-        # 316 NECOFS files costs ~20 min per whichcast. Splitting the
-        # dataset and resampling only data_vars that actually depend on
-        # time avoids that cost; static vars are re-attached unchanged.
-        model = _resample_time_vars_only(model, time_name, time_step, logger)
-        logger.info('Resample complete on a %s time axis.', prop.model_source)
-
-    logger.info(
-        'Dispatching variable processing for: %s',
-        list(prop.var_list),
-    )
-
-    prop.ctl_flag = 0  # Need flag to track control file production if
-    # user_input_location == True
-
-    def _extract_variable(variable, prop_local):
-        """Process a single variable — extractable for parallel dispatch."""
-        logger.info('[%s] thread started, reading obs ctl file', variable)
         try:
-            name_conventions = name_convent(variable)
-            if not prop_local.user_input_location:
-                control_file = (
-                    f'{prop_local.control_files_path}/{prop_local.ofs}_'
-                    f'{name_conventions[0]}_station.ctl'
+            conf_settings = utils.Utils(_conf).read_config_section('settings', logger)
+            chunk_size = int(conf_settings.get('file_chunk_size', 120))
+        except (KeyError, AttributeError, ValueError, OSError):
+            logger.warning("Could not read 'file_chunk_size' from config; defaulting to 120.")
+            chunk_size = 120
+        if model_dataset is not None:
+            file_chunks = [[]]
+        else:
+            file_chunks = [list_files[i:i + chunk_size] for i in range(0, len(list_files), chunk_size)]
+
+        for chunk_idx, chunk_list in enumerate(file_chunks):
+            prop.is_first_chunk = (chunk_idx == 0)
+            logger.info(f'\n========== PROCESSING CHUNK {chunk_idx + 1} OF {len(file_chunks)} ==========')
+
+            logging.info('About to start intake_scisa from get_node ...')
+            model = intake_model(chunk_list, prop, logger)
+
+            if not model:
+                logger.error('No model files or URLs to load in intake! Skipping chunk...')
+                continue
+
+            logging.info('Lazily loaded dataset complete for %s!', prop.whichcast)
+
+            if use_custom_files and prop.is_first_chunk:
+                # Check if dates of loaded model data overlap with user-input dates
+                try:
+                    date_overlap = has_date_overlap(
+                        datetime.strptime(start_date_internal.split('-')[0], '%Y%m%d'),
+                        datetime.strptime(end_date_internal.split('-')[0], '%Y%m%d'),
+                        model,
+                    )
+                    if not date_overlap:
+                        logger.error(
+                            'The date range of the loaded model files '
+                            'does not overlap with the start and end '
+                            'dates of the skill assessment run. Please '
+                            'either disable custom file name loading '
+                            'in the conf file, or check that the provided '
+                            'filenames are correct. Exiting...'
+                        )
+                        raise SystemExit(1)
+                except Exception as e:
+                    logger.error(
+                        'Cannot verify if the dates in user-supplied '
+                        'custom model files overlap with the start and '
+                        'end dates of the skill assessment run. Program '
+                        'may crash further down the pipeline! Error: %s',
+                        e,
+                    )
+
+            # Write filenames to CSV
+            try:
+                time_name = 'time'
+                if prop.model_source == 'roms':
+                    time_name = 'ocean_time'
+                # Format time step
+                time_step = str(get_time_step(prop, logger)) + 'min'
+                serieskey = model[[time_name, 'filename']].to_dataframe()
+                full_date_range = pd.date_range(
+                    start=serieskey.index.min(), end=serieskey.index.max(), freq=time_step
                 )
-                if os.path.isfile(control_file) is False:
-                    logger.info(
-                        '%s is not found. If not providing a custom XY '
-                        'input file, then an observation control file '
-                        'must be present! Exiting...',
-                        control_file,
-                    )
+                serieskey = serieskey.reindex(full_date_range)
+                # Write 'key' that lists all model files used to construct
+                # time series
+                logger.info('Writing model time series filename key!')
+                filename = f'{prop.ofs}_{prop.whichcast}_filename_key.csv'
+                filepath = Path(os.path.join(prop.data_model_1d_node_path,
+                                             filename)).as_posix()
+                if (getattr(prop, 'continuation_prd_merge', False)
+                        and os.path.isfile(filepath)):
+                    # A continuation pass only loaded the tail's model files, so
+                    # writing this key wholesale would drop every filename the
+                    # earlier run recorded -- and the plot-side merge would then
+                    # lose the hover text for the whole head of the series.
+                    serieskey = _merge_filename_key(filepath, serieskey, logger)
 
-                if os.path.isfile(control_file) and os.path.getsize(control_file) > 0: # Gets size of obs ctl file!
-                    ofs_ctlfile = ofs_ctlfile_extract(
-                        prop_local, name_conventions[0], model, logger
-                    )
-                    if ofs_ctlfile is None:
-                        return
+                if prop.is_first_chunk and not getattr(prop, 'continuation_prd_merge', False):
+                    serieskey.to_csv(filepath, index_label='DateTime')
                 else:
-                    logger.info('%s obs ctl file is blank!', variable)
-                    logger.info(
-                        'For GLOFS, salt and cu ctl files may be blank. '
-                        'If running with a single station provider/owner, '
-                        'ctl files may also be blank.'
-                    )
-                    return
-            else:
-                ofs_ctlfile = ofs_ctlfile_extract(prop_local, name_conventions[0], model, logger)
+                    serieskey.to_csv(filepath, mode='a', header=not os.path.isfile(filepath))
+            except KeyError:
+                # Expected whenever a cached/pre-loaded dataset is reused: the
+                # filename bookkeeping variable is dropped during resampling,
+                # and the key CSV was already written on the first load. Not an
+                # error — at ERROR level this repeated on every extraction pass.
+                logger.info('No filename variable in the model dataset (typical '
+                            'for a cached/pre-loaded dataset); skipping the '
+                            'filename time series key.')
+            except Exception as ex:
+                logger.error('Error writing model time series filename ' 'key: %s', ex)
 
-            # Resume short-circuit: if every per-station .prd file for this
-            # (var, whichcast, ofsfiletype) already exists on disk and the
-            # row count matches the resampled model time axis, skip the
-            # precompute + per-station write loop entirely. Critical for
-            # crash-resume on contested hosts where a partial run leaves
-            # WL/temp/etc. fully extracted but salt or cu missing — without
-            # this, get_node_ofs's inner var loop re-extracts every variable
-            # in prop.var_list on every restart. Row-count validation
-            # additionally guards against a SIGKILL during the per-station
-            # write loop leaving a single .prd truncated, which a naive
-            # existence check would silently reuse.
-            # We only short-circuit when not in user_input_location mode
-            # (custom xy needs the ctl flag flow) and not in horizon-skill
-            # mode (horizon output is per-cycle, separate accounting).
-            if not prop_local.user_input_location and not getattr(
-                prop_local, 'horizonskill', False
-            ):
-                n_stations = len(ofs_ctlfile[1])
-                # Best-effort: derive the expected per-station row count
-                # from the resampled model time axis. Fall back to None
-                # (existence-only check) if anything unexpected pops up so
-                # the resume path never fails hard on a missing time dim.
-                try:
-                    time_var = 'ocean_time' if prop_local.model_source == 'roms' else 'time'
-                    expected_ts = int(model.sizes[time_var])
-                except Exception as ex:  # pylint: disable=broad-except
-                    logger.warning(
-                        'Resume check: could not determine expected '
-                        'timestep count (%s); falling back to '
-                        'existence-only check.',
-                        ex,
-                    )
-                    expected_ts = None
+            # Check for time gaps caused by missing model output files.
+            # If there is a gap, resample data to the correct time step and add nans
+            # to fill gap
+            isgap = find_time_gaps(prop, model, logger)
+            if isgap:  # Resample if time gap
+                logger.info('Preserving model time series gaps as nans...')
+                # xarray.resample requires a monotonic index; sort defensively in
+                # case upstream concat left the time axis out of order (forecast_b).
+                time_name = 'ocean_time' if prop.model_source == 'roms' else 'time'
+                time_vals = model[time_name].values
+                if time_vals.size > 1 and not np.all(np.diff(time_vals) > np.timedelta64(0)):
+                    logger.warning('Time axis was non-monotonic before resample; sorting.')
+                    model = model.sortby(time_name)
+                # Resample only the time-varying data vars. The default
+                # Dataset.resample(...).asfreq() touches every variable in the
+                # dataset, including static mesh vars (lon, lat, lonc, latc,
+                # siglay, h) that intake's nested-combine replicated along the
+                # time dim during multi-file concat. Materializing those across
+                # 316 NECOFS files costs ~20 min per whichcast. Splitting the
+                # dataset and resampling only data_vars that actually depend on
+                # time avoids that cost; static vars are re-attached unchanged.
+                model = _resample_time_vars_only(model, time_name, time_step, logger)
+                logger.info('Resample complete on a %s time axis.', prop.model_source)
 
-                if n_stations > 0 and _all_prd_files_complete(
-                        prop_local, ofs_ctlfile, name_conventions[0],
-                        expected_ts, logger,
-                        time_bounds=dataset_time_bounds(model)):
-                    logger.info(
-                        '[%s] all %d .prd file(s) on disk look complete '
-                        '— skipping precompute and per-station writes',
-                        variable,
-                        n_stations,
-                    )
-                    return
+            # Calculate cumulative timesteps for the short-circuit check
+            try:
+                time_var = 'ocean_time' if prop.model_source == 'roms' else 'time'
+                chunk_ts = int(model.sizes[time_var])
+            except Exception:
+                chunk_ts = 0
 
-            # Batch-extract all station data. Applies to BOTH stations and
-            # fields files: the win is that each backing chunk is read and
-            # decompressed once for all N stations instead of once per
-            # station. That matters most for SCHISM fields, where one HDF5
-            # chunk is the entire spatial domain for a timestep (~600 MB),
-            # so the per-station path re-inflates the whole domain N times.
-            precomputed = None
-            if prop_local.ofsfiletype in ('stations', 'fields'):
-                try:
-                    precomputed = _precompute_stations_data(
-                        prop_local, model, ofs_ctlfile, name_conventions[-1], logger
-                    )
-                    if precomputed is None:
-                        logger.info(
-                            'No batch extraction layout for %s %s %s files; '
-                            'using per-station extraction.',
-                            prop_local.ofs,
-                            prop_local.model_source,
-                            prop_local.ofsfiletype,
-                        )
-                except Exception as ex:
-                    logger.warning(
-                        'Batch precomputation failed, falling back to '
-                        'per-station extraction: %s',
-                        ex,
-                        exc_info=True,
-                    )
-                    precomputed = None
+            prop.cumulative_ts = getattr(prop, 'cumulative_ts', 0) + chunk_ts
 
-            def _process_single_station(
-                i, ofs_ctlfile, prop_local, model, name_conventions, precomputed, variable, logger
-            ):
-                """Process a single station: format data and write .prd file.
-
-                Returns (datum_offset, model_station) for water_level,
-                or (None, None) for other variables.
-                """
-                datum_offset = None
-                model_station = None
-
-                if variable in ('salinity', 'water_temperature'):
-                    formatted_series = format_temp_salt(
-                        prop_local,
-                        model,
-                        ofs_ctlfile,
-                        name_conventions[-1],
-                        i,
-                        precomputed=precomputed,
-                    )
-                elif variable == 'currents':
-                    formatted_series = format_currents(
-                        prop_local, model, ofs_ctlfile, i, precomputed=precomputed
-                    )
-                else:
-                    formatted_series, datum_offset = format_waterlevel(
-                        prop_local,
-                        model,
-                        ofs_ctlfile,
-                        name_conventions[-1],
-                        i,
-                        logger,
-                        precomputed=precomputed,
-                    )
-                    model_station = ofs_ctlfile[4][i]
-
-                if (prop_local.whichcast == 'forecast_a' and
-                    not prop_local.horizonskill):
-                    prd_path_fa = (
-                        f'{prop_local.data_model_1d_node_path}'
-                        f'/{ofs_ctlfile[4][i]}_'
-                        f'{prop_local.ofs}_{name_conventions[0]}_'
-                        f'{ofs_ctlfile[1][i]}_'
-                        f'{prop_local.whichcast}_{prop_local.forecast_hr}_'
-                        f'{prop_local.ofsfiletype}_model.prd')
-                    # Same header as the other .prd branch so the file
-                    # format is not cast-dependent; omitted for empty
-                    # series to keep blank files 0 bytes.
-                    if _write_prd(prd_path_fa, formatted_series,
-                                  name_conventions[0], prop_local, logger,
-                                  datum_offset):
-                        cache_manifest.record_artifact(
-                            prd_path_fa,
-                            cache_manifest.run_signature(
-                                prop_local, variable=variable,
-                                extra={'whichcast': prop_local.whichcast,
-                                       'forecast_hr': prop_local.forecast_hr}),
-                            prop.data_model_1d_node_path,
-                            logger)
-                elif (prop_local.horizonskill and os.path.isfile(
-                        f'{prop_local.data_model_1d_node_path}/'
-                        f'{ofs_ctlfile[-1][i]}_{prop_local.ofs}_{name_conventions[0]}_'
-                        f'{ofs_ctlfile[1][i]}_forecast_b_{prop_local.ofsfiletype}_'
-                        f'model.prd'
-                    )
-                    is True
-                ):
-                    datecycle = (
-                        prop_local.start_date_full.split('T')[0].replace('-', '')
-                        + '-'
-                        + prop_local.forecast_hr
-                        + '-'
-                        + 'forecast'
-                    )
-                    try:
-                        df = do_horizon_skill_utils.pandas_processing(
-                            name_conventions[0], datecycle, formatted_series
-                        )
-                    except Exception as e_x:
-                        logger.error(
-                            'Could not merge datecycle %s! Skipping.' ' Error: %s', datecycle, e_x
-                        )
-                        return (datum_offset, model_station)
-                    filename = (
-                        f'{prop_local.ofs}_{ofs_ctlfile[4][i]}_'
-                        f'{name_conventions[0]}_fcst_horizons.csv'
-                    )
-                    # Stash this cycle in an in-memory accumulator keyed by the
-                    # station CSV filename. All cycles are merged and written
-                    # once at the end of the cycle loop by
-                    # do_horizon_skill.make_horizon_series (via
-                    # flush_horizon_series), which keeps the horizon workflow
-                    # scaling linearly with the number of cycles instead of
-                    # re-reading and re-merging the growing CSV on every cycle
-                    # (previously O(cycles**2) on disk I/O).
-                    try:
-                        do_horizon_skill_utils.accumulate_cycle(prop_local, filename, df, datecycle)
-                    except Exception as e_x:
-                        logger.error(
-                            'Could not accumulate forecast horizon '
-                            'series for %s at station %s! Error: %s',
-                            name_conventions[0],
-                            ofs_ctlfile[4][i],
-                            e_x,
-                        )
-                        return (datum_offset, model_station)
-                else:
-                    prd_path_std = (
-                        f'{prop_local.data_model_1d_node_path}/'
-                        f'{ofs_ctlfile[4][i]}_'
-                        f'{prop_local.ofs}_'
-                        f'{name_conventions[0]}_{ofs_ctlfile[1][i]}'
-                        f'_{prop_local.whichcast}_'
-                        f'{prop_local.ofsfiletype}_model.prd')
-                    # Header only when there is data: an empty .prd must
-                    # stay 0 bytes so the getsize() blank-file checks
-                    # downstream keep working.
-                    if _write_prd(prd_path_std, formatted_series,
-                                  name_conventions[0], prop_local, logger,
-                                  datum_offset):
-                        cache_manifest.record_artifact(
-                            prd_path_std,
-                            cache_manifest.run_signature(
-                                prop_local, variable=variable,
-                                extra={'whichcast': prop_local.whichcast}),
-                            prop.data_model_1d_node_path,
-                            logger)
-
-                return (datum_offset, model_station)
-
-            # Dispatch station processing — parallel or sequential
-            parallel_cfg = get_parallel_config(
-                logger,
-                config_file=getattr(prop_local, 'config_file', None),
+            logger.info(
+                'Dispatching variable processing for: %s',
+                list(prop.var_list),
             )
-            n_stations = len(ofs_ctlfile[1])
-            datum_offsets = []
-            model_stations = []
 
-            if parallel_cfg.get('parallel_stations') and n_stations > 1 and precomputed is not None:
-                logger.info('Processing %d stations in parallel for %s', n_stations, variable)
-                with ThreadPoolExecutor(max_workers=min(n_stations, 8)) as executor:
-                    futures = []
-                    for i in range(n_stations):
-                        prop_copy = copy.copy(prop_local)
-                        futures.append(
-                            executor.submit(
-                                _process_single_station,
+            def _extract_variable(variable, prop_local):
+                """Process a single variable — extractable for parallel dispatch."""
+                logger.info('[%s] thread started, reading obs ctl file', variable)
+                try:
+                    name_conventions = name_convent(variable)
+                    if not prop_local.user_input_location:
+                        control_file = (
+                            f'{prop_local.control_files_path}/{prop_local.ofs}_'
+                            f'{name_conventions[0]}_station.ctl'
+                        )
+                        if os.path.isfile(control_file) is False:
+                            logger.info(
+                                '%s is not found. If not providing a custom XY '
+                                'input file, then an observation control file '
+                                'must be present! Exiting...',
+                                control_file,
+                            )
+
+                        if os.path.isfile(control_file) and os.path.getsize(control_file) > 0: # Gets size of obs ctl file!
+                            ofs_ctlfile = ofs_ctlfile_extract(
+                                prop_local, name_conventions[0], model, logger
+                            )
+                            if ofs_ctlfile is None:
+                                return
+                        else:
+                            logger.info('%s obs ctl file is blank!', variable)
+                            logger.info(
+                                'For GLOFS, salt and cu ctl files may be blank. '
+                                'If running with a single station provider/owner, '
+                                'ctl files may also be blank.'
+                            )
+                            return
+                    else:
+                        ofs_ctlfile = ofs_ctlfile_extract(prop_local, name_conventions[0], model, logger)
+
+                    # Resume short-circuit: if every per-station .prd file for this
+                    # (var, whichcast, ofsfiletype) already exists on disk and the
+                    # row count matches the resampled model time axis, skip the
+                    # precompute + per-station write loop entirely. Critical for
+                    # crash-resume on contested hosts where a partial run leaves
+                    # WL/temp/etc. fully extracted but salt or cu missing — without
+                    # this, get_node_ofs's inner var loop re-extracts every variable
+                    # in prop.var_list on every restart. Row-count validation
+                    # additionally guards against a SIGKILL during the per-station
+                    # write loop leaving a single .prd truncated, which a naive
+                    # existence check would silently reuse.
+                    # We only short-circuit when not in user_input_location mode
+                    # (custom xy needs the ctl flag flow) and not in horizon-skill
+                    # mode (horizon output is per-cycle, separate accounting).
+                    if not prop_local.user_input_location and not getattr(
+                        prop_local, 'horizonskill', False
+                    ):
+                        n_stations = len(ofs_ctlfile[1])
+                        # Best-effort: derive the expected per-station row count
+                        # from the resampled model time axis. Fall back to None
+                        # (existence-only check) if anything unexpected pops up so
+                        # the resume path never fails hard on a missing time dim.
+                        expected_ts = getattr(prop_local, 'cumulative_ts', None)
+
+                        if n_stations > 0 and _all_prd_files_complete(
+                                prop_local, ofs_ctlfile, name_conventions[0],
+                                expected_ts, logger,
+                                time_bounds=dataset_time_bounds(model)):
+                            logger.info(
+                                '[%s] all %d .prd file(s) on disk look complete '
+                                '— skipping precompute and per-station writes',
+                                variable,
+                                n_stations,
+                            )
+                            return
+
+                    # Batch-extract all station data. Applies to BOTH stations and
+                    # fields files: the win is that each backing chunk is read and
+                    # decompressed once for all N stations instead of once per
+                    # station. That matters most for SCHISM fields, where one HDF5
+                    # chunk is the entire spatial domain for a timestep (~600 MB),
+                    # so the per-station path re-inflates the whole domain N times.
+                    precomputed = None
+                    if prop_local.ofsfiletype in ('stations', 'fields'):
+                        try:
+                            precomputed = _precompute_stations_data(
+                                prop_local, model, ofs_ctlfile, name_conventions[-1], logger
+                            )
+                            if precomputed is None:
+                                logger.info(
+                                    'No batch extraction layout for %s %s %s files; '
+                                    'using per-station extraction.',
+                                    prop_local.ofs,
+                                    prop_local.model_source,
+                                    prop_local.ofsfiletype,
+                                )
+                        except Exception as ex:
+                            logger.warning(
+                                'Batch precomputation failed, falling back to '
+                                'per-station extraction: %s',
+                                ex,
+                                exc_info=True,
+                            )
+                            precomputed = None
+
+                    def _process_single_station(
+                        i, ofs_ctlfile, prop_local, model, name_conventions, precomputed, variable, logger
+                    ):
+                        """Process a single station: format data and write .prd file."""
+                        datum_offset = None
+                        model_station = None
+
+                        if variable in ('salinity', 'water_temperature'):
+                            formatted_series = format_temp_salt(
+                                prop_local,
+                                model,
+                                ofs_ctlfile,
+                                name_conventions[-1],
+                                i,
+                                precomputed=precomputed,
+                            )
+                        elif variable == 'currents':
+                            formatted_series = format_currents(
+                                prop_local, model, ofs_ctlfile, i, precomputed=precomputed
+                            )
+                        else:
+                            formatted_series, datum_offset = format_waterlevel(
+                                prop_local,
+                                model,
+                                ofs_ctlfile,
+                                name_conventions[-1],
+                                i,
+                                logger,
+                                precomputed=precomputed,
+                            )
+                            model_station = ofs_ctlfile[4][i]
+
+                        # NEW: Properly construct the extra dictionary for the signature stamp
+                        prd_extra = {'whichcast': prop_local.whichcast}
+                        if prop_local.whichcast == 'forecast_a':
+                            prd_extra['forecast_hr'] = prop_local.forecast_hr
+
+                        if (prop_local.whichcast == 'forecast_a' and
+                            not prop_local.horizonskill):
+                            prd_path = (
+                                f'{prop_local.data_model_1d_node_path}'
+                                f'/{ofs_ctlfile[4][i]}_'
+                                f'{prop_local.ofs}_{name_conventions[0]}_'
+                                f'{ofs_ctlfile[1][i]}_'
+                                f'{prop_local.whichcast}_{prop_local.forecast_hr}_'
+                                f'{prop_local.ofsfiletype}_model.prd')
+                        elif prop_local.horizonskill:
+                            return (datum_offset, model_station)
+                        else:
+                            prd_path = (
+                                f'{prop_local.data_model_1d_node_path}/'
+                                f'{ofs_ctlfile[4][i]}_'
+                                f'{prop_local.ofs}_'
+                                f'{name_conventions[0]}_{ofs_ctlfile[1][i]}'
+                                f'_{prop_local.whichcast}_'
+                                f'{prop_local.ofsfiletype}_model.prd')
+
+                        if _write_prd(prd_path, formatted_series,
+                                      name_conventions[0], prop_local, logger,
+                                      datum_offset):
+                            # Only record the artifact if it's the first chunk, otherwise we just appended
+                            if prop_local.is_first_chunk:
+                                cache_manifest.record_artifact(
+                                    prd_path,
+                                    cache_manifest.run_signature(
+                                        prop_local, variable=variable,
+                                        extra=prd_extra),
+                                    prop_local.data_model_1d_node_path,
+                                    logger)
+
+                        return (datum_offset, model_station)
+
+                    # Dispatch station processing — parallel or sequential
+                    parallel_cfg = get_parallel_config(
+                        logger,
+                        config_file=getattr(prop_local, 'config_file', None),
+                    )
+                    n_stations = len(ofs_ctlfile[1])
+                    datum_offsets = []
+                    model_stations = []
+
+                    if parallel_cfg.get('parallel_stations') and n_stations > 1 and precomputed is not None:
+                        logger.info('Processing %d stations in parallel for %s', n_stations, variable)
+                        with ThreadPoolExecutor(max_workers=min(n_stations, 8)) as executor:
+                            futures = []
+                            for i in range(n_stations):
+                                prop_copy = copy.copy(prop_local)
+                                futures.append(
+                                    executor.submit(
+                                        _process_single_station,
+                                        i,
+                                        ofs_ctlfile,
+                                        prop_copy,
+                                        model,
+                                        name_conventions,
+                                        precomputed,
+                                        variable,
+                                        logger,
+                                    )
+                                )
+                            for f in futures:
+                                try:
+                                    datum_offset, model_station = f.result()
+                                    if datum_offset is not None:
+                                        datum_offsets.append(datum_offset)
+                                    if model_station is not None:
+                                        model_stations.append(model_station)
+                                except Exception as ex:
+                                    logger.error('Station processing failed for %s: %s', variable, ex)
+                    else:
+                        logger.info(
+                            'Processing %d stations sequentially for %s '
+                            '(parallel_stations=%s, batch precompute=%s)',
+                            n_stations,
+                            variable,
+                            bool(parallel_cfg.get('parallel_stations')),
+                            'on' if precomputed is not None else 'off',
+                        )
+                        for i in range(n_stations):
+                            datum_offset, model_station = _process_single_station(
                                 i,
                                 ofs_ctlfile,
-                                prop_copy,
+                                prop_local,
                                 model,
                                 name_conventions,
                                 precomputed,
                                 variable,
                                 logger,
                             )
-                        )
-                    for f in futures:
-                        try:
-                            datum_offset, model_station = f.result()
                             if datum_offset is not None:
                                 datum_offsets.append(datum_offset)
                             if model_station is not None:
                                 model_stations.append(model_station)
-                        except Exception as ex:
-                            logger.error('Station processing failed for %s: %s', variable, ex)
-            else:
-                logger.info(
-                    'Processing %d stations sequentially for %s '
-                    '(parallel_stations=%s, batch precompute=%s)',
-                    n_stations,
-                    variable,
-                    bool(parallel_cfg.get('parallel_stations')),
-                    'on' if precomputed is not None else 'off',
-                )
-                for i in range(n_stations):
-                    datum_offset, model_station = _process_single_station(
-                        i,
-                        ofs_ctlfile,
-                        prop_local,
-                        model,
-                        name_conventions,
-                        precomputed,
-                        variable,
-                        logger,
-                    )
-                    if datum_offset is not None:
-                        datum_offsets.append(datum_offset)
-                    if model_station is not None:
-                        model_stations.append(model_station)
 
-            # Generate datum report
-            if not prop_local.user_input_location:
-                datum_filename = f'{prop_local.ofs}_wl_datum_report.csv'
-                filepath = os.path.join(prop_local.control_files_path, datum_filename)
-                # Check datum report age. Overwrite only if it's > 1 hour old
-                try:
-                    st = os.stat(filepath)
-                    timediffhour = (
-                        (datetime.now() - (datetime.fromtimestamp(st.st_mtime))).total_seconds()
-                        / 60
-                        / 60
-                    )
+                    # Generate datum report
+                    if not prop_local.user_input_location and prop_local.is_first_chunk:
+                        datum_filename = f'{prop_local.ofs}_wl_datum_report.csv'
+                        filepath = os.path.join(prop_local.control_files_path, datum_filename)
+                        # Check datum report age. Overwrite only if it's > 1 hour old
+                        try:
+                            st = os.stat(filepath)
+                            timediffhour = (
+                                (datetime.now() - (datetime.fromtimestamp(st.st_mtime))).total_seconds()
+                                / 60
+                                / 60
+                            )
+                        except FileNotFoundError:
+                            timediffhour = 99
+                        if variable == 'water_level' and timediffhour > 1:
+                            # Two code paths land here:
+                            #   * First write on a fresh run — happy path. The
+                            #     FileNotFoundError above sets timediffhour=99
+                            #     as a sentinel; we log at INFO.
+                            #   * Stale report (>1h but not the sentinel) — a
+                            #     prior vdatum.convert run likely failed silently
+                            #     and left the report behind. Warrants attention,
+                            #     so log at WARNING.
+                            if timediffhour >= 99:
+                                logger.info('No datum report found, writing new one.')
+                            else:
+                                logger.warning(
+                                    'Stale datum report (%.1fh old, >1h), '
+                                    'rewriting — a prior vdatum run may have '
+                                    'failed silently.',
+                                    timediffhour,
+                                )
+                            datum_offsets = [model_stations, datum_offsets]
+                            report_datums(prop_local, datum_offsets, logger)
+
                 except FileNotFoundError:
-                    timediffhour = 99
-                if variable == 'water_level' and timediffhour > 1:
-                    # Two code paths land here:
-                    #   * First write on a fresh run — happy path. The
-                    #     FileNotFoundError above sets timediffhour=99
-                    #     as a sentinel; we log at INFO.
-                    #   * Stale report (>1h but not the sentinel) — a
-                    #     prior vdatum.convert run likely failed silently
-                    #     and left the report behind. Warrants attention,
-                    #     so log at WARNING.
-                    if timediffhour >= 99:
-                        logger.info('No datum report found, writing new one.')
-                    else:
-                        logger.warning(
-                            'Stale datum report (%.1fh old, >1h), '
-                            'rewriting — a prior vdatum run may have '
-                            'failed silently.',
-                            timediffhour,
-                        )
-                    datum_offsets = [model_stations, datum_offsets]
-                    report_datums(prop_local, datum_offsets, logger)
+                    logger.warning(
+                        'No control file for %s was written because '
+                        'no model stations matched observation stations.',
+                        variable,
+                    )
+                except Exception as ex:
+                    import traceback
 
-        except FileNotFoundError:
-            logger.warning(
-                'No control file for %s was written because '
-                'no model stations matched observation stations.',
-                variable,
+                    logger.error('Error happened when process %s - %s', variable, str(ex))
+                    logger.error('Full traceback:\n%s', traceback.format_exc())
+                finally:
+                    logger.info('[%s] thread finished', variable)
+
+            # Dispatch variable processing — parallel or sequential
+            parallel_cfg = get_parallel_config(
+                logger,
+                config_file=getattr(prop, 'config_file', None),
             )
-        except Exception as ex:
-            import traceback
+            # Concurrency cap for dask.compute inside _batch_extract, carried on
+            # prop so the per-variable deepcopies inherit it (see _extract_guard).
+            prop.extract_slots = parallel_cfg['parallel_extract_slots']
+            if parallel_cfg['parallel_variables'] and len(prop.var_list) > 1:
+                logger.info(
+                    "Variable threads will extract with engine '%s' "
+                    '(%s concurrent dask.compute slot(s) when h5netcdf)',
+                    getattr(prop, 'netcdf_engine', None) or 'unknown -> serialized',
+                    prop.extract_slots,
+                )
+                _preload_static_coords(model, prop.model_source, logger)
+                logger.info('Processing %d variables in parallel', len(prop.var_list))
+                with ThreadPoolExecutor(max_workers=min(len(prop.var_list), 4)) as executor:
+                    futures = []
+                    for variable in prop.var_list:
+                        prop_local = copy.deepcopy(prop)
+                        prop_local.var_list = [variable]
+                        # deepcopy would give each variable its own accumulator dict,
+                        # which flush_horizon_series (called on the outer prop by
+                        # make_horizon_series) would never see. Re-share the outer
+                        # prop's accumulator so all variables/cycles append into the
+                        # same store.
+                        if hasattr(prop, '_horizon_accumulator'):
+                            prop_local._horizon_accumulator = prop._horizon_accumulator
+                        futures.append(executor.submit(_extract_variable, variable, prop_local))
+                    for f in futures:
+                        f.result()  # Raise any exceptions
+            else:
+                for variable in prop.var_list:
+                    _extract_variable(variable, prop)
 
-            logger.error('Error happened when process %s - %s', variable, str(ex))
-            logger.error('Full traceback:\n%s', traceback.format_exc())
-        finally:
-            logger.info('[%s] thread finished', variable)
-
-    # Dispatch variable processing — parallel or sequential
-    parallel_cfg = get_parallel_config(
-        logger,
-        config_file=getattr(prop, 'config_file', None),
-    )
-    # Concurrency cap for dask.compute inside _batch_extract, carried on
-    # prop so the per-variable deepcopies inherit it (see _extract_guard).
-    prop.extract_slots = parallel_cfg['parallel_extract_slots']
-    if parallel_cfg['parallel_variables'] and len(prop.var_list) > 1:
-        logger.info(
-            "Variable threads will extract with engine '%s' "
-            '(%s concurrent dask.compute slot(s) when h5netcdf)',
-            getattr(prop, 'netcdf_engine', None) or 'unknown -> serialized',
-            prop.extract_slots,
-        )
-        _preload_static_coords(model, prop.model_source, logger)
-        logger.info('Processing %d variables in parallel', len(prop.var_list))
-        with ThreadPoolExecutor(max_workers=min(len(prop.var_list), 4)) as executor:
-            futures = []
-            for variable in prop.var_list:
-                prop_local = copy.deepcopy(prop)
-                prop_local.var_list = [variable]
-                # deepcopy would give each variable its own accumulator dict,
-                # which flush_horizon_series (called on the outer prop by
-                # make_horizon_series) would never see. Re-share the outer
-                # prop's accumulator so all variables/cycles append into the
-                # same store.
-                if hasattr(prop, '_horizon_accumulator'):
-                    prop_local._horizon_accumulator = prop._horizon_accumulator
-                futures.append(executor.submit(_extract_variable, variable, prop_local))
-            for f in futures:
-                f.result()  # Raise any exceptions
-    else:
-        for variable in prop.var_list:
-            _extract_variable(variable, prop)
+            try:
+                model.close()
+            except Exception:
+                pass
+            del model
+            import gc
+            gc.collect()
 
     logger.info('Finished with model data processing!')
-    return model
+    return None
