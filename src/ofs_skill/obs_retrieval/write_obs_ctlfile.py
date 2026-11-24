@@ -40,6 +40,7 @@ from ofs_skill.obs_retrieval.currents_bins_override import (
     bin_spec_lookup,
     load_currents_bins_csv,
 )
+from ofs_skill.obs_retrieval.obs_writer import write_obs_file
 from ofs_skill.obs_retrieval.ofs_inventory_stations import (
     ofs_inventory_stations,
 )
@@ -228,6 +229,11 @@ def _emit_coops_currents_entries(
     timeseries,
     bin_overrides,
     logger,
+    start_date_full=None,
+    end_date_full=None,
+    data_observations_1d_station_path=None,
+    obs_signature=None,
+    availability_probe=False,
 ):
     """Emit CTL entries for each ADCP bin returned by retrieve_t_and_c_station."""
     if bin_overrides is not None:
@@ -277,6 +283,25 @@ def _emit_coops_currents_entries(
             suffix = f'{suffix}, depth unknown'
 
         virt_id = f'{str(id_number)}_b{int(bin_num):02d}'
+        if (
+            not availability_probe
+            and data_observations_1d_station_path
+            and start_date_full
+            and end_date_full
+        ):
+            write_obs_file(
+                timeseries=bin_df,
+                station_id=virt_id,
+                variable='currents',
+                name_var=name_var,
+                ofs=ofs,
+                start_date_full=start_date_full,
+                end_date_full=end_date_full,
+                output_dir=data_observations_1d_station_path,
+                logger=logger,
+                datum_shift=None,
+                obs_signature=obs_signature,
+            )
         entries.append(
             f'{virt_id} {virt_id}_'
             f'{name_var}_{ofs}_CO-OPS '
@@ -354,6 +379,10 @@ def _process_coops_station(
     config_file=None,
     control_files_path=None,
     availability_probe=False,
+    start_date_full=None,
+    end_date_full=None,
+    data_observations_1d_station_path=None,
+    obs_signature=None,
 ):
     """Process a single CO-OPS station."""
     try:
@@ -495,6 +524,20 @@ def _process_coops_station(
             logger.info(
                 'CO-OPS %s data found for station %s.', variable, str(id_number)
             )
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=timeseries,
+                    station_id=str(id_number),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=zdiff,
+                    obs_signature=obs_signature,
+                )
             return [
                 (
                     f'{str(id_number)} {str(id_number)}_'
@@ -509,6 +552,20 @@ def _process_coops_station(
             logger.info(
                 'CO-OPS %s data found for station %s.', variable, str(id_number)
             )
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=timeseries,
+                    station_id=str(id_number),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=None,
+                    obs_signature=obs_signature,
+                )
             return [
                 (
                     f'{str(id_number)} {str(id_number)}_'
@@ -528,6 +585,11 @@ def _process_coops_station(
                 timeseries,
                 bin_overrides,
                 logger,
+                start_date_full=start_date_full,
+                end_date_full=end_date_full,
+                data_observations_1d_station_path=data_observations_1d_station_path,
+                obs_signature=obs_signature,
+                availability_probe=availability_probe,
             )
     except Exception as ex:
         _log_station_failure('CO-OPS', variable, id_number, ex, logger)
@@ -546,6 +608,10 @@ def _process_usgs_station(
     datum,
     ofs,
     logger,
+    start_date_full=None,
+    end_date_full=None,
+    data_observations_1d_station_path=None,
+    obs_signature=None,
 ):
     """Process a single USGS station."""
     try:
@@ -617,6 +683,20 @@ def _process_usgs_station(
                         ts_datum,
                         datum,
                     )
+                if data_observations_1d_station_path and start_date_full and end_date_full:
+                    write_obs_file(
+                        timeseries=timeseries,
+                        station_id=str(id_number),
+                        variable=variable,
+                        name_var=name_var,
+                        ofs=ofs,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        output_dir=data_observations_1d_station_path,
+                        logger=logger,
+                        datum_shift=zdiff,
+                        obs_signature=obs_signature,
+                    )
                 return [
                     (
                         f'{str(id_number)} '
@@ -628,6 +708,20 @@ def _process_usgs_station(
                 ]
 
             elif variable in ['water_temperature', 'salinity']:
+                if data_observations_1d_station_path and start_date_full and end_date_full:
+                    write_obs_file(
+                        timeseries=timeseries,
+                        station_id=str(id_number),
+                        variable=variable,
+                        name_var=name_var,
+                        ofs=ofs,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        output_dir=data_observations_1d_station_path,
+                        logger=logger,
+                        datum_shift=None,
+                        obs_signature=obs_signature,
+                    )
                 return [
                     (
                         f'{str(id_number)} {str(id_number)}_'
@@ -637,6 +731,20 @@ def _process_usgs_station(
                     )
                 ]
             elif variable == 'currents':
+                if data_observations_1d_station_path and start_date_full and end_date_full:
+                    write_obs_file(
+                        timeseries=timeseries,
+                        station_id=str(id_number),
+                        variable=variable,
+                        name_var=name_var,
+                        ofs=ofs,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        output_dir=data_observations_1d_station_path,
+                        logger=logger,
+                        datum_shift=None,
+                        obs_signature=obs_signature,
+                    )
                 return [
                     (
                         f'{str(id_number)} {str(id_number)}_'
@@ -662,6 +770,10 @@ def _process_ndbc_station(
     datum,
     ofs,
     logger,
+    start_date_full=None,
+    end_date_full=None,
+    data_observations_1d_station_path=None,
+    obs_signature=None,
 ):
     """Process a single NDBC station."""
     try:
@@ -701,6 +813,20 @@ def _process_ndbc_station(
                 data_station['Datum'][1],
                 datum,
             )
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=data_station,
+                    station_id=str(id_number),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=zdiff,
+                    obs_signature=obs_signature,
+                )
             return [
                 (
                     f'{str(id_number)} '
@@ -723,6 +849,20 @@ def _process_ndbc_station(
             else:
                 # Pandas mean() skips NaNs by default
                 dep01_mean = data_station['DEP01'].mean(skipna=True)
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=data_station,
+                    station_id=str(id_number),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=None,
+                    obs_signature=obs_signature,
+                )
             return [
                 (
                     f'{str(id_number)} {str(id_number)}_{name_var}_'
@@ -745,6 +885,20 @@ def _process_ndbc_station(
             else:
                 # Pandas mean() skips NaNs by default
                 dep01_mean = data_station['DEP01'].mean(skipna=True)
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=data_station,
+                    station_id=str(id_number),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=None,
+                    obs_signature=obs_signature,
+                )
             return [
                 (
                     f'{str(id_number)} {str(id_number)}_{name_var}_'
@@ -819,6 +973,10 @@ def _process_chs_station(
     datum,
     ofs,
     logger,
+    start_date_full=None,
+    end_date_full=None,
+    data_observations_1d_station_path=None,
+    obs_signature=None,
 ):
     """Process a single CHS station."""
     station_code = _get_chs_code(str(id_number), logger)
@@ -902,6 +1060,20 @@ def _process_chs_station(
                         return []
                     zdiff = 'RANGE' if math.isinf(z) else round(z - dummyval, 2)
 
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=data_station,
+                    station_id=str(station_code),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=zdiff,
+                    obs_signature=obs_signature,
+                )
             return [
                 (
                     f'{station_code} '
@@ -915,6 +1087,20 @@ def _process_chs_station(
         else:
             data_station['DEP01'] = data_station['DEP01'].astype(float)
 
+            if data_observations_1d_station_path and start_date_full and end_date_full:
+                write_obs_file(
+                    timeseries=data_station,
+                    station_id=str(station_code),
+                    variable=variable,
+                    name_var=name_var,
+                    ofs=ofs,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    output_dir=data_observations_1d_station_path,
+                    logger=logger,
+                    datum_shift=None,
+                    obs_signature=obs_signature,
+                )
             if variable == 'currents':
                 return [
                     (
@@ -988,6 +1174,10 @@ def _process_variable(
     currents_bins_overrides=None,
     config_file=None,
     availability_probe=False,
+    start_date_full=None,
+    end_date_full=None,
+    data_observations_1d_station_path=None,
+    obs_signature=None,
 ):
     """Process all stations for a single variable. Writes .ctl file."""
     var_name_map = {
@@ -1049,6 +1239,10 @@ def _process_variable(
                         config_file=config_file,
                         control_files_path=control_files_path,
                         availability_probe=availability_probe,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        data_observations_1d_station_path=data_observations_1d_station_path,
+                        obs_signature=obs_signature,
                     )
                 )
 
@@ -1077,6 +1271,10 @@ def _process_variable(
                         datum,
                         ofs,
                         logger,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        data_observations_1d_station_path=data_observations_1d_station_path,
+                        obs_signature=obs_signature,
                     )
                 )
             for future in futures:
@@ -1104,6 +1302,10 @@ def _process_variable(
                         datum,
                         ofs,
                         logger,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        data_observations_1d_station_path=data_observations_1d_station_path,
+                        obs_signature=obs_signature,
                     )
                 )
             for future in futures:
@@ -1178,6 +1380,10 @@ def _process_variable(
                         datum,
                         ofs,
                         logger,
+                        start_date_full=start_date_full,
+                        end_date_full=end_date_full,
+                        data_observations_1d_station_path=data_observations_1d_station_path,
+                        obs_signature=obs_signature,
                     )
                 )
             for future in futures:
@@ -1249,6 +1455,7 @@ def write_obs_ctlfile(
     logger,
     currents_bins_csv=None,
     config_file=None,
+    obs_signatures=None,
 ):
     """Build observation inventories and write station control (CTL) files.
 
@@ -1266,6 +1473,8 @@ def write_obs_ctlfile(
         logger: Logger instance.
         currents_bins_csv: Optional CSV path for ADCP bin overrides.
         config_file: Optional path to ``ofs_dps.conf``.
+        obs_signatures: Optional mapping of ``{variable: run_signature}`` used
+            to stamp ``.obs`` files written directly during CTL creation.
 
     Returns:
         None. Side effects: inventory/CTL files under ``control_files``.
@@ -1410,6 +1619,10 @@ def write_obs_ctlfile(
                     currents_bins_overrides,
                     config_file,
                     availability_probe=availability_probe,
+                    start_date_full=start_date_full,
+                    end_date_full=end_date_full,
+                    data_observations_1d_station_path=data_observations_1d_station_path,
+                    obs_signature=(obs_signatures or {}).get(variable),
                 )
             )
 

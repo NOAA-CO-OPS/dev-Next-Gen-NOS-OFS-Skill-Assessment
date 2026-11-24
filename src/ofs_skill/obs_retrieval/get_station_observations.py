@@ -832,12 +832,16 @@ def _create_station_ctl_file(
                 'Station ctl file not found. Creating station ctl file!. '
                 'This might take a couple of minutes'
             )
+            obs_signatures = {
+                v: cache_manifest.run_signature(prop, variable=v)
+                for v in var_list
+            }
             write_obs_ctlfile(
                 start_date, end_date, start_date_full, end_date_full, datum, path, ofs,
                 stationowner, var_list, logger,
-                currents_bins_csv=getattr(
-                    prop, 'currents_bins_csv', None),
+                currents_bins_csv=getattr(prop, 'currents_bins_csv', None),
                 config_file=config_file,
+                obs_signatures=obs_signatures,
             )
             read_station_ctl_file = station_ctl_file_extract(ctl_file_path)
             logger.info('Station ctl file created '
