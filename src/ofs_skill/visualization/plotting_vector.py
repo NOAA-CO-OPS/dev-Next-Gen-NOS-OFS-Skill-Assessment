@@ -40,6 +40,7 @@ import ofs_skill.visualization.make_static_plots as make_static_plots
 from ofs_skill.visualization.make_static_plots import combine_obs_across_casts
 from ofs_skill.visualization.plotting_functions import (
     apply_title_band,
+    error_axis_limits,
     find_max_data_gap,
     get_error_range,
     get_markerstyles,
@@ -486,6 +487,14 @@ def oned_vector_plot1(
     figheight = 700
     figwidth  = 900
     yoffset = 1.01
+    # Issue #228: keep +/- 4*X1 by default; expand to series min/max when
+    # a significant chunk of the error series exceeds that band.
+    error_vals = [
+        ofs - obs
+        for paired in now_fores_paired
+        for ofs, obs in zip(paired.OFS_SPD, paired.OBS_SPD)
+    ]
+    err_range, err_ticks = error_axis_limits(error_vals, X1)
     # Issue #136: the title hangs from the top of the container and grows
     # down; the horizontal legend stands on the plot area and grows up.
     # Only the top margin separates them, and the legend's row count
@@ -556,9 +565,9 @@ def oned_vector_plot1(
             showline=True,
             linecolor='black',
             linewidth=1,
-            range=[-X1*4, X1*4],
+            range=err_range,
             tickmode='array',
-            tickvals=[-X1*4, -X1*3, -X1*2, -X1, 0, X1, X1*2, X1*3, X1*4],
+            tickvals=err_ticks,
         ),
         title=dict(
             text=title_text,

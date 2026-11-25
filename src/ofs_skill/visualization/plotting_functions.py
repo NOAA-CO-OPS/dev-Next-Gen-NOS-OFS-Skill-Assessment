@@ -895,6 +895,59 @@ def get_error_range(
     return X1, X2
 
 
+def error_axis_limits(
+    errors,
+    x1: float,
+    *,
+    exceed_frac: float = 0.05,
+) -> tuple[list[float], list[float]]:
+    """
+    Choose y-axis limits for the error time-series panel (issue #228).
+
+    Default remains ``+/- 4 * x1``. When a significant fraction of the
+    series falls outside that band, expand to the series min/max so
+    clipped spikes remain visible.
+
+    Args:
+        errors: Iterable of model-minus-obs error values
+        x1: Primary target error range for the variable
+        exceed_frac: Fraction of points outside ``+/- 4*x1`` that triggers
+            expansion (default 5%)
+
+    Returns:
+        ``(range, tickvals)`` suitable for Plotly ``yaxis`` config
+    """
+    default = 4.0 * float(x1)
+    default_range = [-default, default]
+    default_ticks = [
+        -4 * x1, -3 * x1, -2 * x1, -x1, 0.0, x1, 2 * x1, 3 * x1, 4 * x1,
+    ]
+
+    arr = np.asarray(list(errors), dtype=float)
+    arr = arr[np.isfinite(arr)]
+    if arr.size == 0 or float(np.mean(np.abs(arr) > default)) < exceed_frac:
+        return default_range, default_ticks
+
+    y_min = float(np.min(arr))
+    y_max = float(np.max(arr))
+    pad = 0.02 * max(y_max - y_min, default)
+    y_min -= pad
+    y_max += pad
+
+    # Keep multiples of x1 that fall inside the expanded window.
+    k_lo = int(np.floor(y_min / x1))
+    k_hi = int(np.ceil(y_max / x1))
+    ticks = [k * x1 for k in range(k_lo, k_hi + 1)]
+    if len(ticks) > 11:
+        step = int(np.ceil(len(ticks) / 9))
+        ticks = [k * x1 for k in range(k_lo, k_hi + 1, step)]
+        if 0.0 not in ticks and y_min <= 0.0 <= y_max:
+            ticks.append(0.0)
+            ticks.sort()
+
+    return [y_min, y_max], ticks
+
+
 def find_max_data_gap(arr: pd.Series) -> int:
     """
     Find maximum consecutive NaN gap in time series data.
