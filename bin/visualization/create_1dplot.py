@@ -312,6 +312,19 @@ def ofs_ctlfile_read(prop, name_var, logger):
         logger.error('Invalid OFS file type.')
         return None
 
+    # Issue #235: these get_skill calls exist because *this* name_var's
+    # model ctl is missing or stale. Scope prop.var_list to that variable
+    # so the entry does not re-pair every other configured variable.
+    ctl_variable = _NAME_TO_VARIABLE.get(name_var, name_var)
+
+    def _get_skill_for_ctl_variable():
+        saved_var_list = getattr(prop, 'var_list', [ctl_variable])
+        try:
+            prop.var_list = [ctl_variable]
+            get_skill(prop, logger)
+        finally:
+            prop.var_list = saved_var_list
+
     if not os.path.isfile(filename):
         for i in prop.whichcasts:
             prop.whichcast = i.lower()
@@ -321,7 +334,7 @@ def ofs_ctlfile_read(prop, name_var, logger):
                 prop.start_date_full = prop.start_date_full_before
                 prop.end_date_full = prop.end_date_full_before
 
-            get_skill(prop, logger)
+            _get_skill_for_ctl_variable()
 
     # A model ctl left from a run with different parameters would otherwise
     # be parsed as-is (its filename encodes only ofs+var, not the window or
@@ -330,7 +343,6 @@ def ofs_ctlfile_read(prop, name_var, logger):
     # (issue: stale cache reuse across runs). The build path in
     # write_ofs_ctlfile keys the manifest on the long variable name.
     else:
-        ctl_variable = _NAME_TO_VARIABLE.get(name_var, name_var)
         ctl_sig = cache_manifest.run_signature(prop, variable=ctl_variable)
         if not cache_manifest.artifact_is_fresh(filename, ctl_sig):
             if remove_stale_artifact(
@@ -343,7 +355,7 @@ def ofs_ctlfile_read(prop, name_var, logger):
                 if prop.start_date_full.find('T') == -1:
                     prop.start_date_full = prop.start_date_full_before
                     prop.end_date_full = prop.end_date_full_before
-                get_skill(prop, logger)
+                _get_skill_for_ctl_variable()
     if os.path.isfile(filename):
         if os.path.getsize(filename):
             return parse_ofs_ctlfile(filename)
@@ -787,7 +799,17 @@ def _ensure_paired_data_exists(read_ofs_ctl_file, prop, var_info, logger):
         if prop.start_date_full.find('T') == -1:
             prop.start_date_full = prop.start_date_full_before
             prop.end_date_full = prop.end_date_full_before
-        get_skill(prop, logger)
+        # Issue #235: get_skill walks every variable on prop.var_list.
+        # This pre-check is entered because *this* variable's pairs are
+        # missing/stale, so restrict the list for the call and restore
+        # it afterward -- otherwise a second entry redoes pairing +
+        # metrics for every other variable too.
+        saved_var_list = getattr(prop, 'var_list', [var_info[0]])
+        try:
+            prop.var_list = [var_info[0]]
+            get_skill(prop, logger)
+        finally:
+            prop.var_list = saved_var_list
 
 
 def create_1dplot_2nd_part(read_ofs_ctl_file, prop, var_info, logger):

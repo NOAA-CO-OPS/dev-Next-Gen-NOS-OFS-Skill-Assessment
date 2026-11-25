@@ -27,6 +27,7 @@ or is outright disjoint (``STALE``) can only be regenerated.
 the two never disagree.
 """
 
+import codecs
 import contextlib
 import os
 import time
@@ -109,58 +110,116 @@ def row_datetime(line):
         return None
 
 
+# Initial tail window for the last-row seek. Grows until a parseable row
+# is found or the whole file has been considered. Sized so typical
+# trailing blanks / truncated rows are covered in one read.
+_TAIL_READ_BYTES = 64 * 1024
+
+
+def _utf8_decodes(path):
+    """True when every byte of *path* decodes as UTF-8.
+
+    Issue #235: the first/last scan only looks at the ends of the file,
+    but a mid-file undecodable byte must still fail open -- otherwise a
+    corrupt cache that used to be kept could start being deleted. This
+    streaming check preserves that contract without holding the decoded
+    text in memory.
+    """
+    try:
+        with open(path, 'rb') as file_handle:
+            decoder = codecs.getincrementaldecoder('utf-8')()
+            while True:
+                chunk = file_handle.read(65536)
+                if not chunk:
+                    decoder.decode(b'', final=True)
+                    return True
+                decoder.decode(chunk)
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
+def _first_timestamp_from_start(file_handle):
+    """Walk forward from byte 0 until a data row parses."""
+    file_handle.seek(0)
+    while True:
+        raw_line = file_handle.readline()
+        if not raw_line:
+            return None
+        stamp = row_datetime(raw_line.decode('utf-8').rstrip('\r\n'))
+        if stamp is not None:
+            return stamp
+
+
+def _last_timestamp_from_end(file_handle, file_size):
+    """Seek from the end until the last parseable data row is found.
+
+    The answer is the last *parseable* row, not the last line, so a
+    trailing blank line or a row truncated by an interrupted write does
+    not make the file look shorter than it is.
+    """
+    block = min(_TAIL_READ_BYTES, file_size)
+    while True:
+        start = max(0, file_size - block)
+        file_handle.seek(start)
+        text = file_handle.read(file_size - start).decode('utf-8')
+        # A mid-line seek leaves a partial first line; drop it unless we
+        # started at byte 0.
+        if start > 0:
+            newline = text.find('\n')
+            if newline == -1:
+                if start == 0:
+                    return None
+                block = min(file_size, block * 2)
+                continue
+            text = text[newline + 1:]
+
+        end = len(text)
+        while end > 0:
+            line_start = text.rfind('\n', 0, end)
+            stamp = row_datetime(text[line_start + 1:end].rstrip('\r'))
+            if stamp is not None:
+                return stamp
+            end = line_start if line_start != -1 else 0
+
+        if start == 0:
+            return None
+        block = min(file_size, block * 2)
+
+
 def read_first_last_timestamps(path):
     """Return (first, last) data-row timestamps of a cached artifact.
 
-    Only the rows at each end of the file are parsed. The whole file is
-    still decoded in one read, so a file with undecodable bytes anywhere
-    fails open exactly as it did when every line was parsed; what is
-    skipped is the per-row ``datetime`` construction for the interior,
-    which is what made this staleness check cost as much as parsing the
-    artifact it guards -- and it runs once per artifact, per cast.
-
-    The decoded text is held in memory for the duration of the call --
-    roughly twice the file size, so a year-long six-minute artifact
-    costs a few MB transiently. These are per-station text timeseries,
-    not gridded model output.
+    Only the rows at each end of the file are parsed (issue #235): the
+    head is scanned forward from byte 0 and the tail is read via
+    ``seek``, so interior rows never pay ``datetime`` construction.
+    Before that, the whole file is UTF-8-validated in a streaming pass
+    so a mid-file undecodable byte still fails open exactly as it did
+    when every line was decoded -- without holding the decoded text.
 
     Returns ``(None, None)`` when the file cannot be read or decoded, or
     contains no parseable data rows.
     """
+    # Fail open on undecodable bytes anywhere before trusting the ends.
+    if not _utf8_decodes(path):
+        return None, None
+
     try:
-        with open(path, encoding='utf-8') as file_handle:
-            text = file_handle.read()
+        file_size = os.path.getsize(path)
+    except OSError:
+        return None, None
+    if file_size == 0:
+        return None, None
+
+    try:
+        with open(path, 'rb') as file_handle:
+            first = _first_timestamp_from_start(file_handle)
+            if first is None:
+                return None, None
+            last = _last_timestamp_from_end(file_handle, file_size)
+            # A single data row is both first and last.
+            return first, first if last is None else last
     except (OSError, UnicodeDecodeError):
         return None, None
-
-    # Walk in from the front until a row parses. Headers and any leading
-    # junk are skipped, matching the full scan this replaced.
-    first = None
-    limit = len(text)
-    start = 0
-    while start < limit:
-        end = text.find('\n', start)
-        if end == -1:
-            end = limit
-        first = row_datetime(text[start:end])
-        if first is not None:
-            break
-        start = end + 1
-    if first is None:
-        return None, None
-
-    # Then in from the back. The answer is the last *parseable* row, not
-    # the last line, so a trailing blank line or a row truncated by an
-    # interrupted write does not make the file look shorter than it is.
-    last = None
-    end = limit
-    while end > 0:
-        line_start = text.rfind('\n', 0, end)
-        last = row_datetime(text[line_start + 1:end])
-        if last is not None:
-            break
-        end = line_start
-    return first, last
 
 
 def _has_no_data_rows(path):

@@ -829,6 +829,79 @@ def _emit_ledger(prop: Any, logger: logging.Logger) -> None:
         logger.debug('Failed to write station ledger CSV', exc_info=True)
 
 
+def _pair_int_path(prop, name_var, station_id, node):
+    """Build the on-disk path for one station's paired ``.int`` file."""
+    filename = (
+        f'{prop.ofs}_{name_var}_{station_id}_{node}_'
+        f'{prop.whichcast}_{prop.ofsfiletype}_pair.int'
+    )
+    return os.path.join(prop.data_skill_1d_pair_path, filename)
+
+
+def _fresh_pair_int_path(prop, name_var, station_id, node, logger):
+    """Return the ``.int`` path when it is safe to reuse, else ``None``.
+
+    Issue #235: a pair file is reusable only when it covers the run
+    window and its cache-manifest signature matches this run's
+    parameters -- the same gates ``_ensure_paired_data_exists`` uses
+    before deciding whether to call ``get_skill`` at all.
+    """
+    int_path = _pair_int_path(prop, name_var, station_id, node)
+    if not os.path.isfile(int_path):
+        return None
+    run_window = parse_run_window(prop, logger)
+    if run_window is None:
+        return None
+    if not covers_run_window(
+            int_path, run_window[0], run_window[1], logger=logger):
+        return None
+    pair_sig = cache_manifest.run_signature(
+        prop,
+        variable=_NAME_TO_VARIABLE.get(name_var, name_var),
+        extra={'whichcast': getattr(prop, 'whichcast', None)},
+    )
+    if not cache_manifest.artifact_is_fresh(int_path, pair_sig):
+        return None
+    return int_path
+
+
+def _series_df_from_int(int_path, name_var):
+    """Load a paired ``.int`` into the DataFrame shape metrics expect.
+
+    Column layout matches what ``format_paired_one_d`` returns as the
+    second tuple element: numbered date parts plus ``OBS``/``OFS``
+    (and direction columns for currents).
+    """
+    try:
+        raw = pd.read_csv(int_path, sep=r'\s+')
+    except (OSError, EmptyDataError, ValueError, UnicodeDecodeError):
+        return None
+    min_cols = 12 if name_var == 'cu' else 9
+    if raw.empty or raw.shape[1] < min_cols:
+        return None
+    series_df = pd.DataFrame({
+        1: raw.iloc[:, 1],
+        2: raw.iloc[:, 2],
+        3: raw.iloc[:, 3],
+        4: raw.iloc[:, 4],
+        5: raw.iloc[:, 5],
+        'OBS': raw.iloc[:, 6],
+        'OFS': raw.iloc[:, 7],
+    })
+    if name_var == 'cu':
+        series_df['SPD_BIAS'] = raw.iloc[:, 8]
+        series_df['OBS_DIR'] = raw.iloc[:, 9]
+        series_df['OFS_DIR'] = raw.iloc[:, 10]
+        series_df['DIR_BIAS'] = raw.iloc[:, 11]
+    else:
+        series_df['BIAS'] = raw.iloc[:, 8]
+    series_df['DateTime'] = pd.to_datetime({
+        'year': series_df[1], 'month': series_df[2], 'day': series_df[3],
+        'hour': series_df[4], 'minute': series_df[5],
+    })
+    return series_df
+
+
 def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
                           station_id_to_idx, prop, name_var, logger):
     """
@@ -853,56 +926,76 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
 
         obs_row = station_id_to_idx[ofs_station_id]
         station_id = read_station_ctl_file[0][obs_row][0]
+        node = read_ofs_ctl_file[1][i]
+        int_path = _pair_int_path(prop, name_var, station_id, node)
 
-        formatted_series = prepare_series(
-            read_station_ctl_file, read_ofs_ctl_file, prop,
-            name_var, i, obs_row, logger
-        )
+        # Issue #235: when a covering, signature-fresh .int already
+        # exists, skip prepare_series (the dominant per-station cost)
+        # and do not rewrite the file. Metrics still run from the
+        # cached series so the skill CSV stays complete for every
+        # station this cast touches.
+        series_df = None
+        formatted_series = None
+        reuse_path = _fresh_pair_int_path(
+            prop, name_var, station_id, node, logger)
+        if reuse_path is not None:
+            series_df = _series_df_from_int(reuse_path, name_var)
+            if series_df is not None:
+                logger.info(
+                    'Reusing fresh paired file %s (skip re-pair)',
+                    os.path.basename(reuse_path),
+                )
 
-        # Distinguish "no overlapping valid timestamps" (a data-coverage
-        # condition worth surfacing prominently, per issue #200) from the
-        # generic missing-file / empty-series failures.
-        if formatted_series is format_paired_one_d.PairingStatus.NO_TEMPORAL_OVERLAP:
-            _ledger_drop(
-                prop, station_id, 'temporal_overlap',
-                'obs and model series have no overlapping valid timestamps '
-                'in the requested window',
+        if series_df is None:
+            formatted_series = prepare_series(
+                read_station_ctl_file, read_ofs_ctl_file, prop,
+                name_var, i, obs_row, logger
             )
-            logger.warning(
-                'Station %s (%s): obs and model data do not overlap in time '
-                'within the requested window; no skill row produced. '
-                'Check that observations exist for this period.',
-                station_id, name_var,
-            )
-            return None
 
-        # Any remaining sentinel/None/degenerate result means no usable
-        # paired series. ``formatted_series`` here is either the string
-        # 'NoDataFound', a PairingStatus, None, or the success tuple.
-        if (
-            not formatted_series
-            or isinstance(
-                formatted_series,
-                str | format_paired_one_d.PairingStatus,
-            )
-            or len(formatted_series[0]) <= 1
-        ):
-            _ledger_drop(
-                prop, station_id, 'pairing',
-                'no valid paired OBS/OFS series (missing/empty obs or model '
-                'data, or no overlapping valid timestamps)',
-            )
-            logger.error(
-                f'{prop.ofs}_{name_var}_{station_id}_{read_ofs_ctl_file[1][i]}_'
-                f'{prop.whichcast}_{prop.ofsfiletype}_pair.int is not created successfully'
-            )
-            return None
+            # Distinguish "no overlapping valid timestamps" (a data-coverage
+            # condition worth surfacing prominently, per issue #200) from the
+            # generic missing-file / empty-series failures.
+            if formatted_series is format_paired_one_d.PairingStatus.NO_TEMPORAL_OVERLAP:
+                _ledger_drop(
+                    prop, station_id, 'temporal_overlap',
+                    'obs and model series have no overlapping valid timestamps '
+                    'in the requested window',
+                )
+                logger.warning(
+                    'Station %s (%s): obs and model data do not overlap in time '
+                    'within the requested window; no skill row produced. '
+                    'Check that observations exist for this period.',
+                    station_id, name_var,
+                )
+                return None
 
-        series_df = formatted_series[-1]
-        series_df['DateTime'] = pd.to_datetime({
-            'year': series_df[1], 'month': series_df[2], 'day': series_df[3],
-            'hour': series_df[4], 'minute': series_df[5]
-        })
+            # Any remaining sentinel/None/degenerate result means no usable
+            # paired series. ``formatted_series`` here is either the string
+            # 'NoDataFound', a PairingStatus, None, or the success tuple.
+            if (
+                not formatted_series
+                or isinstance(
+                    formatted_series,
+                    str | format_paired_one_d.PairingStatus,
+                )
+                or len(formatted_series[0]) <= 1
+            ):
+                _ledger_drop(
+                    prop, station_id, 'pairing',
+                    'no valid paired OBS/OFS series (missing/empty obs or model '
+                    'data, or no overlapping valid timestamps)',
+                )
+                logger.error(
+                    f'{prop.ofs}_{name_var}_{station_id}_{node}_'
+                    f'{prop.whichcast}_{prop.ofsfiletype}_pair.int is not created successfully'
+                )
+                return None
+
+            series_df = formatted_series[-1]
+            series_df['DateTime'] = pd.to_datetime({
+                'year': series_df[1], 'month': series_df[2], 'day': series_df[3],
+                'hour': series_df[4], 'minute': series_df[5]
+            })
 
         out = {}
         primary = _station_metadata(read_station_ctl_file, read_ofs_ctl_file, obs_row, i)
@@ -927,24 +1020,22 @@ def _process_station_pair(i, read_station_ctl_file, read_ofs_ctl_file,
             )
             out['primary'] = primary
 
-        # Write the paired time series file (.int)
-        filename = (
-            f'{prop.ofs}_{name_var}_{station_id}_{read_ofs_ctl_file[1][i]}_'
-            f'{prop.whichcast}_{prop.ofsfiletype}_pair.int'
-        )
-        int_path = os.path.join(prop.data_skill_1d_pair_path, filename)
-        _write_int_file(int_path, name_var, formatted_series[0])
-        logger.info(f'{filename} is created successfully')
-        # Stamp the run signature on the paired file so a same-parameter
-        # rerun reuses it and a changed-parameter run treats it as stale.
-        # Keyed on the long variable name to match the .prd/.obs writers.
-        cache_manifest.record_artifact(
-            int_path,
-            cache_manifest.run_signature(
-                prop, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
-                extra={'whichcast': getattr(prop, 'whichcast', None)}),
-            prop.data_skill_1d_pair_path,
-            logger)
+        # Write / stamp only when we rebuilt the pair. A reused file is
+        # already on disk with a matching manifest entry.
+        if formatted_series is not None:
+            _write_int_file(int_path, name_var, formatted_series[0])
+            logger.info(
+                '%s is created successfully', os.path.basename(int_path))
+            # Stamp the run signature on the paired file so a same-parameter
+            # rerun reuses it and a changed-parameter run treats it as stale.
+            # Keyed on the long variable name to match the .prd/.obs writers.
+            cache_manifest.record_artifact(
+                int_path,
+                cache_manifest.run_signature(
+                    prop, variable=_NAME_TO_VARIABLE.get(name_var, name_var),
+                    extra={'whichcast': getattr(prop, 'whichcast', None)}),
+                prop.data_skill_1d_pair_path,
+                logger)
 
         # Water-level extrema (HW/LW) independent detection + ±3h pairing
         if name_var == 'wl' and prop.ofs[0] != 'l':
