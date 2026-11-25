@@ -20,6 +20,8 @@ Covers:
 - ``ofs_skill.utils.timeseries_coverage`` helpers,
 - the guarded deletion path ``remove_stale_artifact``,
 - stale-pair detection/regeneration in ``_ensure_paired_data_exists``,
+- issue #235 scoping of ``get_skill`` to the requesting variable and
+  skip-if-fresh reuse of covering, signature-matched ``.int`` files,
 - the plot-time guard ``_drop_stale_casts`` (exemption evaluated on the
   cast list the crop will actually see),
 - removal of previously published plots whose cast naming this run no
@@ -487,6 +489,11 @@ class _PairCheckProp:
         self.end_date_full = '2026-03-29T18:00:00Z'
         self.start_date_full_before = self.start_date_full
         self.end_date_full_before = self.end_date_full
+        # Multi-variable list on purpose: #235 scopes get_skill to the
+        # variable that actually needs pairs, then restores this list.
+        self.var_list = [
+            'water_level', 'water_temperature', 'salinity', 'currents',
+        ]
 
 
 VAR_INFO = ['water_temperature', 'temp',
@@ -548,6 +555,78 @@ class TestEnsurePairedDataStaleness:
 
         assert pair.exists()
         assert not calls
+
+    def test_get_skill_scoped_to_requesting_variable(
+            self, create_1dplot_mod, tmp_path, monkeypatch):
+        """Missing pairs trigger get_skill for this variable only (#235)."""
+        seen = []
+
+        def _fake_get_skill(prop, _logger):
+            seen.append(list(prop.var_list))
+
+        monkeypatch.setattr(create_1dplot_mod, 'get_skill', _fake_get_skill)
+        prop = _PairCheckProp(tmp_path)
+        original = list(prop.var_list)
+        create_1dplot_mod._ensure_paired_data_exists(
+            OFS_CTL, prop, VAR_INFO, _make_logger())
+
+        assert seen == [['water_temperature']]
+        assert prop.var_list == original
+
+
+class TestFreshPairReuse:
+    """Skip-if-fresh helpers inside get_skill (#235)."""
+
+    def test_series_df_from_int_scalar(self, tmp_path):
+        get_skill_mod = importlib.import_module(
+            'ofs_skill.skill_assessment.get_skill')
+
+        pair = tmp_path / 'pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=3)
+        series = get_skill_mod._series_df_from_int(str(pair), 'temp')
+        assert series is not None
+        assert len(series) == 3
+        assert list(series['OBS']) == [7.4, 7.4, 7.4]
+        assert list(series['OFS']) == [5.3, 5.3, 5.3]
+        assert 'DateTime' in series.columns
+
+    def test_fresh_pair_path_accepts_covering_signed_file(self, tmp_path):
+        get_skill_mod = importlib.import_module(
+            'ofs_skill.skill_assessment.get_skill')
+        from ofs_skill.utils import cache_manifest
+
+        pair = tmp_path / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
+        _write_pair_file(pair, WINDOW_START, hours=25)
+        prop = _PairCheckProp(tmp_path)
+        cache_manifest.record_artifact(
+            str(pair),
+            cache_manifest.run_signature(
+                prop, variable='water_temperature',
+                extra={'whichcast': 'nowcast'}),
+            str(tmp_path))
+
+        assert get_skill_mod._fresh_pair_int_path(
+            prop, 'temp', '8571421', 29, _make_logger()) == str(pair)
+
+    def test_fresh_pair_path_rejects_stale_window(self, tmp_path):
+        get_skill_mod = importlib.import_module(
+            'ofs_skill.skill_assessment.get_skill')
+        from ofs_skill.utils import cache_manifest
+
+        pair = tmp_path / 'cbofs_temp_8571421_29_nowcast_stations_pair.int'
+        _write_pair_file(
+            pair, WINDOW_START - timedelta(hours=24), hours=25)
+        prop = _PairCheckProp(tmp_path)
+        cache_manifest.record_artifact(
+            str(pair),
+            cache_manifest.run_signature(
+                prop, variable='water_temperature',
+                extra={'whichcast': 'nowcast'}),
+            str(tmp_path))
+
+        assert get_skill_mod._fresh_pair_int_path(
+            prop, 'temp', '8571421', 29, _make_logger()) is None
+
 
 
 class TestDropStaleCasts:
